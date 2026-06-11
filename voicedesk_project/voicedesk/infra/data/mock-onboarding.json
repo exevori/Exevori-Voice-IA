@@ -1,0 +1,156 @@
+{
+  "note": "Onboarding 4 étapes — PME opérationnelle en 20 minutes",
+  "version": "3.0.0",
+  "estimated_duration_minutes": 20,
+
+  "steps": [
+    {
+      "step": 1,
+      "id": "company_info",
+      "label": "Ton entreprise",
+      "icon": "Building2",
+      "duration_minutes": 3,
+      "fields": [
+        { "id": "company_name",  "label": "Nom de l'entreprise",   "type": "text",   "required": true },
+        { "id": "sector",        "label": "Secteur d'activité",    "type": "select", "required": true,
+          "options": ["IA & Technologie", "Santé & Cliniques", "Construction & Rénovation",
+                      "Services professionnels", "Commerce", "Automobile & Garage",
+                      "Beauté & Esthétique", "Comptabilité & Finance", "Droit", "Immobilier", "Autre"] },
+        { "id": "city",          "label": "Ville",                 "type": "text",   "required": true },
+        { "id": "phone",         "label": "Numéro principal",      "type": "tel",    "required": true,
+          "helper": "Le numéro que vos clients appellent déjà. Vous garderez ce numéro." },
+        { "id": "email",         "label": "Courriel",              "type": "email",  "required": true },
+        { "id": "hours_open",    "label": "Heure d'ouverture",     "type": "time",   "default": "09:00" },
+        { "id": "hours_close",   "label": "Heure de fermeture",    "type": "time",   "default": "17:00" }
+      ]
+    },
+
+    {
+      "step": 2,
+      "id": "assistant_config",
+      "label": "Ton assistant",
+      "icon": "Bot",
+      "duration_minutes": 5,
+      "fields": [
+        { "id": "assistant_name", "label": "Prénom de l'assistant",
+          "type": "text", "required": true, "placeholder": "Ex: Léa, Sophie, Marc, Alex...",
+          "helper": "Jamais pré-rempli — la PME choisit toujours." },
+        { "id": "assistant_gender", "label": "Genre",
+          "type": "radio", "options": ["Féminin", "Masculin", "Neutre"] },
+        { "id": "voice_selection", "label": "Voix ElevenLabs",
+          "type": "voice_picker", "required": true,
+          "options": [
+            { "id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah", "description": "Naturelle, chaleureuse — Recommandée", "gender": "female" },
+            { "id": "21m00Tcm4TlvDq8ikWAM", "name": "Rachel", "description": "Professionnelle, claire", "gender": "female" },
+            { "id": "ErXwobaYiN019PkySvjV", "name": "Antoni", "description": "Confiant, naturel", "gender": "male" },
+            { "id": "VR6AewLTigWG4xSOukaG", "name": "Arnold", "description": "Professionnel, rassurant", "gender": "male" }
+          ],
+          "helper": "Cliquer ▶ pour écouter un aperçu." },
+        { "id": "phone_mode", "label": "Mode téléphonique",
+          "type": "radio", "required": true,
+          "options": [
+            { "value": "inbound_only",  "label": "Réception seulement", "description": "Léa répond aux appels entrants." },
+            { "value": "outbound_only", "label": "Émission seulement",  "description": "Léa fait des appels sortants (missions)." },
+            { "value": "both",          "label": "Réception + Émission — Recommandé", "description": "Mode complet." }
+          ], "default": "both" },
+        { "id": "language", "label": "Langue principale",
+          "type": "radio",
+          "options": [
+            { "value": "fr-CA", "label": "Français seulement" },
+            { "value": "auto",  "label": "Auto-détection FR/EN — Léa switch si le client parle anglais (Recommandé)" }
+          ], "default": "auto" },
+        { "id": "greeting_fr", "label": "Phrase d'accueil", "type": "textarea",
+          "auto_generate": true, "max_length": 200 },
+        { "id": "confidence_threshold", "label": "Seuil de confiance pour transfert humain",
+          "type": "slider", "min": 40, "max": 90, "step": 5, "default": 75 }
+      ],
+      "voice_preview": true
+    },
+
+    {
+      "step": 3,
+      "id": "knowledge_base",
+      "label": "Ce que Léa sait",
+      "icon": "BookOpen",
+      "duration_minutes": 7,
+      "note": "C'est ici que commence l'apprentissage. Chaque entrée que tu ajoutes améliore Léa immédiatement.",
+      "sections": [
+        { "id": "services", "label": "Tes services",
+          "min_entries": 1, "required": true,
+          "fields_per_entry": [
+            { "id": "service_name",    "label": "Nom du service",    "type": "text"     },
+            { "id": "description",     "label": "Description courte", "type": "textarea" },
+            { "id": "price_range",     "label": "Prix indicatif",    "type": "text"     },
+            { "id": "delivery_time",   "label": "Délai",             "type": "text"     }
+          ],
+          "ai_import": { "enabled": true, "label": "Importer depuis ton site web → Léa extrait automatiquement" }
+        },
+        { "id": "faq", "label": "Questions fréquentes", "required": false,
+          "suggestions": ["Quels sont vos délais ?", "Offrez-vous de la maintenance ?", "Travaillez-vous hors Québec ?"] },
+        { "id": "zones",    "label": "Zones desservies", "type": "text", "required": true },
+        { "id": "transfers","label": "À qui transférer ?", "required": true,
+          "roles": ["Ventes", "Support technique", "Direction"] }
+      ]
+    },
+
+    {
+      "step": 4,
+      "id": "connections",
+      "label": "Connexions",
+      "icon": "Plug",
+      "duration_minutes": 5,
+      "note": "VoiceDesk vous assigne un numéro Twilio. Vous configurez un simple renvoi d'appel depuis votre numéro existant.",
+      "voicedesk_number_assigned": {
+        "label": "Votre numéro VoiceDesk",
+        "description": "Ce numéro est interne — vos clients continuent d'appeler votre numéro habituel.",
+        "example": "+1 (418) 555-XXXX"
+      },
+      "forwarding_setup": {
+        "label": "Configurer le renvoi d'appel",
+        "carrier_selector": ["Bell Canada", "Vidéotron", "Telus", "Rogers", "Cogeco", "Cellulaire Bell", "Cellulaire Vidéotron", "Autre"],
+        "mode_selector": [
+          { "value": "backup",  "label": "Mode Backup — Léa répond si personne ne décroche après 3 sonneries (Recommandé)" },
+          { "value": "primary", "label": "Mode Principal — Léa répond à chaque appel" }
+        ],
+        "instructions_by_carrier": {
+          "Bell Canada":         { "backup": "Composez *93 + [NUMERO_VOICEDESK] + #", "primary": "Composez *72 + [NUMERO_VOICEDESK] + #", "disable": "*73 ou *94" },
+          "Vidéotron":           { "backup": "Portail web → Mon compte → Transfert d'appel → Si sans réponse", "primary": "*72 + numéro + #", "disable": "*73" },
+          "Telus":               { "backup": "App MyTELUS → Transfert d'appel → Si sans réponse", "primary": "*72 + numéro + #", "disable": "*73" },
+          "Rogers":              { "backup": "*93 + [NUMERO_VOICEDESK] + #", "primary": "*72 + numéro + #", "disable": "*73" },
+          "Cogeco":              { "backup": "Portail client → Options → Transfert si sans réponse", "primary": "*72 + numéro + #", "disable": "*73" },
+          "Cellulaire Bell":     { "backup": "Réglages → Téléphone → Transfert d'appel → Si sans réponse", "primary": "Toujours transférer" },
+          "Cellulaire Vidéotron":{ "backup": "Réglages → Téléphone → Transfert d'appel → Si sans réponse", "primary": "Toujours transférer" }
+        }
+      },
+      "api_connections": [
+        { "id": "google_auth",     "label": "Google — Connexion équipe",  "required": true,  "type": "oauth",   "seconds": 30 },
+        { "id": "twilio",          "label": "Twilio — Téléphonie",        "required": true,  "type": "api_key", "fields": ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"], "auto_webhook": true },
+        { "id": "elevenlabs",      "label": "ElevenLabs — Voix",          "required": true,  "type": "api_key", "fields": ["ELEVENLABS_API_KEY"], "voice_auto_configured": true },
+        { "id": "calendly",        "label": "Calendly — Rendez-vous",     "required": true,  "type": "api_key", "fields": ["CALENDLY_API_TOKEN"], "auto_detect_types": true },
+        { "id": "google_calendar", "label": "Google Calendar — Agenda",   "required": true,  "type": "oauth",   "read_only": true, "seconds": 30 },
+        { "id": "comptapro",       "label": "ComptaPro",                  "required": false, "type": "api_key", "phase": 3,
+          "badge": "Phase 3", "description": "Connectez ComptaPro plus tard pour synchroniser vos clients et factures." }
+      ],
+      "test": {
+        "label": "Premier appel test",
+        "scenarios": [
+          { "id": "info",    "label": "Demande d'info",   "script": "Appelez votre numéro et dites : 'Quels services offrez-vous ?'" },
+          { "id": "rdv",     "label": "Demande de RDV",   "script": "Dites : 'Je voudrais prendre un rendez-vous'" },
+          { "id": "english", "label": "Test anglais",     "script": "Dites : 'Hello, do you speak English?'" }
+        ],
+        "fallback": "Simuler un appel directement dans le dashboard si Twilio pas encore configuré"
+      }
+    }
+  ],
+
+  "post_onboarding": [
+    { "priority": 1, "action": "Enrichir la base de connaissances", "link": "/knowledge", "minutes": 10 },
+    { "priority": 2, "action": "Créer votre première mission sortante", "link": "/missions", "minutes": 5 },
+    { "priority": 3, "action": "Importer vos contacts existants", "link": "/crm", "minutes": 10 }
+  ],
+
+  "setup_service": {
+    "price": "297$ one-time",
+    "includes": ["Configuration complète", "Import contacts", "Optimisation base de connaissances", "Formation équipe 1h", "Support prioritaire 30 jours"]
+  }
+}

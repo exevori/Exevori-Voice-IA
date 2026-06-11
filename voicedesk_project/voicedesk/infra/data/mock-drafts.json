@@ -1,0 +1,72 @@
+[
+  {
+    "id": "draft_001",
+    "related_to": "call_002",
+    "contact_id": "contact_001",
+    "contact_name": "Marie Tremblay",
+    "contact_email": "marie.tremblay@beautynaturelle.ca",
+    "subject": "Facturation maintenance mensuelle — Mai 2025",
+    "body": "Bonjour Marie,\n\nSuite à votre appel de cet après-midi, nous vous faisons parvenir la facture de maintenance mensuelle pour le mois de mai 2025.\n\nForfait Maintenance Professionnel : 199 $/mois\n- Mises à jour sécurité\n- Sauvegarde hebdomadaire\n- Support prioritaire\n- Hébergement inclus\n\nVous pouvez effectuer le paiement via le lien de facturation habituel.\n\nN'hésitez pas à nous contacter pour toute question.\n\nCordialement,\n\nLéa\nAssistante IA — Exevori\nLévis, Québec\ninfo@exevori.com",
+    "status": "pending_validation",
+    "ai_confidence": 94,
+    "draft_type": "invoice_follow_up",
+    "created_at": "2025-05-18T14:35:00Z",
+    "notes_for_human": "Brouillon généré suite à l'appel de Marie Tremblay. À valider avant envoi. Vérifier si le montant de la facture est exact."
+  },
+  {
+    "id": "draft_002",
+    "related_to": "call_003",
+    "contact_id": null,
+    "contact_name": "Thomas Lefebvre",
+    "contact_email": null,
+    "subject": "Suite à votre appel — Proposition site web + devis automatisé",
+    "body": "Bonjour Thomas,\n\nMerci pour votre appel de ce matin. Nous sommes heureux de vous informer que nous pouvons certainement vous accompagner dans votre projet.\n\nEn résumé de votre besoin :\n- Site web professionnel pour Construction Lefebvre\n- Système de devis automatisé intégré\n\nNotre équipe prépare actuellement une proposition personnalisée qui vous sera envoyée d'ici 24-48 heures.\n\nEn attendant, n'hésitez pas à nous partager toute information additionnelle sur votre projet.\n\nCordialement,\n\nLéa\nAssistante IA — Exevori\nLévis, Québec\ninfo@exevori.com",
+    "status": "pending_validation",
+    "ai_confidence": 52,
+    "draft_type": "follow_up_proposal",
+    "created_at": "2025-05-19T10:25:00Z",
+    "notes_for_human": "⚠️ Confiance IA faible (52%). Thomas a demandé des prix exacts — NE PAS inclure de chiffres sans validation. Ajouter le courriel de Thomas avant envoi."
+  },
+  {
+    "id": "draft_003",
+    "related_to": "call_005",
+    "contact_id": "contact_005",
+    "contact_name": "Sophie Lavoie",
+    "contact_email": "sophie@cliniquelavoie.ca",
+    "subject": "Confirmation de votre rendez-vous démo — 22 mai à 15h00",
+    "body": "Bonjour Sophie,\n\nMerci pour votre appel ! Nous sommes ravis de vous présenter VoiceDesk IA lors de notre rencontre.\n\n📅 Rendez-vous confirmé :\nDate : Jeudi 22 mai 2025\nHeure : 15h00\nFormat : Google Meet\n\nDans cette démo, nous vous montrerons comment VoiceDesk IA peut :\n✓ Répondre automatiquement aux appels de votre clinique\n✓ Prendre les rendez-vous de vos clients\n✓ Envoyer des confirmations automatiques\n✓ Gérer les messages et suivis\n\nUn lien Google Meet vous sera envoyé 30 minutes avant la rencontre.\n\nÀ très bientôt !\n\nLéa\nAssistante IA — Exevori\nLévis, Québec",
+    "status": "pending_validation",
+    "ai_confidence": 91,
+    "draft_type": "appointment_confirmation",
+    "created_at": "2025-05-19T12:12:00Z",
+    "notes_for_human": "Brouillon de confirmation de rendez-vous pour Sophie Lavoie. Ajouter le lien Google Meet avant envoi."
+  },
+  {
+    "id": "draft_004",
+    "related_to": "email_001",
+    "contact_id": null,
+    "contact_name": "Alex Johnson",
+    "contact_email": "alex.johnson@acmecorp.com",
+    "subject": "RE: Demande de proposition commerciale — Exevori",
+    "body": "Bonjour Alex,\n\nMerci pour votre intérêt envers nos services ! Nous sommes ravis de vous accompagner dans votre projet d'automatisation IA.\n\nPour préparer une proposition adaptée à votre équipe de 8 personnes, nous aimerions mieux comprendre vos besoins lors d'un bref appel exploratoire (30 minutes).\n\nNos solutions disponibles pour votre contexte :\n• Agent IA téléphonique — à partir de 497 $/mois\n• Automatisation courriels clients — à partir de 397 $/mois\n• Intégration CRM personnalisée — sur devis\n\nPourriez-vous partager vos disponibilités pour cette semaine ou la prochaine ?\n\nCordialement,\n\nLéa\nAssistante IA — Exevori\ninfo@exevori.com",
+    "status": "pending_validation",
+    "ai_confidence": 76,
+    "draft_type": "commercial_proposal_reply",
+    "created_at": "2025-05-19T09:20:00Z",
+    "notes_for_human": "⚠️ Les prix indiqués sont indicatifs — vérifier avant envoi. Brouillon à valider obligatoirement avant envoi à un prospect."
+  },
+  {
+    "id": "draft_005",
+    "related_to": "email_003",
+    "contact_id": null,
+    "contact_name": "Marco Patel",
+    "contact_email": "info@globex.com",
+    "subject": "RE: Problème d'accès urgent — Exevori",
+    "body": "Bonjour Marco,\n\nNous avons bien reçu votre message concernant votre problème d'accès.\n\nNous transférons votre demande à notre équipe technique en priorité. Un membre de notre équipe vous contactera dans les prochaines 2 heures.\n\nEn attendant, pourriez-vous nous préciser :\n1. Le nom d'utilisateur ou courriel utilisé pour vous connecter\n2. Le navigateur et l'appareil utilisés\n\nCordialement,\n\nLéa\nAssistante IA — Exevori",
+    "status": "pending_validation",
+    "ai_confidence": 55,
+    "draft_type": "support_urgent",
+    "created_at": "2025-05-19T07:35:00Z",
+    "notes_for_human": "⚠️ Vérifier si Globex est un vrai client dans notre système. Adapter la réponse en conséquence."
+  }
+]

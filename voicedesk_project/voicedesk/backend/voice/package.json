@@ -1,0 +1,23 @@
+{
+  "name": "voicedesk-ia-voice",
+  "version": "1.0.0",
+  "description": "VoiceDesk IA — Pipeline voix Twilio ConversationRelay + ElevenLabs + DeepSeek",
+  "type": "module",
+  "scripts": {
+    "inbound": "node inbound.js",
+    "outbound": "node outbound.js",
+    "dev:inbound": "node --watch inbound.js",
+    "dev:outbound": "node --watch outbound.js"
+  },
+  "dependencies": {
+    "@fastify/formbody": "^7.4.0",
+    "@fastify/websocket": "^10.0.1",
+    "@supabase/supabase-js": "^2.39.0",
+    "dotenv": "^16.6.1",
+    "fastify": "^4.29.1",
+    "twilio": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

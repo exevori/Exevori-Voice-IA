@@ -1,0 +1,108 @@
+{
+  "assistant": {
+    "id": "asst_exevori_lea_001",
+    "name": "Léa",
+    "gender": "female",
+    "voice_id": "EXAVITQu4vr4xnSDxMaL",
+    "voice_model": "eleven_flash_v2_5",
+    "primary_language": "fr-CA",
+    "secondary_language": "en-CA",
+    "language_detection": "auto",
+    "language_switch_threshold": 2,
+    "tone": "Professionnel, chaleureux, commercial, clair",
+    "greeting_inbound_fr": "Bonjour, je suis Léa de chez Exevori. Comment puis-je vous aider aujourd'hui ?",
+    "greeting_inbound_en": "Hello, this is Léa from Exevori. How can I help you today?",
+    "greeting_outbound_fr": "Bonjour {first_name}, je suis Léa d'Exevori. J'appelle concernant {mission_subject}. Est-ce que je vous joins au bon moment ?",
+    "greeting_outbound_en": "Hello {first_name}, this is Léa from Exevori. I'm calling about {mission_subject}. Is this a good time?",
+    "farewell_fr": "Merci pour votre temps. Passez une excellente journée !",
+    "farewell_en": "Thank you for your time. Have a wonderful day!",
+    "unknown_answer_fr": "Je n'ai pas l'information exacte, mais je transmets votre demande à l'équipe.",
+    "unknown_answer_en": "I don't have that exact information, but I'll forward your request to our team.",
+    "transfer_message_fr": "Je vous transfère à un membre de notre équipe immédiatement.",
+    "transfer_message_en": "Let me transfer you to one of our team members right away.",
+    "after_hours_message_fr": "Nos bureaux sont fermés jusqu'à {next_open}. Puis-je prendre votre message ?",
+    "after_hours_message_en": "Our offices are closed until {next_open}. May I take a message?",
+    "voicemail_message_fr": "Bonjour {first_name}, c'est Léa d'Exevori. Je vous appelle concernant {mission_subject}. N'hésitez pas à nous rappeler au {company_phone}. Bonne journée !",
+    "confidence_threshold": 75,
+    "autonomy_level": "high",
+    "email_signature_fr": "Léa\nAssistante IA — Exevori\nLévis, Québec\ninfo@exevori.com",
+    "email_signature_en": "Léa\nAI Assistant — Exevori\nLévis, Québec\ninfo@exevori.com"
+  },
+
+  "organization": {
+    "id": "org_exevori_001",
+    "name": "Exevori",
+    "city": "Lévis",
+    "province": "Québec",
+    "country": "Canada",
+    "phone": "+1 (418) 555-0100",
+    "email": "info@exevori.com",
+    "website": "https://exevori.com",
+    "sector": "IA, SaaS, automatisation et développement web",
+    "hours": {
+      "monday":    { "open": "09:00", "close": "17:00" },
+      "tuesday":   { "open": "09:00", "close": "17:00" },
+      "wednesday": { "open": "09:00", "close": "17:00" },
+      "thursday":  { "open": "09:00", "close": "17:00" },
+      "friday":    { "open": "09:00", "close": "17:00" },
+      "saturday":  null,
+      "sunday":    null
+    },
+    "timezone": "America/Toronto"
+  },
+
+  "phone_config": {
+    "note": "PAS DE VOIP.MS — La PME garde son numéro Bell/Vidéotron/Telus et configure un renvoi d'appel vers le numéro Twilio assigné par VoiceDesk.",
+    "mode": "both",
+    "mode_options": ["inbound_only", "outbound_only", "both"],
+    "mode_label": "Réception + Émission",
+    "twilio_number": "+1 (418) 555-0200",
+    "inbound_enabled": true,
+    "outbound_enabled": true,
+    "inbound_forwarding_mode": "backup",
+    "carrier": "Vidéotron",
+    "carrier_forwarding_code_backup": "*93",
+    "carrier_forwarding_code_always": "*72",
+    "carrier_disable_code": "*73",
+    "outbound_caller_id": "+1 (418) 555-0100",
+    "outbound_trigger": "manual",
+    "outbound_hours": {
+      "monday":    { "start": "09:00", "end": "20:00" },
+      "tuesday":   { "start": "09:00", "end": "20:00" },
+      "wednesday": { "start": "09:00", "end": "20:00" },
+      "thursday":  { "start": "09:00", "end": "20:00" },
+      "friday":    { "start": "09:00", "end": "18:00" },
+      "saturday":  { "start": "10:00", "end": "14:00" },
+      "sunday":    null
+    },
+    "max_retries": 2
+  },
+
+  "transfer_rules": [
+    "Le client insiste pour parler à une personne",
+    "Score de confiance IA inférieur à 50%",
+    "Demande de prix exact non validé",
+    "Client mécontent ou plainte",
+    "Sujet sensible — légal, fiscal, médical",
+    "Budget supérieur à 10 000$/mois"
+  ],
+
+  "integrations": {
+    "twilio":          { "status": "v0_required", "phase": 0 },
+    "elevenlabs":      { "status": "v0_required", "phase": 0 },
+    "calendly":        { "status": "v0_required", "phase": 0 },
+    "google_calendar": { "status": "v0_required", "phase": 0 },
+    "google_auth":     { "status": "v0_required", "phase": 0 },
+    "supabase":        { "status": "v0_required", "phase": 0 },
+    "resend":          { "status": "v0_required", "phase": 0 },
+    "deepseek":        { "status": "v0_required", "phase": 0 },
+    "comptapro": {
+      "status": "not_connected",
+      "phase": 3,
+      "api_route": "POST /api/v1/integrations/comptapro",
+      "note": "Architecture API prête dès V0. Connexion réelle en Phase 3.",
+      "config_fields": ["api_key", "company_id", "sync_invoices", "sync_clients"]
+    },
+    "stripe":          { "status": "phase_4", "phase": 4 }
+  }
+}

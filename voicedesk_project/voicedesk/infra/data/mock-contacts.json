@@ -1,0 +1,198 @@
+[
+  {
+    "id": "contact_001",
+    "first_name": "Marie",
+    "last_name": "Tremblay",
+    "full_name": "Marie Tremblay",
+    "company": "Beauté Naturelle Enr.",
+    "phone": "+1 (418) 555-1234",
+    "email": "marie.tremblay@beautynaturelle.ca",
+    "address": "245 rue des Érables, Lévis, QC",
+    "type": "existing_client",
+    "source": "call",
+    "status": "existing_client",
+    "main_need": "Site web avec boutique en ligne",
+    "urgency": "low",
+    "budget": "2 000–4 000 $",
+    "last_interaction": "2025-05-18T14:32:00Z",
+    "next_action": "Envoyer la facture de maintenance mensuelle",
+    "notes": [
+      {
+        "id": "note_001a",
+        "date": "2025-05-18T14:32:00Z",
+        "channel": "call",
+        "summary": "Marie a appelé pour vérifier le statut de son site web. Le projet est complété et livré. Elle est satisfaite.",
+        "intent": "suivi_projet",
+        "urgency": "low",
+        "next_action": "Envoyer la facture de maintenance mensuelle",
+        "status_proposed": "existing_client"
+      },
+      {
+        "id": "note_001b",
+        "date": "2025-04-10T10:15:00Z",
+        "channel": "email",
+        "summary": "Demande de modification sur la page contact. Réglé en 2 heures.",
+        "intent": "support",
+        "urgency": "medium",
+        "next_action": "Confirmer que les modifications sont acceptées",
+        "status_proposed": "existing_client"
+      }
+    ],
+    "history": [
+      { "date": "2025-03-01", "event": "Contrat signé — site web 3 500 $" },
+      { "date": "2025-04-05", "event": "Site web livré et approuvé" },
+      { "date": "2025-04-10", "event": "Modifications demandées et effectuées" },
+      { "date": "2025-05-01", "event": "Démarrage abonnement maintenance 199 $/mois" }
+    ],
+    "tags": ["site_web", "maintenance", "client_satisfait"],
+    "created_at": "2025-03-01T09:00:00Z",
+    "updated_at": "2025-05-18T14:32:00Z"
+  },
+  {
+    "id": "contact_002",
+    "first_name": "Pierre",
+    "last_name": "Gagnon",
+    "full_name": "Pierre Gagnon",
+    "company": "Garage Gagnon & Fils",
+    "phone": "+1 (418) 555-5678",
+    "email": "pierre@garagegagnon.com",
+    "address": "88 boul. Guillaume-Couture, Lévis, QC",
+    "type": "prospect",
+    "source": "call",
+    "status": "hot_lead",
+    "main_need": "Agent IA pour répondre aux appels et prendre des rendez-vous",
+    "urgency": "high",
+    "budget": "500–1 000 $/mois",
+    "last_interaction": "2025-05-19T13:55:00Z",
+    "next_action": "Rappeler pour présenter la démo VoiceDesk IA",
+    "notes": [
+      {
+        "id": "note_002a",
+        "date": "2025-05-19T13:55:00Z",
+        "channel": "call",
+        "summary": "Pierre a appelé pour s'informer sur un assistant IA pour son garage. Il reçoit beaucoup d'appels et n'a pas le temps de tous les répondre. Très intéressé par VoiceDesk IA.",
+        "intent": "demande_info",
+        "urgency": "high",
+        "next_action": "Rappeler Pierre et lui présenter une démo personnalisée",
+        "status_proposed": "hot_lead"
+      }
+    ],
+    "history": [
+      { "date": "2025-05-19", "event": "Premier contact — appel entrant" }
+    ],
+    "tags": ["agent_ia", "garage", "prospect_chaud", "rappel_urgent"],
+    "created_at": "2025-05-19T13:55:00Z",
+    "updated_at": "2025-05-19T13:55:00Z"
+  },
+  {
+    "id": "contact_003",
+    "first_name": "Jean",
+    "last_name": "Fortin",
+    "full_name": "Jean Fortin",
+    "company": "Comptabilité Fortin",
+    "phone": "+1 (418) 555-9012",
+    "email": "jean.fortin@cptfortin.ca",
+    "address": "12 rue des Pins, Saint-Romuald, QC",
+    "type": "prospect",
+    "source": "email",
+    "status": "callback_required",
+    "main_need": "Automatisation des courriels clients et rappels",
+    "urgency": "medium",
+    "budget": "300–600 $/mois",
+    "last_interaction": "2025-05-17T12:47:00Z",
+    "next_action": "Rappeler Jean mardi matin avant 10h",
+    "notes": [
+      {
+        "id": "note_003a",
+        "date": "2025-05-17T12:47:00Z",
+        "channel": "call",
+        "summary": "Jean a appelé pour annuler un rendez-vous prévu. Il est très occupé avec la saison des impôts. Il veut être rappelé la semaine prochaine.",
+        "intent": "annulation_rdv",
+        "urgency": "medium",
+        "next_action": "Rappeler Jean mardi matin avant 10h",
+        "status_proposed": "callback_required"
+      }
+    ],
+    "history": [
+      { "date": "2025-05-10", "event": "Courriel reçu — demande d'information automatisation" },
+      { "date": "2025-05-14", "event": "RDV planifié" },
+      { "date": "2025-05-17", "event": "RDV annulé — à rappeler" }
+    ],
+    "tags": ["automatisation", "comptable", "a_rappeler"],
+    "created_at": "2025-05-10T08:30:00Z",
+    "updated_at": "2025-05-17T12:47:00Z"
+  },
+  {
+    "id": "contact_004",
+    "first_name": "Lisa",
+    "last_name": "Chen",
+    "full_name": "Lisa Chen",
+    "company": "Synapse Digital",
+    "phone": "+1 (514) 555-3456",
+    "email": "lisa.chen@synapse.io",
+    "address": "1500 av. McGill College, Montréal, QC",
+    "type": "prospect",
+    "source": "import",
+    "status": "new",
+    "main_need": "SaaS personnalisé + agent courriel IA",
+    "urgency": "medium",
+    "budget": "2 500–5 000 $/mois",
+    "last_interaction": "2025-05-15T09:21:00Z",
+    "next_action": "Envoyer une présentation personnalisée par courriel",
+    "notes": [
+      {
+        "id": "note_004a",
+        "date": "2025-05-15T09:21:00Z",
+        "channel": "email",
+        "summary": "Lisa a envoyé un courriel d'intérêt pour un SaaS personnalisé et un agent courriel. Importé depuis une liste de prospects.",
+        "intent": "demande_info",
+        "urgency": "medium",
+        "next_action": "Envoyer une présentation personnalisée",
+        "status_proposed": "new"
+      }
+    ],
+    "history": [
+      { "date": "2025-05-15", "event": "Importé via CSV — courriel d'intérêt reçu" }
+    ],
+    "tags": ["saas_personnalise", "agent_courriel", "montreal", "import_csv"],
+    "created_at": "2025-05-15T09:00:00Z",
+    "updated_at": "2025-05-15T09:21:00Z"
+  },
+  {
+    "id": "contact_005",
+    "first_name": "Sophie",
+    "last_name": "Lavoie",
+    "full_name": "Sophie Lavoie",
+    "company": "Clinique Esthétique Lavoie",
+    "phone": "+1 (418) 555-7890",
+    "email": "sophie@cliniquelavoie.ca",
+    "address": "320 rue Saint-Joseph, Lévis, QC",
+    "type": "prospect",
+    "source": "call",
+    "status": "appointment_set",
+    "main_need": "Agent IA pour prendre les rendez-vous de la clinique",
+    "urgency": "high",
+    "budget": "400–800 $/mois",
+    "last_interaction": "2025-05-19T12:10:00Z",
+    "next_action": "Confirmer le rendez-vous du 22 mai à 15h00",
+    "notes": [
+      {
+        "id": "note_005a",
+        "date": "2025-05-19T12:10:00Z",
+        "channel": "call",
+        "summary": "Sophie souhaite un agent IA pour sa clinique esthétique. Elle perd beaucoup de clients car elle ne peut pas répondre au téléphone pendant les traitements. Un rendez-vous démo est prévu.",
+        "intent": "demande_rdv",
+        "urgency": "high",
+        "next_action": "Préparer la démo personnalisée clinique",
+        "status_proposed": "appointment_set"
+      }
+    ],
+    "history": [
+      { "date": "2025-05-19", "event": "Appel entrant — besoin agent IA clinique" },
+      { "date": "2025-05-19", "event": "Rendez-vous démo planifié — 22 mai 15h00" }
+    ],
+    "tags": ["agent_ia", "clinique", "rdv_prevu", "urgent"],
+    "created_at": "2025-05-19T12:10:00Z",
+    "updated_at": "2025-05-19T12:10:00Z"
+  }
+]

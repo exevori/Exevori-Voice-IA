@@ -1,0 +1,68 @@
+[
+  {
+    "id": "inv_001",
+    "company_id": "comp_001",
+    "company_name": "Garage Gagnon & Fils",
+    "email": "pierre@garagegagnon.ca",
+    "role": "company_admin",
+    "token": "tok_abc123def456",
+    "status": "accepted",
+    "expires_at": "2025-04-08T10:00:00Z",
+    "created_at": "2025-04-01T10:00:00Z",
+    "accepted_at": "2025-04-02T14:30:00Z",
+    "sent_by": "admin@exevori.com"
+  },
+  {
+    "id": "inv_002",
+    "company_id": "comp_002",
+    "company_name": "Clinique Dentaire Boucher",
+    "email": "nathalie@cliniqueboucher.ca",
+    "role": "company_admin",
+    "token": "tok_xyz789ghi012",
+    "status": "accepted",
+    "expires_at": "2025-03-22T09:00:00Z",
+    "created_at": "2025-03-15T09:00:00Z",
+    "accepted_at": "2025-03-15T11:15:00Z",
+    "sent_by": "admin@exevori.com"
+  },
+  {
+    "id": "inv_003",
+    "company_id": "comp_003",
+    "company_name": "Construction Simard inc.",
+    "email": "marc@constructionsimard.ca",
+    "role": "company_admin",
+    "token": "tok_mno345pqr678",
+    "status": "accepted",
+    "expires_at": "2025-05-19T11:00:00Z",
+    "created_at": "2025-05-12T11:00:00Z",
+    "accepted_at": "2025-05-12T15:00:00Z",
+    "sent_by": "admin@exevori.com"
+  },
+  {
+    "id": "inv_004",
+    "company_id": "comp_006_pending",
+    "company_name": "Agence Web Laval",
+    "email": "direction@agenceweblaval.ca",
+    "role": "company_admin",
+    "token": "tok_stu901vwx234",
+    "status": "pending",
+    "expires_at": "2025-05-26T08:00:00Z",
+    "created_at": "2025-05-19T08:00:00Z",
+    "accepted_at": null,
+    "sent_by": "admin@exevori.com"
+  },
+  {
+    "id": "inv_005",
+    "company_id": "comp_007_pending",
+    "company_name": "Courtier Immobilier Martin",
+    "email": "martin@immo-martin.ca",
+    "role": "company_admin",
+    "token": "tok_yza567bcd890",
+    "status": "expired",
+    "expires_at": "2025-05-10T14:00:00Z",
+    "created_at": "2025-05-03T14:00:00Z",
+    "accepted_at": null,
+    "sent_by": "admin@exevori.com",
+    "note": "Lien expiré — client n'a pas répondu. À relancer."
+  }
+]

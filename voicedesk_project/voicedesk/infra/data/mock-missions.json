@@ -1,0 +1,159 @@
+[
+  {
+    "id": "mission_001",
+    "organization_id": "org_exevori_001",
+    "name": "Relance soumissions mai 2025",
+    "type": "relance_soumission",
+    "type_label": "Relance de soumission",
+    "status": "active",
+    "trigger_mode": "manual",
+    "priority": "high",
+    "created_at": "2025-05-19T08:00:00Z",
+    "contact_source": {
+      "type": "crm_filter",
+      "label": "CRM — Filtre automatique",
+      "filters": {
+        "status": ["qualified", "proposal_sent"],
+        "last_interaction_before_days": 7,
+        "source": ["call", "email"]
+      },
+      "contacts_found": 5,
+      "description": "Prospects qualifiés contactés il y a plus de 7 jours sans réponse"
+    },
+    "message_template": "Bonjour {first_name}, je suis Léa d'Exevori. Nous vous avons envoyé une soumission pour {service} il y a quelques jours. Je voulais prendre de vos nouvelles et voir si vous aviez des questions ou si vous souhaitez aller de l'avant. Avez-vous eu l'occasion de la consulter ?",
+    "objective": "Savoir si le client a consulté la soumission et s'il veut aller de l'avant",
+    "language": "fr-CA",
+    "stats": {
+      "total_contacts": 5,
+      "called": 4,
+      "answered": 3,
+      "no_answer": 1,
+      "interested": 2,
+      "not_interested": 1,
+      "appointment_booked": 1,
+      "in_progress": 1,
+      "remaining": 1,
+      "completion_rate": 80
+    }
+  },
+  {
+    "id": "mission_002",
+    "organization_id": "org_exevori_001",
+    "name": "Confirmation RDV — Mardi 20 mai",
+    "type": "confirmation_rdv",
+    "type_label": "Confirmation de rendez-vous",
+    "status": "completed",
+    "trigger_mode": "manual",
+    "priority": "high",
+    "created_at": "2025-05-18T14:00:00Z",
+    "completed_at": "2025-05-18T16:30:00Z",
+    "contact_source": {
+      "type": "calendar",
+      "label": "Calendrier — Automatique",
+      "calendar_date": "2025-05-20",
+      "calendly_event_types": ["demo", "decouverte", "consultation"],
+      "contacts_found": 3,
+      "description": "Tous les RDV confirmés du mardi 20 mai",
+      "auto_populated": true
+    },
+    "message_template": "Bonjour {first_name}, je suis Léa d'Exevori. Je vous appelle pour confirmer votre rendez-vous {appointment_type} prévu le {appointment_date} à {appointment_time}. Est-ce que ce rendez-vous vous convient toujours ?",
+    "objective": "Confirmer les RDV du lendemain et gérer les annulations",
+    "language": "fr-CA",
+    "stats": {
+      "total_contacts": 3,
+      "called": 3,
+      "answered": 3,
+      "confirmed": 2,
+      "rescheduled": 1,
+      "completion_rate": 100
+    }
+  },
+  {
+    "id": "mission_003",
+    "organization_id": "org_exevori_001",
+    "name": "Prospection cliniques — Lévis Rive-Sud",
+    "type": "prospection",
+    "type_label": "Prospection simple",
+    "status": "draft",
+    "trigger_mode": "manual",
+    "priority": "low",
+    "created_at": "2025-05-19T11:00:00Z",
+    "contact_source": {
+      "type": "csv_import",
+      "label": "Fichier CSV importé",
+      "filename": "cliniques-levis-2025.csv",
+      "total_rows": 12,
+      "duplicates_detected": 1,
+      "contacts_imported": 11,
+      "contacts_found": 0,
+      "description": "Liste de cliniques de la région de Lévis — à prospecter"
+    },
+    "message_template": "Bonjour {first_name}, je suis Léa d'Exevori, une entreprise de Lévis spécialisée en IA pour PME. Je vous appelle car nous aidons des cliniques comme la vôtre à ne plus jamais perdre un appel de patient. Est-ce un sujet qui vous intéresserait ?",
+    "objective": "Identifier les cliniques intéressées par VoiceDesk IA",
+    "language": "fr-CA",
+    "stats": {
+      "total_contacts": 0,
+      "completion_rate": 0
+    }
+  },
+  {
+    "id": "mission_004",
+    "organization_id": "org_exevori_001",
+    "name": "Suivi livraisons — Avril 2025",
+    "type": "suivi_apres_service",
+    "type_label": "Suivi après service",
+    "status": "scheduled",
+    "trigger_mode": "manual",
+    "priority": "medium",
+    "scheduled_start": "2025-05-20T09:00:00Z",
+    "created_at": "2025-05-19T10:00:00Z",
+    "contact_source": {
+      "type": "crm_filter",
+      "label": "CRM — Filtre automatique",
+      "filters": {
+        "status": ["existing_client"],
+        "source": ["call", "import"],
+        "last_interaction_after": "2025-04-01",
+        "last_interaction_before": "2025-04-30",
+        "tags_include": ["livraison_completee"]
+      },
+      "contacts_found": 4,
+      "description": "Clients dont la livraison a été complétée en avril 2025"
+    },
+    "message_template": "Bonjour {first_name}, je suis Léa d'Exevori. Nous avons livré votre {service} le mois dernier et je voulais m'assurer que tout fonctionne bien de votre côté. Êtes-vous satisfait du résultat ?",
+    "objective": "Vérifier satisfaction + détecter opportunités additionnelles",
+    "language": "fr-CA",
+    "stats": {
+      "total_contacts": 4,
+      "called": 0,
+      "completion_rate": 0
+    }
+  },
+  {
+    "id": "mission_005",
+    "organization_id": "org_exevori_001",
+    "name": "Rappel — Jean Fortin + 2 contacts",
+    "type": "rappel_client",
+    "type_label": "Rappel client",
+    "status": "active",
+    "trigger_mode": "manual",
+    "priority": "high",
+    "created_at": "2025-05-19T13:00:00Z",
+    "contact_source": {
+      "type": "manual",
+      "label": "Saisie manuelle",
+      "contacts_found": 3,
+      "description": "3 contacts ajoutés manuellement depuis le CRM"
+    },
+    "message_template": "Bonjour {first_name}, je suis Léa d'Exevori. Je vous rappelle comme convenu. Est-ce que vous avez eu la chance de réfléchir à notre discussion de la semaine dernière ?",
+    "objective": "Rappeler les clients qui avaient demandé à être recontactés",
+    "language": "fr-CA",
+    "stats": {
+      "total_contacts": 3,
+      "called": 1,
+      "answered": 1,
+      "interested": 1,
+      "completion_rate": 33
+    }
+  }
+]

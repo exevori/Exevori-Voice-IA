@@ -1,0 +1,343 @@
+{
+  "language": {
+    "name": "English",
+    "code": "en-CA"
+  },
+  "common": {
+    "yes": "Yes",
+    "no": "No",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "search": "Search",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "confirm": "Confirm",
+    "back": "Back",
+    "next": "Next",
+    "previous": "Previous",
+    "close": "Close",
+    "submit": "Submit",
+    "approve": "Approve",
+    "reject": "Reject",
+    "all": "All",
+    "none": "None",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "thisWeek": "This week",
+    "thisMonth": "This month",
+    "actions": "Actions",
+    "status": "Status",
+    "name": "Name",
+    "email": "Email",
+    "phone": "Phone",
+    "language": "Language",
+    "settings": "Settings",
+    "profile": "Profile",
+    "logout": "Logout",
+    "test": "Test",
+    "preview": "Preview",
+    "active": "Active",
+    "inactive": "Inactive"
+  },
+  "auth": {
+    "login": {
+      "title": "Sign in to VoiceDesk",
+      "subtitle": "Access your AI assistant",
+      "email": "Email address",
+      "password": "Password",
+      "rememberMe": "Remember me",
+      "forgotPassword": "Forgot password?",
+      "signIn": "Sign in",
+      "noAccount": "No account? Contact us",
+      "loginError": "Invalid credentials"
+    },
+    "invite": {
+      "title": "Welcome to VoiceDesk!",
+      "subtitle": "Create your password to activate your account",
+      "createPassword": "Create password",
+      "confirmPassword": "Confirm password",
+      "minChars": "Minimum 8 characters",
+      "passwordMismatch": "Passwords don't match",
+      "expired": "This invitation has expired",
+      "invalid": "Invalid invitation link"
+    },
+    "reset": {
+      "title": "Reset password",
+      "subtitle": "Enter your email to receive a reset link",
+      "send": "Send link",
+      "checkEmail": "Check your inbox for the reset link"
+    }
+  },
+  "navigation": {
+    "dashboard": "Dashboard",
+    "calls": "Calls",
+    "outbound": "Outbound calls",
+    "missions": "Missions",
+    "emails": "Emails",
+    "crm": "Contacts",
+    "calendar": "Calendar",
+    "knowledge": "Knowledge",
+    "config": "Configuration",
+    "support": "Support",
+    "billing": "Billing",
+    "admin": "Administration"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Overview of your activity",
+    "todayActivity": "Today's activity",
+    "kpis": {
+      "inboundCalls": "Inbound calls",
+      "outboundCalls": "Outbound calls",
+      "totalMinutes": "Minutes used",
+      "emailsReceived": "Emails received",
+      "draftsPending": "Drafts to validate",
+      "appointmentsUpcoming": "Upcoming appointments",
+      "hotLeads": "Hot leads",
+      "knowledgeBaseSize": "Active knowledge"
+    },
+    "alerts": {
+      "trialEnding": "Your trial ends in {{days}} day(s)",
+      "paymentOverdue": "Payment overdue",
+      "draftsPending": "{{count}} draft(s) to validate",
+      "learningPending": "{{count}} learning suggestion(s) to validate",
+      "ticketsOpen": "{{count}} open support ticket(s)"
+    }
+  },
+  "calls": {
+    "title": "Calls",
+    "inbound": "Inbound calls",
+    "active": "Active",
+    "history": "History",
+    "caller": "Caller",
+    "duration": "Duration",
+    "intent": "Intent",
+    "summary": "Summary",
+    "outcome": "Outcome",
+    "transcript": "Transcript",
+    "outcomes": {
+      "resolved": "Resolved",
+      "appointment_booked": "Appointment booked",
+      "transferred": "Transferred",
+      "voicemail": "Voicemail",
+      "missed": "Missed"
+    }
+  },
+  "outbound": {
+    "title": "Outbound calls",
+    "missions": "Missions",
+    "newMission": "New mission",
+    "missionName": "Mission name",
+    "objective": "Objective",
+    "contactSource": "Contact source",
+    "sources": {
+      "calendar": "Calendar (appointment confirmations)",
+      "crm_filter": "CRM (filter)",
+      "csv_import": "CSV import",
+      "manual": "Manual entry"
+    },
+    "trigger": "Trigger call",
+    "scriptTemplate": "Script template",
+    "completed": "Completed",
+    "remaining": "Remaining",
+    "successRate": "Success rate"
+  },
+  "emails": {
+    "title": "Emails",
+    "inbox": "Inbox",
+    "drafts": "Drafts",
+    "level1": "Auto-acknowledged",
+    "level2": "To validate",
+    "draftFor": "Draft for",
+    "regenerate": "Regenerate",
+    "approveSend": "Approve and send",
+    "editBeforeSend": "Edit before sending"
+  },
+  "crm": {
+    "title": "Contacts",
+    "newContact": "New contact",
+    "search": "Search contacts...",
+    "status": {
+      "new": "New",
+      "qualified": "Qualified",
+      "hot_lead": "Hot lead",
+      "appointment_set": "Appointment set",
+      "customer": "Customer",
+      "inactive": "Inactive",
+      "callback_required": "Callback required"
+    },
+    "history": "History",
+    "addNote": "Add note",
+    "nextAction": "Next action"
+  },
+  "calendar": {
+    "title": "Calendar",
+    "today": "Today",
+    "newAppointment": "New appointment",
+    "type": "Type",
+    "channel": "Channel",
+    "confirm": "Confirm",
+    "cancel": "Cancel appointment"
+  },
+  "knowledge": {
+    "title": "Knowledge base",
+    "addEntry": "Add entry",
+    "question": "Question",
+    "answer": "Answer",
+    "category": "Category",
+    "suggestions": "AI suggestions",
+    "suggestionsPending": "Suggestions to validate",
+    "detected": "Detected question",
+    "proposed": "Proposed answer",
+    "confidence": "Confidence",
+    "source": "Source",
+    "occurrences": "times"
+  },
+  "config": {
+    "title": "Assistant configuration",
+    "assistant": {
+      "name": "Assistant name",
+      "namePlaceholder": "E.g.: Sophie, Alex, Marie...",
+      "gender": "Gender",
+      "feminine": "Feminine",
+      "masculine": "Masculine",
+      "neutral": "Neutral",
+      "tone": "Tone",
+      "tones": {
+        "professional": "Professional",
+        "warm": "Warm",
+        "casual": "Casual",
+        "formal": "Very formal"
+      }
+    },
+    "voice": {
+      "title": "Voice",
+      "selectVoice": "Select a voice",
+      "testVoice": "Test voice",
+      "library": "Voice library",
+      "noVoiceAssigned": "No voice assigned",
+      "assignToService": "Assign to service",
+      "defaultVoice": "Default voice",
+      "premiumLocked": "This voice requires a higher plan",
+      "filterByLanguage": "Filter by language",
+      "allLanguages": "All languages",
+      "accent": "Accent",
+      "accents": {
+        "quebec": "🇨🇦 Quebec",
+        "france": "🇫🇷 France",
+        "neutral": "Neutral",
+        "american": "🇺🇸 American",
+        "british": "🇬🇧 British",
+        "multilingual": "🌍 Multilingual"
+      }
+    },
+    "services": {
+      "title": "Services",
+      "addService": "Add service",
+      "list": {
+        "reception": "Reception",
+        "appointments": "Appointments",
+        "support": "Customer support",
+        "billing": "Billing",
+        "complaints": "Complaints",
+        "outbound": "Outbound calls",
+        "followup": "Customer follow-up",
+        "emergency": "Emergency"
+      }
+    },
+    "language": {
+      "title": "Languages",
+      "interfaceLanguage": "Interface language",
+      "voiceLanguage": "Assistant language (voice)",
+      "primary": "Primary language",
+      "autoDetect": "Automatic FR/EN detection during calls",
+      "ui_fr": "Français",
+      "ui_en": "English",
+      "voice_fr_ca": "French (Quebec)",
+      "voice_fr_fr": "French (France)",
+      "voice_en_ca": "English (Canada)",
+      "voice_en_us": "English (USA)",
+      "accentInfo": "FR-FR accent often sounds more natural on ElevenLabs. FR-CA is improving rapidly."
+    },
+    "greetings": {
+      "title": "Greetings",
+      "inboundFr": "Inbound greeting (FR)",
+      "inboundEn": "Inbound greeting (EN)",
+      "outboundFr": "Outbound opening (FR)",
+      "voicemail": "Voicemail message"
+    },
+    "billing": {
+      "title": "Billing",
+      "currentPlan": "Current plan",
+      "changePlan": "Change plan",
+      "managePayment": "Manage payment",
+      "paymentMethod": "Payment method",
+      "invoices": "Invoices",
+      "usage": "Usage",
+      "minutesIncluded": "Included minutes",
+      "minutesUsed": "Minutes used",
+      "overagePolicy": "Overage policy",
+      "payAsYouGo": "Continue and bill overage",
+      "blockAtLimit": "Block at limit",
+      "estimatedOverage": "Estimated overage cost"
+    }
+  },
+  "support": {
+    "title": "Support",
+    "myTickets": "My tickets",
+    "newTicket": "New ticket",
+    "subject": "Subject",
+    "description": "Description",
+    "category": "Category",
+    "priority": "Priority",
+    "priorities": {
+      "urgent": "🔴 Urgent",
+      "high": "🟠 High",
+      "normal": "🔵 Normal",
+      "low": "⚪ Low"
+    },
+    "categories": {
+      "general": "General",
+      "billing": "Billing",
+      "technical": "Technical",
+      "feature_request": "Feature request",
+      "bug": "Bug",
+      "onboarding": "Onboarding"
+    },
+    "statuses": {
+      "open": "Open",
+      "in_progress": "In progress",
+      "waiting_client": "Waiting client",
+      "resolved": "Resolved",
+      "closed": "Closed"
+    },
+    "respond": "Reply",
+    "rateExperience": "Rate the resolution"
+  },
+  "onboarding": {
+    "welcome": "Welcome to VoiceDesk!",
+    "step": "Step {{current}} of {{total}}",
+    "step1": {
+      "title": "Configure your assistant",
+      "subtitle": "Give it a name and choose its tone"
+    },
+    "step2": {
+      "title": "Choose its voice",
+      "subtitle": "Listen to available voices and select your favorite"
+    },
+    "step3": {
+      "title": "Your services",
+      "subtitle": "Which services will your assistant handle?"
+    },
+    "step4": {
+      "title": "Test call",
+      "subtitle": "Your assistant will call you to confirm everything works",
+      "callMe": "Call me now"
+    },
+    "finish": "Finish setup"
+  }
+}

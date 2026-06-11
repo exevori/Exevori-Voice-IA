@@ -1,0 +1,254 @@
+{
+  "note": "Indicateur de maturité de Léa — visible dans le dashboard. La PME voit Léa progresser.",
+  "organization_id": "org_exevori_001",
+  "assistant_id": "asst_exevori_lea_001",
+  "calculated_at": "2025-05-19T18:00:00Z",
+
+  "maturity": {
+    "overall_score": 34,
+    "overall_label": "En apprentissage",
+    "overall_color": "#F59E0B",
+    "days_active": 47,
+    "started_at": "2025-04-02T09:00:00Z",
+    "next_milestone": "Autonome",
+    "next_milestone_score": 60,
+    "points_to_next": 26,
+    "estimated_next_milestone": "2025-07-15"
+  },
+
+  "maturity_levels": [
+    {
+      "level": 1,
+      "label": "Débutante",
+      "score_range": [0, 20],
+      "color": "#EF4444",
+      "icon": "🌱",
+      "description": "Léa répond aux questions de base. Elle s'appuie entièrement sur la base de connaissances manuelle. Transferts humains fréquents.",
+      "typical_transfer_rate": "35–50%",
+      "typical_confidence": "55–65%",
+      "what_lea_knows": [
+        "Les informations entrées manuellement",
+        "La phrase d'accueil et les formules de base",
+        "Les règles de transfert humain configurées"
+      ]
+    },
+    {
+      "level": 2,
+      "label": "En apprentissage",
+      "score_range": [21, 45],
+      "color": "#F59E0B",
+      "icon": "📚",
+      "description": "Léa commence à reconnaître les questions fréquentes. Elle a accumulé ses premières validations humaines. Son taux de transfert baisse.",
+      "typical_transfer_rate": "18–35%",
+      "typical_confidence": "66–79%",
+      "what_lea_knows": [
+        "Les questions fréquentes validées",
+        "Les formulations locales des clients",
+        "Les premières règles opérationnelles apprises"
+      ],
+      "current_level": true
+    },
+    {
+      "level": 3,
+      "label": "Autonome",
+      "score_range": [46, 65],
+      "color": "#3B82F6",
+      "icon": "⚡",
+      "description": "Léa gère la majorité des interactions sans aide. Elle connaît les profils de clients récurrents et les arguments qui fonctionnent.",
+      "typical_transfer_rate": "10–18%",
+      "typical_confidence": "80–87%",
+      "what_lea_knows": [
+        "Profils des clients par secteur",
+        "Arguments commerciaux validés",
+        "Patterns de qualification des prospects",
+        "Gestion des objections courantes"
+      ]
+    },
+    {
+      "level": 4,
+      "label": "Experte",
+      "score_range": [66, 85],
+      "color": "#8B5CF6",
+      "icon": "🎯",
+      "description": "Léa maîtrise les subtilités de l'entreprise. Elle anticipe les besoins, reconnaît les signaux d'achat et adapte son approche selon le contexte.",
+      "typical_transfer_rate": "5–10%",
+      "typical_confidence": "88–93%",
+      "what_lea_knows": [
+        "Historique complet de chaque client actif",
+        "Signaux d'achat par type de client",
+        "Patterns saisonniers de l'entreprise",
+        "Formulations régionales et culturelles",
+        "Stratégies de qualification avancées"
+      ]
+    },
+    {
+      "level": 5,
+      "label": "Maîtrise totale",
+      "score_range": [86, 100],
+      "color": "#10B981",
+      "icon": "🏆",
+      "description": "Léa connaît l'entreprise mieux que la plupart des employés. Elle gère quasi toutes les interactions de façon autonome avec une précision exceptionnelle.",
+      "typical_transfer_rate": "< 3%",
+      "typical_confidence": "94–98%",
+      "what_lea_knows": [
+        "Tout ce qui précède",
+        "Nuances et exceptions par client",
+        "Évolution de l'entreprise dans le temps",
+        "Intelligence commerciale avancée",
+        "Prédiction des besoins clients"
+      ]
+    }
+  ],
+
+  "score_components": {
+    "knowledge_base": {
+      "label": "Base de connaissances",
+      "weight_percent": 25,
+      "current_score": 42,
+      "max_score": 100,
+      "contribution": 10.5,
+      "details": {
+        "entries_count": 8,
+        "entries_target_level2": 20,
+        "entries_target_level5": 150,
+        "categories_covered": ["services", "faq", "politique", "tarification", "contact"],
+        "categories_missing": ["temoignages", "processus_interne", "cas_usage"]
+      },
+      "how_to_improve": "Ajouter des entrées dans la base de connaissances — surtout les témoignages clients et les cas d'usage."
+    },
+    "validated_memory": {
+      "label": "Apprentissages validés",
+      "weight_percent": 35,
+      "current_score": 28,
+      "max_score": 100,
+      "contribution": 9.8,
+      "details": {
+        "approved_count": 4,
+        "pending_count": 3,
+        "rejected_count": 1,
+        "target_level2": 15,
+        "target_level5": 200
+      },
+      "how_to_improve": "Valider les suggestions d'apprentissage en attente. Chaque approbation améliore le score."
+    },
+    "interaction_volume": {
+      "label": "Volume d'interactions traitées",
+      "weight_percent": 20,
+      "current_score": 31,
+      "max_score": 100,
+      "contribution": 6.2,
+      "details": {
+        "total_calls": 47,
+        "total_emails": 89,
+        "total_interactions": 136,
+        "target_level2": 200,
+        "target_level5": 5000
+      },
+      "how_to_improve": "Le score augmente naturellement avec le temps et le volume d'appels."
+    },
+    "confidence_rate": {
+      "label": "Taux de confiance moyen",
+      "weight_percent": 10,
+      "current_score": 68,
+      "max_score": 100,
+      "contribution": 6.8,
+      "details": {
+        "current_avg_confidence": 72,
+        "target_level2": 75,
+        "target_level5": 96,
+        "low_confidence_rate": "28% des interactions"
+      },
+      "how_to_improve": "Approuver les suggestions en attente et enrichir la base de connaissances."
+    },
+    "transfer_rate": {
+      "label": "Autonomie (inverse du taux de transfert)",
+      "weight_percent": 10,
+      "current_score": 14,
+      "max_score": 100,
+      "contribution": 1.4,
+      "details": {
+        "current_transfer_rate": "28%",
+        "target_level2": "20%",
+        "target_level5": "3%",
+        "main_transfer_reasons": [
+          "Prix exacts demandés (42%)",
+          "Score confiance < 50% (35%)",
+          "Client insiste pour humain (23%)"
+        ]
+      },
+      "how_to_improve": "Valider des fourchettes de prix claires pour réduire les transferts liés aux prix."
+    }
+  },
+
+  "milestones_achieved": [
+    {
+      "milestone": "Première validation humaine",
+      "achieved_at": "2025-04-05T10:00:00Z",
+      "badge": "🎉"
+    },
+    {
+      "milestone": "10 interactions traitées",
+      "achieved_at": "2025-04-08T14:00:00Z",
+      "badge": "📞"
+    },
+    {
+      "milestone": "Première question fréquente validée",
+      "achieved_at": "2025-04-12T09:00:00Z",
+      "badge": "💡"
+    },
+    {
+      "milestone": "Premier RDV pris de façon autonome",
+      "achieved_at": "2025-04-18T11:30:00Z",
+      "badge": "📅"
+    }
+  ],
+
+  "milestones_upcoming": [
+    {
+      "milestone": "Score 50% — Léa devient autonome",
+      "estimated_at": "2025-07-15",
+      "requirements": [
+        "Valider 15 suggestions d'apprentissage",
+        "Atteindre 200 interactions totales",
+        "Amener le taux de transfert sous 20%"
+      ]
+    },
+    {
+      "milestone": "Score 70% — Léa devient experte",
+      "estimated_at": "2026-02-01",
+      "requirements": [
+        "Valider 80 suggestions d'apprentissage",
+        "Atteindre 1 000 interactions totales",
+        "Couvrir 8 catégories de connaissances"
+      ]
+    },
+    {
+      "milestone": "Score 90% — Maîtrise totale",
+      "estimated_at": "2027-04-01",
+      "requirements": [
+        "Valider 200+ suggestions",
+        "3 000+ interactions traitées",
+        "Taux de transfert < 5%"
+      ]
+    }
+  ],
+
+  "dashboard_widget": {
+    "display_type": "progress_ring",
+    "primary_value": 34,
+    "primary_label": "Maturité de Léa",
+    "primary_color": "#F59E0B",
+    "sub_metrics": [
+      { "label": "Appels traités", "value": 47, "icon": "Phone" },
+      { "label": "Apprentissages validés", "value": 4, "icon": "Check" },
+      { "label": "Confiance moyenne", "value": "72%", "icon": "Zap" },
+      { "label": "Autonomie", "value": "72%", "icon": "TrendingUp" }
+    ],
+    "cta": {
+      "label": "3 suggestions en attente — Valide-les pour faire progresser Léa →",
+      "action": "navigate_to_suggestions",
+      "urgency": "medium"
+    },
+    "motivational_message": "Léa a traité 47 appels et économisé environ 8 heures de travail à ton équipe ce mois-ci. 🎉"
+  }
+}

@@ -1,0 +1,84 @@
+[
+  {
+    "id": "usage_001",
+    "company_id": "comp_001",
+    "period_start": "2025-05-01",
+    "period_end": "2025-05-31",
+    "resource_type": "voice_minutes",
+    "quantity": 487.5,
+    "unit_cost_usd": 0.105,
+    "total_cost_usd": 51.19,
+    "stripe_usage_record_id": null,
+    "reported_to_stripe": false
+  },
+  {
+    "id": "usage_002",
+    "company_id": "comp_001",
+    "period_start": "2025-05-01",
+    "period_end": "2025-05-31",
+    "resource_type": "ai_tokens",
+    "quantity": 845230,
+    "unit_cost_usd": 0.000001,
+    "total_cost_usd": 0.85
+  },
+  {
+    "id": "usage_003",
+    "company_id": "comp_001",
+    "period_start": "2025-05-01",
+    "period_end": "2025-05-31",
+    "resource_type": "email_sends",
+    "quantity": 142,
+    "unit_cost_usd": 0.0004,
+    "total_cost_usd": 0.06
+  },
+  {
+    "id": "usage_004",
+    "company_id": "comp_002",
+    "period_start": "2025-05-01",
+    "period_end": "2025-05-31",
+    "resource_type": "voice_minutes",
+    "quantity": 1647.2,
+    "unit_cost_usd": 0.105,
+    "total_cost_usd": 172.96
+  },
+  {
+    "id": "usage_005",
+    "company_id": "comp_002",
+    "period_start": "2025-05-01",
+    "period_end": "2025-05-31",
+    "resource_type": "ai_tokens",
+    "quantity": 2143580,
+    "unit_cost_usd": 0.000001,
+    "total_cost_usd": 2.14
+  },
+  {
+    "id": "usage_006",
+    "company_id": "comp_003",
+    "period_start": "2025-05-01",
+    "period_end": "2025-05-31",
+    "resource_type": "voice_minutes",
+    "quantity": 84.3,
+    "unit_cost_usd": 0.105,
+    "total_cost_usd": 8.85
+  },
+  {
+    "id": "usage_007",
+    "company_id": "comp_004",
+    "period_start": "2025-05-01",
+    "period_end": "2025-05-31",
+    "resource_type": "voice_minutes",
+    "quantity": 312.8,
+    "unit_cost_usd": 0.105,
+    "total_cost_usd": 32.84
+  },
+  {
+    "id": "usage_008",
+    "company_id": "comp_005",
+    "period_start": "2025-05-01",
+    "period_end": "2025-05-31",
+    "resource_type": "voice_minutes",
+    "quantity": 0,
+    "unit_cost_usd": 0.105,
+    "total_cost_usd": 0
+  }
+]

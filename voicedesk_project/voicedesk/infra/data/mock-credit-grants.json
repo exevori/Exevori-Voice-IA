@@ -1,0 +1,44 @@
+[
+  {
+    "id": "credit_001",
+    "company_id": "comp_001",
+    "amount_usd": 50.00,
+    "reason": "Référence d'un nouveau client (Comptabilité Fortin)",
+    "type": "referral",
+    "granted_by": "admin@exevori.com",
+    "expires_at": null,
+    "applied_to_invoice_id": null,
+    "status": "active",
+    "notes": "À appliquer sur la prochaine facture"
+  },
+  {
+    "id": "credit_002",
+    "company_id": "comp_002",
+    "amount_usd": 497.00,
+    "reason": "1 mois gratuit pour fidélité (12 mois de service)",
+    "type": "free_month",
+    "granted_by": "admin@exevori.com",
+    "expires_at": "2025-12-31T23:59:59Z",
+    "applied_to_invoice_id": null,
+    "status": "active"
+  },
+  {
+    "id": "credit_003",
+    "company_id": "comp_004",
+    "amount_usd": 73.50,
+    "reason": "Geste commercial - bug majeur le 15 avril",
+    "type": "goodwill",
+    "granted_by": "admin@exevori.com",
+    "applied_to_invoice_id": "inv_004",
+    "status": "used"
+  },
+  {
+    "id": "credit_004",
+    "company_id": "comp_001",
+    "amount_usd": 100.00,
+    "reason": "Beta testeur — feedback précieux",
+    "type": "beta_tester",
+    "granted_by": "admin@exevori.com",
+    "status": "active"
+  }
+]

@@ -1,0 +1,214 @@
+{
+  "note": "Mémoire d'entreprise intelligente — Léa apprend de façon contrôlée et progressive",
+  "organization_id": "org_exevori_001",
+  "assistant_id": "asst_exevori_lea_001",
+  "last_updated": "2025-05-19T18:00:00Z",
+
+  "learning_rule": "UNE INFORMATION N'EST JAMAIS UTILISÉE PAR LÉA SANS APPROBATION HUMAINE PRÉALABLE",
+
+  "memory_layers": {
+
+    "1_static": {
+      "label": "Mémoire statique",
+      "description": "Informations officielles entrées manuellement par l'admin. Léa s'y fie à 100%.",
+      "source": "Manuel — admin saisit directement dans la base de connaissances",
+      "auto_learn": false,
+      "requires_approval": false,
+      "count": 8,
+      "items": [
+        "Services offerts (4 services documentés)",
+        "Délais de livraison par type",
+        "Forfaits maintenance (199$ / 399$ / entreprise)",
+        "Zones desservies (Québec, Canada, USA à distance)",
+        "Contacts internes (ventes, support, facturation)",
+        "Horaires d'ouverture (lun-ven 9h-17h)",
+        "Phrase d'accueil et de transfert",
+        "Règles de transfert humain"
+      ],
+      "used_in": ["Toutes les conversations", "Réponses directes aux questions clients"],
+      "example_usage": "Client: 'Combien coûte un agent IA ?' → Léa consulte kb_003 → Répond: 'À partir de 497$/mois'"
+    },
+
+    "2_conversational": {
+      "label": "Mémoire conversationnelle",
+      "description": "Questions et formulations que les clients utilisent souvent. Léa apprend à mieux comprendre.",
+      "source": "Détectée automatiquement depuis les appels et courriels",
+      "auto_learn": true,
+      "requires_approval": true,
+      "count": 4,
+      "items": [
+        { "pattern": "site web avec IA", "detected_count": 6, "status": "approved", "maps_to": "kb_001 + kb_003" },
+        { "pattern": "délai livraison", "detected_count": 5, "status": "approved", "maps_to": "kb_005" },
+        { "pattern": "hors Québec", "detected_count": 4, "status": "approved", "maps_to": "kb_006" },
+        { "pattern": "maintenance incluse", "detected_count": 3, "status": "pending", "maps_to": "kb_007" }
+      ],
+      "example_usage": "Client dit 'vous faites des sites web intelligents ?' → Léa comprend = site web + IA → Répond sur kb_001 + kb_003"
+    },
+
+    "3_commercial": {
+      "label": "Mémoire commerciale",
+      "description": "Ce qui fonctionne pour qualifier et convaincre. Léa améliore ses arguments dans le temps.",
+      "source": "Détectée depuis les appels qui ont mené à un RDV ou à une vente",
+      "auto_learn": true,
+      "requires_approval": true,
+      "count": 3,
+      "items": [
+        {
+          "insight": "Mentionner le ROI (ne plus perdre d'appels) convainc mieux que le prix",
+          "detected_from": "3 appels convertis en RDV",
+          "status": "approved",
+          "applied_to": "Réponse standard aux demandes d'info sur l'agent IA"
+        },
+        {
+          "insight": "Les cliniques et garages répondent bien à l'argument '24/7 sans embaucher'",
+          "detected_from": "2 appels Sophie Lavoie + Pierre Gagnon",
+          "status": "approved",
+          "applied_to": "Profil client PME locale de service"
+        },
+        {
+          "insight": "Proposer une démo gratuite de 45 min augmente le taux de conversion",
+          "detected_from": "Analyse des RDV convertis",
+          "status": "pending",
+          "applied_to": null
+        }
+      ],
+      "example_usage": "Garage appelle pour info → Léa mentionne '24/7 sans embaucher' → propose démo → RDV pris"
+    },
+
+    "4_operational": {
+      "label": "Mémoire opérationnelle",
+      "description": "Règles de fonctionnement interne. Comment Léa gère les situations spéciales.",
+      "source": "Saisie manuelle + détectée depuis les transferts et escalades",
+      "auto_learn": true,
+      "requires_approval": true,
+      "count": 5,
+      "items": [
+        {
+          "rule": "Si client mentionne un budget > 5 000$/mois → transfert direct à la direction",
+          "source": "Manuel",
+          "status": "active"
+        },
+        {
+          "rule": "Hors horaires → prendre le message + envoyer accusé de réception Resend",
+          "source": "Manuel",
+          "status": "active"
+        },
+        {
+          "rule": "Si client demande Twilio ou ElevenLabs → c'est un client tech, adapter le ton",
+          "source": "Détectée depuis 2 appels",
+          "status": "pending_approval"
+        },
+        {
+          "rule": "Proposer Calendly demo-45min avant decouverte-30min pour les prospects chauds",
+          "source": "Détectée depuis 3 RDV convertis",
+          "status": "active"
+        },
+        {
+          "rule": "Si l'entreprise a plus de 10 employés → proposer consultation-60min plutôt que démo",
+          "source": "Détectée depuis 2 conversations",
+          "status": "pending_approval"
+        }
+      ],
+      "example_usage": "Client mentionne 50 employés → Léa propose consultation 60min au lieu de démo 45min"
+    },
+
+    "5_validated": {
+      "label": "Mémoire validée par humain",
+      "description": "SEULE MÉMOIRE UTILISÉE OFFICIELLEMENT. Toute info qui a passé par l'humain.",
+      "source": "Suggestions approuvées + corrections humaines + FAQ approuvées",
+      "auto_learn": false,
+      "requires_approval": true,
+      "count": 7,
+      "approved_entries": [
+        {
+          "id": "validated_001",
+          "question": "Est-ce qu'Exevori travaille hors Québec ?",
+          "answer": "Oui, partout au Canada et aux États-Unis à distance.",
+          "approved_by": "admin",
+          "approved_at": "2025-05-18T10:00:00Z",
+          "source_suggestion": "sug_004",
+          "times_used": 8
+        },
+        {
+          "id": "validated_002",
+          "question": "Délais pour un site web ?",
+          "answer": "3 à 8 semaines selon la complexité.",
+          "approved_by": "admin",
+          "approved_at": "2025-05-15T14:00:00Z",
+          "source_suggestion": "manual",
+          "times_used": 15
+        },
+        {
+          "id": "validated_003",
+          "question": "Agent IA — prix de départ ?",
+          "answer": "À partir de 497$/mois selon les fonctionnalités.",
+          "approved_by": "admin",
+          "approved_at": "2025-05-16T09:00:00Z",
+          "source_suggestion": "sug_003",
+          "times_used": 12
+        }
+      ]
+    }
+  },
+
+  "learning_cycle": {
+    "description": "Comment Léa apprend progressivement — cycle complet",
+    "steps": [
+      {
+        "step": 1,
+        "label": "Interaction client",
+        "description": "Léa gère un appel ou un courriel"
+      },
+      {
+        "step": 2,
+        "label": "Détection automatique",
+        "description": "Léa remarque une question posée 2+ fois, une formulation récurrente, ou un argument efficace"
+      },
+      {
+        "step": 3,
+        "label": "Génération de suggestion",
+        "description": "Léa crée une suggestion structurée : question + réponse proposée + source + score de confiance"
+      },
+      {
+        "step": 4,
+        "label": "Notification au propriétaire",
+        "description": "Badge 'X nouvelles suggestions' dans le dashboard — Resend envoie un courriel de notification"
+      },
+      {
+        "step": 5,
+        "label": "Révision humaine",
+        "description": "Le propriétaire révise dans l'écran 'Apprentissage' : Approuver / Modifier / Refuser"
+      },
+      {
+        "step": 6,
+        "label": "Ajout à la mémoire officielle",
+        "description": "Si approuvée → info ajoutée à la couche 5 (mémoire validée) + base de connaissances"
+      },
+      {
+        "step": 7,
+        "label": "Utilisation dans les conversations futures",
+        "description": "Léa utilise cette info avec confiance dans toutes les interactions futures"
+      }
+    ]
+  },
+
+  "what_lea_never_does": [
+    "Inventer un prix exact non validé",
+    "Promettre un délai non confirmé",
+    "Utiliser une suggestion non approuvée comme vérité",
+    "Confirmer une information qu'elle n'a pas dans sa mémoire validée",
+    "Donner des conseils légaux, fiscaux ou médicaux",
+    "Mélanger les informations entre différentes entreprises clientes"
+  ],
+
+  "statistics": {
+    "total_memory_items": 27,
+    "approved_suggestions_used": 7,
+    "pending_suggestions": 3,
+    "rejected_suggestions": 1,
+    "knowledge_base_entries": 8,
+    "most_used_answer": "validated_002",
+    "learning_accuracy": "94%",
+    "last_new_suggestion": "2025-05-19T16:00:00Z"
+  }
+}

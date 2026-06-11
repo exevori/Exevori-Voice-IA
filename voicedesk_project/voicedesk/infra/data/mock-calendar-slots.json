@@ -1,0 +1,71 @@
+{
+  "note": "Disponibilités simulées pour la V0 — remplacées par Calendly API en production",
+  "organization_id": "org_exevori_001",
+  "generated_at": "2025-05-19T08:00:00Z",
+  "week": "2025-05-19 au 2025-05-23",
+  "available_slots": [
+    {
+      "date": "2025-05-19",
+      "day_label": "Lundi 19 mai",
+      "slots": [
+        { "time": "09:00", "available": false, "reason": "Réunion équipe interne" },
+        { "time": "10:00", "available": false, "reason": "Démo Acme Corporation" },
+        { "time": "11:00", "available": true, "calendly_slug": "decouverte-30min" },
+        { "time": "14:00", "available": true, "calendly_slug": "demo-45min" },
+        { "time": "14:30", "available": false, "reason": "Appel BrightPath Consulting" },
+        { "time": "16:00", "available": true, "calendly_slug": "decouverte-30min" }
+      ]
+    },
+    {
+      "date": "2025-05-20",
+      "day_label": "Mardi 20 mai",
+      "slots": [
+        { "time": "09:00", "available": true, "calendly_slug": "consultation-60min" },
+        { "time": "10:00", "available": true, "calendly_slug": "demo-45min" },
+        { "time": "11:00", "available": true, "calendly_slug": "decouverte-30min" },
+        { "time": "13:30", "available": true, "calendly_slug": "demo-45min" },
+        { "time": "15:00", "available": true, "calendly_slug": "decouverte-30min" },
+        { "time": "16:00", "available": false, "reason": "Appel interne" }
+      ]
+    },
+    {
+      "date": "2025-05-21",
+      "day_label": "Mercredi 21 mai",
+      "slots": [
+        { "time": "09:30", "available": false, "reason": "Consultation Thomas Lefebvre (à confirmer)" },
+        { "time": "11:00", "available": true, "calendly_slug": "decouverte-30min" },
+        { "time": "13:00", "available": true, "calendly_slug": "consultation-60min" },
+        { "time": "15:00", "available": true, "calendly_slug": "demo-45min" },
+        { "time": "16:30", "available": true, "calendly_slug": "decouverte-30min" }
+      ]
+    },
+    {
+      "date": "2025-05-22",
+      "day_label": "Jeudi 22 mai",
+      "slots": [
+        { "time": "09:00", "available": true, "calendly_slug": "decouverte-30min" },
+        { "time": "10:00", "available": true, "calendly_slug": "demo-45min" },
+        { "time": "14:00", "available": true, "calendly_slug": "consultation-60min" },
+        { "time": "15:00", "available": false, "reason": "Démo Sophie Lavoie — Clinique Esthétique" },
+        { "time": "16:00", "available": true, "calendly_slug": "decouverte-30min" }
+      ]
+    },
+    {
+      "date": "2025-05-23",
+      "day_label": "Vendredi 23 mai",
+      "slots": [
+        { "time": "09:00", "available": true, "calendly_slug": "decouverte-30min" },
+        { "time": "10:30", "available": true, "calendly_slug": "demo-45min" },
+        { "time": "13:00", "available": true, "calendly_slug": "decouverte-30min" },
+        { "time": "14:00", "available": true, "calendly_slug": "demo-45min" },
+        { "time": "16:00", "available": false, "reason": "Fin de semaine — bureau fermé à 16h" }
+      ]
+    }
+  ],
+  "calendly_links": {
+    "decouverte_30min": "https://calendly.com/exevori/decouverte-30min",
+    "demo_45min": "https://calendly.com/exevori/demo-45min",
+    "consultation_60min": "https://calendly.com/exevori/consultation-60min",
+    "suivi_30min": "https://calendly.com/exevori/suivi-30min"
+  }
+}

@@ -1,0 +1,343 @@
+{
+  "language": {
+    "name": "Français",
+    "code": "fr-CA"
+  },
+  "common": {
+    "yes": "Oui",
+    "no": "Non",
+    "save": "Sauvegarder",
+    "cancel": "Annuler",
+    "delete": "Supprimer",
+    "edit": "Modifier",
+    "create": "Créer",
+    "search": "Rechercher",
+    "loading": "Chargement...",
+    "error": "Erreur",
+    "success": "Succès",
+    "confirm": "Confirmer",
+    "back": "Retour",
+    "next": "Suivant",
+    "previous": "Précédent",
+    "close": "Fermer",
+    "submit": "Soumettre",
+    "approve": "Approuver",
+    "reject": "Refuser",
+    "all": "Tous",
+    "none": "Aucun",
+    "today": "Aujourd'hui",
+    "yesterday": "Hier",
+    "thisWeek": "Cette semaine",
+    "thisMonth": "Ce mois-ci",
+    "actions": "Actions",
+    "status": "Statut",
+    "name": "Nom",
+    "email": "Courriel",
+    "phone": "Téléphone",
+    "language": "Langue",
+    "settings": "Paramètres",
+    "profile": "Profil",
+    "logout": "Déconnexion",
+    "test": "Tester",
+    "preview": "Aperçu",
+    "active": "Actif",
+    "inactive": "Inactif"
+  },
+  "auth": {
+    "login": {
+      "title": "Connexion à VoiceDesk",
+      "subtitle": "Accédez à votre assistante IA",
+      "email": "Adresse courriel",
+      "password": "Mot de passe",
+      "rememberMe": "Se souvenir de moi",
+      "forgotPassword": "Mot de passe oublié?",
+      "signIn": "Se connecter",
+      "noAccount": "Pas de compte? Contactez-nous",
+      "loginError": "Identifiants invalides"
+    },
+    "invite": {
+      "title": "Bienvenue chez VoiceDesk!",
+      "subtitle": "Créez votre mot de passe pour activer votre compte",
+      "createPassword": "Créer mot de passe",
+      "confirmPassword": "Confirmer mot de passe",
+      "minChars": "Minimum 8 caractères",
+      "passwordMismatch": "Les mots de passe ne correspondent pas",
+      "expired": "Cette invitation a expiré",
+      "invalid": "Lien d'invitation invalide"
+    },
+    "reset": {
+      "title": "Réinitialiser mot de passe",
+      "subtitle": "Entrez votre courriel pour recevoir un lien",
+      "send": "Envoyer le lien",
+      "checkEmail": "Vérifiez votre boîte courriel pour le lien de réinitialisation"
+    }
+  },
+  "navigation": {
+    "dashboard": "Tableau de bord",
+    "calls": "Appels",
+    "outbound": "Appels sortants",
+    "missions": "Missions",
+    "emails": "Courriels",
+    "crm": "Contacts",
+    "calendar": "Calendrier",
+    "knowledge": "Connaissances",
+    "config": "Configuration",
+    "support": "Support",
+    "billing": "Facturation",
+    "admin": "Administration"
+  },
+  "dashboard": {
+    "title": "Tableau de bord",
+    "subtitle": "Vue d'ensemble de votre activité",
+    "todayActivity": "Activité du jour",
+    "kpis": {
+      "inboundCalls": "Appels reçus",
+      "outboundCalls": "Appels sortants",
+      "totalMinutes": "Minutes utilisées",
+      "emailsReceived": "Courriels reçus",
+      "draftsPending": "Brouillons à valider",
+      "appointmentsUpcoming": "RDV à venir",
+      "hotLeads": "Leads chauds",
+      "knowledgeBaseSize": "Connaissances actives"
+    },
+    "alerts": {
+      "trialEnding": "Votre essai se termine dans {{days}} jour(s)",
+      "paymentOverdue": "Paiement en retard",
+      "draftsPending": "{{count}} brouillon(s) à valider",
+      "learningPending": "{{count}} suggestion(s) d'apprentissage à valider",
+      "ticketsOpen": "{{count}} ticket(s) de support ouvert(s)"
+    }
+  },
+  "calls": {
+    "title": "Appels",
+    "inbound": "Appels entrants",
+    "active": "En cours",
+    "history": "Historique",
+    "caller": "Appelant",
+    "duration": "Durée",
+    "intent": "Intention",
+    "summary": "Résumé",
+    "outcome": "Résultat",
+    "transcript": "Transcription",
+    "outcomes": {
+      "resolved": "Résolu",
+      "appointment_booked": "RDV pris",
+      "transferred": "Transféré",
+      "voicemail": "Message vocal",
+      "missed": "Manqué"
+    }
+  },
+  "outbound": {
+    "title": "Appels sortants",
+    "missions": "Missions",
+    "newMission": "Nouvelle mission",
+    "missionName": "Nom de la mission",
+    "objective": "Objectif",
+    "contactSource": "Source des contacts",
+    "sources": {
+      "calendar": "Calendrier (confirmations RDV)",
+      "crm_filter": "CRM (filtre)",
+      "csv_import": "Import CSV",
+      "manual": "Saisie manuelle"
+    },
+    "trigger": "Déclencher l'appel",
+    "scriptTemplate": "Modèle de script",
+    "completed": "Complétés",
+    "remaining": "Restants",
+    "successRate": "Taux de succès"
+  },
+  "emails": {
+    "title": "Courriels",
+    "inbox": "Boîte de réception",
+    "drafts": "Brouillons",
+    "level1": "Accusé auto",
+    "level2": "À valider",
+    "draftFor": "Brouillon pour",
+    "regenerate": "Régénérer",
+    "approveSend": "Approuver et envoyer",
+    "editBeforeSend": "Modifier avant envoi"
+  },
+  "crm": {
+    "title": "Contacts",
+    "newContact": "Nouveau contact",
+    "search": "Rechercher un contact...",
+    "status": {
+      "new": "Nouveau",
+      "qualified": "Qualifié",
+      "hot_lead": "Lead chaud",
+      "appointment_set": "RDV pris",
+      "customer": "Client",
+      "inactive": "Inactif",
+      "callback_required": "À rappeler"
+    },
+    "history": "Historique",
+    "addNote": "Ajouter une note",
+    "nextAction": "Prochaine action"
+  },
+  "calendar": {
+    "title": "Calendrier",
+    "today": "Aujourd'hui",
+    "newAppointment": "Nouveau RDV",
+    "type": "Type",
+    "channel": "Canal",
+    "confirm": "Confirmer",
+    "cancel": "Annuler le RDV"
+  },
+  "knowledge": {
+    "title": "Base de connaissances",
+    "addEntry": "Ajouter une entrée",
+    "question": "Question",
+    "answer": "Réponse",
+    "category": "Catégorie",
+    "suggestions": "Suggestions IA",
+    "suggestionsPending": "Suggestions à valider",
+    "detected": "Question détectée",
+    "proposed": "Réponse proposée",
+    "confidence": "Confiance",
+    "source": "Source",
+    "occurrences": "fois"
+  },
+  "config": {
+    "title": "Configuration de l'assistante",
+    "assistant": {
+      "name": "Nom de l'assistante",
+      "namePlaceholder": "Ex: Léa, Antonella, Marie...",
+      "gender": "Genre",
+      "feminine": "Féminin",
+      "masculine": "Masculin",
+      "neutral": "Neutre",
+      "tone": "Ton",
+      "tones": {
+        "professional": "Professionnel",
+        "warm": "Chaleureux",
+        "casual": "Décontracté",
+        "formal": "Très formel"
+      }
+    },
+    "voice": {
+      "title": "Voix",
+      "selectVoice": "Choisir une voix",
+      "testVoice": "Tester la voix",
+      "library": "Bibliothèque de voix",
+      "noVoiceAssigned": "Aucune voix assignée",
+      "assignToService": "Assigner à un service",
+      "defaultVoice": "Voix par défaut",
+      "premiumLocked": "Cette voix nécessite un forfait supérieur",
+      "filterByLanguage": "Filtrer par langue",
+      "allLanguages": "Toutes les langues",
+      "accent": "Accent",
+      "accents": {
+        "quebec": "🇨🇦 Québec",
+        "france": "🇫🇷 France",
+        "neutral": "Neutre",
+        "american": "🇺🇸 Américain",
+        "british": "🇬🇧 Britannique",
+        "multilingual": "🌍 Multilingue"
+      }
+    },
+    "services": {
+      "title": "Services",
+      "addService": "Ajouter un service",
+      "list": {
+        "reception": "Réception",
+        "appointments": "Prise de rendez-vous",
+        "support": "Support client",
+        "billing": "Facturation",
+        "complaints": "Réclamations",
+        "outbound": "Appels sortants",
+        "followup": "Suivi client",
+        "emergency": "Urgence"
+      }
+    },
+    "language": {
+      "title": "Langues",
+      "interfaceLanguage": "Langue de l'interface",
+      "voiceLanguage": "Langue de l'assistante (voix)",
+      "primary": "Langue principale",
+      "autoDetect": "Détection automatique FR/EN activée pendant les appels",
+      "ui_fr": "Français",
+      "ui_en": "English",
+      "voice_fr_ca": "Français (Québec)",
+      "voice_fr_fr": "Français (France)",
+      "voice_en_ca": "Anglais (Canada)",
+      "voice_en_us": "Anglais (États-Unis)",
+      "accentInfo": "L'accent FR-FR est souvent plus naturel sur ElevenLabs. L'accent FR-CA évolue rapidement."
+    },
+    "greetings": {
+      "title": "Salutations",
+      "inboundFr": "Salutation appel entrant (FR)",
+      "inboundEn": "Salutation appel entrant (EN)",
+      "outboundFr": "Ouverture appel sortant (FR)",
+      "voicemail": "Message vocal"
+    },
+    "billing": {
+      "title": "Facturation",
+      "currentPlan": "Forfait actuel",
+      "changePlan": "Changer de forfait",
+      "managePayment": "Gérer paiement",
+      "paymentMethod": "Méthode de paiement",
+      "invoices": "Factures",
+      "usage": "Consommation",
+      "minutesIncluded": "Minutes incluses",
+      "minutesUsed": "Minutes utilisées",
+      "overagePolicy": "Politique de dépassement",
+      "payAsYouGo": "Continuer et facturer overage",
+      "blockAtLimit": "Bloquer à la limite",
+      "estimatedOverage": "Coût overage estimé"
+    }
+  },
+  "support": {
+    "title": "Support",
+    "myTickets": "Mes tickets",
+    "newTicket": "Nouveau ticket",
+    "subject": "Sujet",
+    "description": "Description",
+    "category": "Catégorie",
+    "priority": "Priorité",
+    "priorities": {
+      "urgent": "🔴 Urgent",
+      "high": "🟠 Haute",
+      "normal": "🔵 Normale",
+      "low": "⚪ Basse"
+    },
+    "categories": {
+      "general": "Général",
+      "billing": "Facturation",
+      "technical": "Technique",
+      "feature_request": "Demande de fonctionnalité",
+      "bug": "Bogue",
+      "onboarding": "Configuration"
+    },
+    "statuses": {
+      "open": "Ouvert",
+      "in_progress": "En cours",
+      "waiting_client": "En attente",
+      "resolved": "Résolu",
+      "closed": "Fermé"
+    },
+    "respond": "Répondre",
+    "rateExperience": "Évaluer la résolution"
+  },
+  "onboarding": {
+    "welcome": "Bienvenue chez VoiceDesk!",
+    "step": "Étape {{current}} de {{total}}",
+    "step1": {
+      "title": "Configurez votre assistante",
+      "subtitle": "Donnez-lui un nom et choisissez son ton"
+    },
+    "step2": {
+      "title": "Choisissez sa voix",
+      "subtitle": "Écoutez les voix disponibles et sélectionnez celle qui vous plaît"
+    },
+    "step3": {
+      "title": "Vos services",
+      "subtitle": "Quels services votre assistante va-t-elle gérer?"
+    },
+    "step4": {
+      "title": "Test d'appel",
+      "subtitle": "Votre assistante va vous appeler pour confirmer que tout fonctionne",
+      "callMe": "Appelez-moi maintenant"
+    },
+    "finish": "Terminer la configuration"
+  }
+}

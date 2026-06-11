@@ -1,0 +1,173 @@
+[
+  {
+    "id": "kb_001",
+    "category": "services",
+    "category_label": "Services",
+    "title": "Sites web sur mesure",
+    "content": "Exevori développe des sites web professionnels, modernes et optimisés pour le référencement. Chaque site est responsive, rapide et adapté à l'image de marque du client.",
+    "details": {
+      "delai": "3 à 8 semaines selon la complexité",
+      "technologies": ["WordPress", "Next.js", "React", "Shopify"],
+      "inclus": ["Design sur mesure", "Hébergement 1 an", "Formation client", "Support 30 jours"],
+      "prix_indicatif": "À partir de 2 500 $"
+    },
+    "keywords": ["site web", "site internet", "web", "page web", "développement web"],
+    "status": "active",
+    "updated_at": "2025-05-15T10:00:00Z",
+    "approved_by": "admin",
+    "source": "manuel"
+  },
+  {
+    "id": "kb_002",
+    "category": "services",
+    "category_label": "Services",
+    "title": "Applications web et SaaS",
+    "content": "Exevori conçoit et développe des applications web sur mesure, des outils internes pour PME et des plateformes SaaS complètes.",
+    "details": {
+      "delai": "6 à 16 semaines selon la complexité",
+      "technologies": ["React", "Node.js", "Python", "Supabase", "PostgreSQL"],
+      "types": ["Application interne", "Outil métier", "Plateforme SaaS", "Dashboard"],
+      "prix_indicatif": "Sur devis — à partir de 5 000 $"
+    },
+    "keywords": ["application", "app", "SaaS", "logiciel", "outil interne", "dashboard", "plateforme"],
+    "status": "active",
+    "updated_at": "2025-05-10T10:00:00Z",
+    "approved_by": "admin",
+    "source": "manuel"
+  },
+  {
+    "id": "kb_003",
+    "category": "services",
+    "category_label": "Services",
+    "title": "Agents IA personnalisés",
+    "content": "Exevori développe des agents IA personnalisés pour automatiser la réception téléphonique, la gestion des courriels, la prise de rendez-vous et les réseaux sociaux. Chaque agent apprend progressivement les informations de l'entreprise.",
+    "details": {
+      "types": ["Agent téléphonique", "Agent courriel", "Agent rendez-vous", "Agent réseaux sociaux"],
+      "configuration": "1 à 2 semaines",
+      "prix_indicatif": "À partir de 497 $/mois",
+      "inclus": ["Configuration complète", "Formation de l'agent", "Support 30 jours", "Mises à jour incluses"]
+    },
+    "keywords": ["agent IA", "assistant IA", "IA", "intelligence artificielle", "assistant virtuel", "bot", "chatbot"],
+    "status": "active",
+    "updated_at": "2025-05-18T10:00:00Z",
+    "approved_by": "admin",
+    "source": "manuel"
+  },
+  {
+    "id": "kb_004",
+    "category": "services",
+    "category_label": "Services",
+    "title": "Automatisation IA et processus",
+    "content": "Exevori automatise les processus répétitifs des PME grâce à l'IA et aux outils d'automatisation. Réduisez les tâches manuelles et concentrez-vous sur ce qui compte vraiment.",
+    "details": {
+      "outils": ["n8n", "Make (Integromat)", "Zapier", "Python custom"],
+      "cas_usage": ["Envoi automatique de courriels", "Synchronisation données", "Génération de rapports", "Alertes automatiques"],
+      "prix_indicatif": "À partir de 1 500 $ en projet ou 299 $/mois en abonnement"
+    },
+    "keywords": ["automatisation", "automation", "processus", "workflow", "n8n", "zapier", "make"],
+    "status": "active",
+    "updated_at": "2025-05-12T10:00:00Z",
+    "approved_by": "admin",
+    "source": "manuel"
+  },
+  {
+    "id": "kb_005",
+    "category": "faq",
+    "category_label": "FAQ",
+    "title": "Quels sont les délais de livraison ?",
+    "content": "Les délais varient selon le type de projet : sites web (3–8 semaines), applications web (6–16 semaines), agents IA (1–2 semaines de configuration).",
+    "details": {
+      "site_web": "3 à 8 semaines",
+      "application": "6 à 16 semaines",
+      "agent_ia": "1 à 2 semaines",
+      "automatisation": "1 à 4 semaines",
+      "facteurs": ["Complexité du projet", "Disponibilité du client pour les retours", "Révisions demandées"]
+    },
+    "keywords": ["délai", "livraison", "temps", "durée", "quand", "combien de temps"],
+    "status": "active",
+    "updated_at": "2025-05-08T10:00:00Z",
+    "approved_by": "admin",
+    "source": "manuel"
+  },
+  {
+    "id": "kb_006",
+    "category": "politique",
+    "category_label": "Politique",
+    "title": "Zones desservies",
+    "content": "Exevori travaille principalement avec des clients au Québec et au Canada. La grande majorité des projets se font à distance, ce qui nous permet d'accepter des clients partout au Canada et aux États-Unis.",
+    "details": {
+      "zones_prioritaires": ["Lévis", "Québec", "Chaudière-Appalaches", "Grand Québec"],
+      "zones_acceptees": ["Partout au Canada", "États-Unis (projets à distance)"],
+      "en_personne": "Rencontres possibles dans la région de Lévis—Québec",
+      "a_distance": "Zoom, Google Meet, téléphone"
+    },
+    "keywords": ["zones", "région", "local", "distance", "en personne", "où", "hors Québec", "Canada", "États-Unis"],
+    "status": "active",
+    "updated_at": "2025-04-30T10:00:00Z",
+    "approved_by": "admin",
+    "source": "manuel"
+  },
+  {
+    "id": "kb_007",
+    "category": "tarification",
+    "category_label": "Tarification",
+    "title": "Forfaits de maintenance",
+    "content": "Exevori offre des forfaits de maintenance mensuelle pour assurer le bon fonctionnement et la sécurité des sites web et applications livrés.",
+    "details": {
+      "forfait_base": {
+        "nom": "Maintien de base",
+        "prix": "199 $/mois",
+        "inclus": ["Mises à jour sécurité", "Sauvegarde hebdomadaire", "Hébergement", "Support par courriel"]
+      },
+      "forfait_pro": {
+        "nom": "Professionnel",
+        "prix": "399 $/mois",
+        "inclus": ["Tout le forfait de base", "Mises à jour contenu (2h/mois)", "Support prioritaire", "Rapport mensuel"]
+      },
+      "forfait_entreprise": {
+        "nom": "Entreprise",
+        "prix": "Sur devis",
+        "inclus": ["Tout le forfait professionnel", "Modifications illimitées", "Gestionnaire de compte dédié", "SLA garanti"]
+      }
+    },
+    "keywords": ["maintenance", "abonnement", "mensuel", "entretien", "support", "hébergement", "mise à jour"],
+    "status": "active",
+    "updated_at": "2025-05-05T10:00:00Z",
+    "approved_by": "admin",
+    "source": "manuel"
+  },
+  {
+    "id": "kb_008",
+    "category": "contact",
+    "category_label": "Contacts internes",
+    "title": "Personnes à contacter",
+    "content": "Équipe Exevori et contacts internes pour les transferts et escalades.",
+    "details": {
+      "direction": {
+        "nom": "Direction Exevori",
+        "email": "direction@exevori.com",
+        "disponibilite": "Lundi–vendredi 9h–17h"
+      },
+      "ventes": {
+        "nom": "Équipe ventes",
+        "email": "ventes@exevori.com",
+        "pour": "Propositions commerciales, devis, nouvelles opportunités"
+      },
+      "support": {
+        "nom": "Support technique",
+        "email": "support@exevori.com",
+        "pour": "Problèmes techniques, bugs, accès"
+      },
+      "facturation": {
+        "nom": "Comptabilité",
+        "email": "facturation@exevori.com",
+        "pour": "Factures, paiements, contrats"
+      }
+    },
+    "keywords": ["contact", "équipe", "téléphone", "courriel", "parler", "humain", "personne", "transfert"],
+    "status": "active",
+    "updated_at": "2025-05-01T10:00:00Z",
+    "approved_by": "admin",
+    "source": "manuel"
+  }
+]

@@ -1,0 +1,102 @@
+[
+  {
+    "id": "msg_001",
+    "ticket_id": "ticket_001",
+    "company_id": "comp_001",
+    "author_name": "Pierre Gagnon",
+    "author_role": "client",
+    "body": "Bonjour, hier une cliente anglophone a appelé et Sophie est restée en français même après plusieurs phrases en anglais. Comment activer le switch automatique ?",
+    "is_internal": false,
+    "created_at": "2025-05-14T14:00:00Z"
+  },
+  {
+    "id": "msg_002",
+    "ticket_id": "ticket_001",
+    "company_id": "comp_001",
+    "author_name": "Karim",
+    "author_role": "exevori_agent",
+    "body": "Bonjour Pierre, le switch automatique français → anglais s'active après 2 phrases consécutives en anglais. C'est une mesure de sécurité pour éviter les faux positifs. Voulez-vous qu'on fasse un test ensemble par téléphone ?",
+    "is_internal": false,
+    "created_at": "2025-05-15T15:30:00Z"
+  },
+  {
+    "id": "msg_003",
+    "ticket_id": "ticket_001",
+    "company_id": "comp_001",
+    "author_name": "Pierre Gagnon",
+    "author_role": "client",
+    "body": "Oui je veux bien. Je suis disponible cet après-midi.",
+    "is_internal": false,
+    "created_at": "2025-05-15T16:00:00Z"
+  },
+  {
+    "id": "msg_004",
+    "ticket_id": "ticket_001",
+    "company_id": "comp_001",
+    "author_name": "Karim",
+    "author_role": "exevori_agent",
+    "body": "Test fait par téléphone. Le switch fonctionne correctement après 2 phrases en anglais. J'ai aussi pris note d'ajouter une option dans la config pour switcher dès la 1ère phrase si désiré. Merci !",
+    "is_internal": false,
+    "created_at": "2025-05-16T10:00:00Z"
+  },
+  {
+    "id": "msg_005",
+    "ticket_id": "ticket_002",
+    "company_id": "comp_002",
+    "author_name": "Nathalie Boucher",
+    "author_role": "client",
+    "body": "Tous les appels passent directement au répondeur depuis ce matin 7h. Notre clinique perd des RDV !",
+    "is_internal": false,
+    "created_at": "2025-05-19T07:30:00Z"
+  },
+  {
+    "id": "msg_006",
+    "ticket_id": "ticket_002",
+    "company_id": "comp_002",
+    "author_name": "Karim",
+    "author_role": "exevori_agent",
+    "body": "Je regarde immédiatement Nathalie. Je vous tiens au courant dans 10 minutes.",
+    "is_internal": false,
+    "created_at": "2025-05-19T07:35:00Z"
+  },
+  {
+    "id": "msg_007",
+    "ticket_id": "ticket_002",
+    "company_id": "comp_002",
+    "author_name": "Karim",
+    "author_role": "exevori_agent",
+    "body": "Note interne : webhook Twilio retournait 404. URL avait été changée lors du déploiement de la nuit. À ajouter à la checklist post-deploy.",
+    "is_internal": true,
+    "created_at": "2025-05-19T08:00:00Z"
+  },
+  {
+    "id": "msg_008",
+    "ticket_id": "ticket_002",
+    "company_id": "comp_002",
+    "author_name": "Karim",
+    "author_role": "exevori_agent",
+    "body": "Tout est résolu Nathalie. Le problème venait de notre côté (webhook mal configuré). Marie répond à nouveau aux appels. Je suis vraiment désolé pour le dérangement. Je vais créditer votre compte de 2 heures de coaching gratuit en compensation.",
+    "is_internal": false,
+    "created_at": "2025-05-19T09:15:00Z"
+  },
+  {
+    "id": "msg_009",
+    "ticket_id": "ticket_003",
+    "company_id": "comp_003",
+    "author_name": "Marc Simard",
+    "author_role": "client",
+    "body": "J'ai un fichier Excel avec 850 clients. Comment je l'importe dans VoiceDesk ?",
+    "is_internal": false,
+    "created_at": "2025-05-19T09:00:00Z"
+  },
+  {
+    "id": "msg_010",
+    "ticket_id": "ticket_003",
+    "company_id": "comp_003",
+    "author_name": "Karim",
+    "author_role": "exevori_agent",
+    "body": "Bonjour Marc ! Allez dans CRM → Importer → choisissez votre fichier Excel. Le système va automatiquement détecter les colonnes (nom, courriel, téléphone, etc.). Vous pourrez valider avant l'import final. Voulez-vous que je vous accompagne en visio pour le faire ensemble ?",
+    "is_internal": false,
+    "created_at": "2025-05-19T16:00:00Z"
+  }
+]

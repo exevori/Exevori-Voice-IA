@@ -1,0 +1,68 @@
+[
+  {
+    "id": "profile_000",
+    "user_id": "auth_user_000",
+    "company_id": null,
+    "full_name": "Admin Exevori",
+    "email": "admin@exevori.com",
+    "role": "super_admin",
+    "status": "active",
+    "last_login_at": "2025-05-19T09:00:00Z",
+    "created_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "id": "profile_001",
+    "user_id": "auth_user_001",
+    "company_id": "comp_001",
+    "full_name": "Pierre Gagnon",
+    "email": "pierre@garagegagnon.ca",
+    "role": "company_admin",
+    "status": "active",
+    "last_login_at": "2025-05-19T08:30:00Z",
+    "created_at": "2025-04-01T10:00:00Z"
+  },
+  {
+    "id": "profile_002",
+    "user_id": "auth_user_002",
+    "company_id": "comp_002",
+    "full_name": "Nathalie Boucher",
+    "email": "nathalie@cliniqueboucher.ca",
+    "role": "company_admin",
+    "status": "active",
+    "last_login_at": "2025-05-18T17:00:00Z",
+    "created_at": "2025-03-15T09:00:00Z"
+  },
+  {
+    "id": "profile_003",
+    "user_id": "auth_user_003",
+    "company_id": "comp_003",
+    "full_name": "Marc Simard",
+    "email": "marc@constructionsimard.ca",
+    "role": "company_admin",
+    "status": "active",
+    "last_login_at": "2025-05-19T10:00:00Z",
+    "created_at": "2025-05-12T11:00:00Z"
+  },
+  {
+    "id": "profile_004",
+    "user_id": "auth_user_004",
+    "company_id": "comp_004",
+    "full_name": "Jean Fortin",
+    "email": "jean@comptabilitefortin.ca",
+    "role": "company_admin",
+    "status": "active",
+    "last_login_at": "2025-05-07T14:00:00Z",
+    "created_at": "2025-02-20T08:00:00Z"
+  },
+  {
+    "id": "profile_005",
+    "user_id": "auth_user_005",
+    "company_id": "comp_005",
+    "full_name": "Isabelle Roberge",
+    "email": "isabelle@salonisabelle.ca",
+    "role": "company_admin",
+    "status": "suspended",
+    "last_login_at": "2025-04-28T11:00:00Z",
+    "created_at": "2025-01-10T10:00:00Z"
+  }
+]

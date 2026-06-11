@@ -1,0 +1,269 @@
+{
+  "note": "Politique de mise à jour de la mémoire — comment Léa désapprend et se remet à jour",
+  "organization_id": "org_exevori_001",
+  "version": "1.0.0",
+  "last_updated": "2025-05-19T18:00:00Z",
+
+  "core_principle": "Une information obsolète est aussi dangereuse qu'une information inconnue. Léa ne doit jamais donner une information périmée avec confiance.",
+
+  "update_triggers": {
+
+    "manual_update": {
+      "label": "Mise à jour manuelle par l'admin",
+      "description": "L'admin modifie directement une entrée de la base de connaissances ou un apprentissage validé.",
+      "workflow": [
+        "Admin ouvre l'entrée à modifier",
+        "Modifie le contenu",
+        "Sauvegarde → version précédente archivée avec date",
+        "Nouvelle version active immédiatement",
+        "Léa utilise la nouvelle version dès l'interaction suivante",
+        "Toutes les suggestions liées à l'ancienne info sont marquées 'obsolète'"
+      ],
+      "examples": [
+        "Prix agent IA change de 497$ à 597$/mois",
+        "Nouveau service ajouté : 'Formations IA pour équipes'",
+        "Service retiré : 'Maintenance Basic 99$/mois' n'existe plus",
+        "Délai de livraison change de 3-8 semaines à 2-6 semaines"
+      ]
+    },
+
+    "service_removed": {
+      "label": "Service ou offre supprimé",
+      "description": "Un service n'est plus offert. Léa doit arrêter de le mentionner immédiatement.",
+      "workflow": [
+        "Admin marque l'entrée comme 'deprecated' dans la base de connaissances",
+        "Léa ne l'utilise plus dans ses réponses",
+        "Si un client demande ce service → Léa répond avec le message de remplacement",
+        "Les apprentissages validés qui mentionnent ce service sont automatiquement invalidés",
+        "L'admin reçoit une notification : 'X apprentissages invalidés suite à la suppression de Y'"
+      ],
+      "status_values": ["active", "deprecated", "replaced_by"],
+      "example": {
+        "service_removed": "Forfait Basic 99$/mois",
+        "lea_response_after": "Ce forfait n'est plus disponible. Nous offrons actuellement le forfait de base à 199$/mois. Souhaitez-vous que je vous explique ce qu'il inclut ?"
+      }
+    },
+
+    "price_change": {
+      "label": "Changement de prix",
+      "description": "Mécanisme spécial pour les changements de prix — critique pour éviter les erreurs.",
+      "workflow": [
+        "Admin met à jour le prix dans la base de connaissances",
+        "Système vérifie tous les apprentissages validés qui mentionnent un prix",
+        "Les apprentissages avec l'ancien prix sont mis en 'révision_requise'",
+        "Notification admin : 'X apprentissages contiennent l'ancien prix — révision requise'",
+        "Admin révise chaque apprentissage affecté",
+        "Léa n'utilise les apprentissages de prix qu'après re-validation"
+      ],
+      "price_change_log": [
+        {
+          "field": "agent_ia_base_price",
+          "old_value": "497$/mois",
+          "new_value": "597$/mois",
+          "changed_at": null,
+          "changed_by": null,
+          "affected_memories": 3,
+          "status": "no_change_yet"
+        }
+      ],
+      "warning": "Les prix sont la catégorie la plus sensible. Une erreur de prix peut créer une attente incorrecte chez un client."
+    },
+
+    "contradiction_detected": {
+      "label": "Contradiction détectée par l'IA",
+      "description": "Léa détecte qu'une nouvelle information contredit une information existante.",
+      "workflow": [
+        "Léa détecte : 'Un client m'a dit que le délai est de 2 semaines, mais ma mémoire dit 3-8 semaines'",
+        "Léa NE MET PAS À JOUR automatiquement",
+        "Léa crée une alerte de contradiction dans le dashboard",
+        "Admin est notifié : 'Contradiction détectée — révision requise'",
+        "Admin tranche : ancienne info correcte / nouvelle info correcte / les deux selon le contexte",
+        "Léa applique la décision de l'admin"
+      ],
+      "current_contradictions": [],
+      "example": {
+        "existing_memory": "Délai site web : 3 à 8 semaines",
+        "new_claim_from_client": "Votre collègue m'a dit 2 semaines",
+        "lea_behavior": "Je vais vérifier cette information avec l'équipe et vous confirmer le délai exact.",
+        "alert_created": true
+      }
+    },
+
+    "seasonal_update": {
+      "label": "Mise à jour saisonnière",
+      "description": "Rappel automatique pour réviser certaines informations périodiquement.",
+      "reminders": [
+        {
+          "frequency": "Chaque 3 mois",
+          "items_to_review": ["Tarification", "Délais", "Services disponibles"],
+          "notification": "Rappel : réviser les prix et délais — dernière mise à jour il y a 90 jours"
+        },
+        {
+          "frequency": "Chaque année",
+          "items_to_review": ["Tous les apprentissages validés de plus d'un an"],
+          "notification": "Révision annuelle — 47 apprentissages ont plus d'un an. Toujours valides ?"
+        }
+      ]
+    }
+  },
+
+  "versioning": {
+    "description": "Chaque entrée de la base de connaissances garde un historique complet.",
+    "example_entry_with_versions": {
+      "id": "kb_003",
+      "title": "Agents IA personnalisés",
+      "current_version": {
+        "version": 3,
+        "content": "Agents IA pour courriel, téléphone, rendez-vous. À partir de 497$/mois.",
+        "updated_at": "2025-05-18T10:00:00Z",
+        "updated_by": "admin",
+        "status": "active"
+      },
+      "version_history": [
+        {
+          "version": 1,
+          "content": "Agents IA disponibles sur demande. Prix sur devis.",
+          "active_from": "2025-04-01",
+          "active_until": "2025-04-20",
+          "retired_reason": "Prix fixé à 497$/mois"
+        },
+        {
+          "version": 2,
+          "content": "Agents IA pour courriel et téléphone. À partir de 449$/mois.",
+          "active_from": "2025-04-20",
+          "active_until": "2025-05-18",
+          "retired_reason": "Prix ajusté à 497$/mois + ajout canal rendez-vous"
+        }
+      ]
+    },
+    "rollback": {
+      "possible": true,
+      "description": "L'admin peut revenir à une version précédente en un clic si une erreur a été faite."
+    }
+  },
+
+  "invalidation_rules": {
+    "description": "Règles automatiques pour invalider les apprentissages obsolètes.",
+    "rules": [
+      {
+        "trigger": "Prix modifié dans la base de connaissances",
+        "action": "Mettre en révision tous les apprentissages qui mentionnent un prix",
+        "automatic": true,
+        "requires_human_review": true
+      },
+      {
+        "trigger": "Service marqué comme 'deprecated'",
+        "action": "Invalider tous les apprentissages qui mentionnent ce service",
+        "automatic": true,
+        "requires_human_review": false,
+        "lea_fallback": "Message de service non disponible configuré"
+      },
+      {
+        "trigger": "Apprentissage non utilisé depuis 180 jours",
+        "action": "Marquer comme 'à réviser' — peut-être plus pertinent",
+        "automatic": true,
+        "requires_human_review": true
+      },
+      {
+        "trigger": "3 clients ont réfuté une information validée",
+        "action": "Alerte contradiction — révision urgente requise",
+        "automatic": true,
+        "requires_human_review": true,
+        "priority": "high"
+      },
+      {
+        "trigger": "Apprentissage de prix non révisé depuis 90 jours",
+        "action": "Rappel automatique à l'admin",
+        "automatic": true,
+        "requires_human_review": true
+      }
+    ]
+  },
+
+  "memory_health": {
+    "label": "Santé de la mémoire",
+    "description": "Indicateur de fraîcheur et de fiabilité de la mémoire de Léa.",
+    "current_status": "good",
+    "score": 91,
+    "breakdown": {
+      "entries_up_to_date": 8,
+      "entries_requiring_review": 0,
+      "memories_requiring_review": 0,
+      "contradictions_pending": 0,
+      "oldest_entry_days": 49,
+      "price_entries_age_days": 34
+    },
+    "alerts": [],
+    "dashboard_display": {
+      "label": "Mémoire à jour",
+      "color": "#10B981",
+      "icon": "CheckCircle",
+      "message": "Toutes les informations de Léa sont fraîches et validées."
+    }
+  },
+
+  "bulk_update_workflow": {
+    "label": "Mise à jour massive (ex: refonte tarifaire)",
+    "description": "Quand plusieurs informations changent en même temps.",
+    "steps": [
+      {
+        "step": 1,
+        "action": "Admin active le 'Mode mise à jour'",
+        "effect": "Léa passe en mode prudent — confiance réduite sur toutes les infos de prix"
+      },
+      {
+        "step": 2,
+        "action": "Admin met à jour toutes les entrées nécessaires",
+        "effect": "Nouvelles versions créées, anciennes archivées"
+      },
+      {
+        "step": 3,
+        "action": "Système génère la liste de tous les apprentissages à réviser",
+        "effect": "Admin voit une liste claire de ce qui doit être revalidé"
+      },
+      {
+        "step": 4,
+        "action": "Admin révise et revalide les apprentissages affectés",
+        "effect": "Apprentissages mis à jour avec nouvelles informations"
+      },
+      {
+        "step": 5,
+        "action": "Admin désactive le 'Mode mise à jour'",
+        "effect": "Léa reprend sa confiance normale avec les nouvelles informations"
+      }
+    ]
+  },
+
+  "notification_templates": {
+    "price_changed": {
+      "title": "⚠️ Prix mis à jour — révision requise",
+      "body": "Le prix de '{service}' a changé de {old_price} à {new_price}. {count} apprentissages de Léa mentionnent l'ancien prix et doivent être révisés.",
+      "cta": "Réviser les apprentissages →",
+      "urgency": "high"
+    },
+    "service_deprecated": {
+      "title": "🚫 Service supprimé — {count} apprentissages invalidés",
+      "body": "Le service '{service}' a été marqué comme non disponible. Léa ne le mentionnera plus. {count} apprentissages ont été automatiquement invalidés.",
+      "cta": "Voir les détails →",
+      "urgency": "medium"
+    },
+    "contradiction_detected": {
+      "title": "🔄 Contradiction détectée",
+      "body": "Léa a détecté une information qui contredit sa mémoire : '{contradiction}'. Une révision est requise.",
+      "cta": "Résoudre la contradiction →",
+      "urgency": "high"
+    },
+    "seasonal_review": {
+      "title": "📅 Rappel de révision trimestrielle",
+      "body": "Ça fait 90 jours. Il est recommandé de vérifier que les prix et délais de Léa sont toujours exacts.",
+      "cta": "Réviser maintenant →",
+      "urgency": "low"
+    },
+    "memory_unused": {
+      "title": "💤 {count} apprentissages non utilisés depuis 180 jours",
+      "body": "Ces apprentissages n'ont pas été utilisés récemment. Sont-ils encore pertinents ?",
+      "cta": "Réviser →",
+      "urgency": "low"
+    }
+  }
+}
