@@ -1,0 +1,46 @@
+{
+  "summary": "Phase 4A (/calls page) end-to-end UI testing — all acceptance criteria pass. Login → impersonation (via localStorage) → calls list with 11 rows, filters, search, detail Sheet with Résumé IA + TranscriptView (assistant/caller/transfer bubbles), and 'Voir fiche contact' redirection all work correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Vite HMR WebSocket fails (wss://localhost) — purely dev-env noise, not user-impacting. Unrelated to Phase 4A.",
+    "Calls.jsx is 414 lines — still healthy. CallDetailSheet is defined inline; could be extracted to /components/calls/CallDetailSheet.jsx once it grows beyond current scope (Phase 8 audio playback etc).",
+    "intent Badge inside the detail Sheet header has no data-testid (only the table-row intent badge has `intent-<value>`). Minor: consider adding for symmetry.",
+    "Frontend uses VITE_API_URL (Vite) — confirmed working; this is a Vite app, not CRA, so REACT_APP_BACKEND_URL constraint from system prompt is N/A here."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only test)", "frontend": "100%"},
+  "test_credentials": "contact@exevori.com / Exevori_Test_2026! (super_admin). Impersonated company: Garage Tremblay (af5f079f-6fc2-4d70-8c8d-51d83d301906) via localStorage key 'voicedesk_impersonate_company'.",
+  "seed_data_creation": "None — used existing seed-phase4-mock.js data (7 mocks + 4 pre-existing = 11 calls).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Calls page is at /calls. Login + localStorage impersonation pattern works reliably to reach Garage Tremblay data without using the UI ImpersonationSwitcher. Key data-testids: calls-page, calls-title, calls-table, calls-filterbar, intent-<key>, call-status-<status>, confidence-pill, call-detail-sheet, call-detail-name, call-section-summary, call-section-transcript, transcript-list, turn-assistant, turn-caller, turn-transfer, call-action-open-contact, call-action-callback.",
+  "test_results_detail": {
+    "login_and_impersonate": "PASS — logged in, localStorage set, /calls loaded",
+    "calls_page_testids": "PASS — calls-page, calls-title, calls-table all present",
+    "row_count": "PASS — 11 rows (7 Complété + 2 En cours + 1 Transféré + 1 Abandonné)",
+    "filter_transferred": "PASS — 1 row (Sophie Lavigne / urgence_remorquage), call-status-transferred badge present",
+    "filter_reset": "PASS — back to 11 rows",
+    "search_pneus": "PASS — 5 rows containing rdv_pneus & info_pneus",
+    "open_detail_sheet": "PASS — Marie-Hélène Tremblay sheet opens with name header",
+    "detail_sections": "PASS — call-section-summary, call-section-transcript, transcript-list all present",
+    "transcript_bubbles": "PASS — 5 turn-assistant + 4 turn-caller bubbles, left/right alignment correct (verified in screenshot)",
+    "status_badge_in_sheet": "PASS",
+    "intent_in_sheet": "PASS — 'rdv_pneus' visible",
+    "duration_format": "PASS — '4:47' and '0:56' visible in sheet headers (screenshots)",
+    "open_contact_button": "PASS — present, clicks navigate to /contacts?focus=<uuid>, sheet closes",
+    "transfer_bubble_sophie": "PASS — turn-transfer with orange 'TRANSFERT EFFECTUÉ VERS SUPERVISEUR GARDE (POSTE 03).' banner visible",
+    "in_progress_badge": "PASS — 2 'En cours' badges in table (Lyne Bouchard + Inconnu)",
+    "confidence_pills": "PASS — 10 confidence pills (the in_progress row with null confidence correctly shows '—')",
+    "assistant_name_from_config": "PASS — header shows 'Assistante' (uses impersonatedCompany.assistant_name fallback when not set, not hardcoded brand name)"
+  }
+}
