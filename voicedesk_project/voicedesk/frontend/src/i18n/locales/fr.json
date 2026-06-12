@@ -353,5 +353,52 @@
       "callMe": "Appelez-moi maintenant"
     },
     "finish": "Terminer la configuration"
+  },
+  "contacts": {
+    "title": "Contacts",
+    "subtitle": "Tous vos contacts en un coup d'œil — chauds, tièdes, clients et nouveaux",
+    "searchPlaceholder": "Nom, courriel, téléphone…",
+    "import": "Importer CSV",
+    "new": "Nouveau contact",
+    "filter": {
+      "status": "Statut"
+    },
+    "col": {
+      "name": "Contact",
+      "status": "Statut",
+      "phone": "Téléphone",
+      "email": "Courriel",
+      "need": "Besoin",
+      "urgency": "Urgence",
+      "last": "Dernier contact"
+    },
+    "field": {
+      "email": "Courriel",
+      "phone": "Téléphone",
+      "company": "Entreprise",
+      "source": "Source",
+      "need": "Besoin",
+      "budget": "Budget",
+      "next": "Prochaine action",
+      "created": "Créé le",
+      "last": "Dernier contact",
+      "tags": "Tags"
+    },
+    "tabs": {
+      "info": "Infos",
+      "history": "Historique",
+      "notes": "Notes"
+    },
+    "history": {
+      "empty": "Aucun historique"
+    },
+    "notes": {
+      "empty": "Aucune note ajoutée pour ce contact"
+    },
+    "empty": {
+      "title": "Aucun contact",
+      "default": "Les contacts apparaîtront ici dès qu'ils interagissent avec votre assistante",
+      "filtered": "Aucun contact ne correspond à vos critères"
+    }
   }
 }

@@ -353,5 +353,52 @@
       "callMe": "Call me now"
     },
     "finish": "Finish setup"
+  },
+  "contacts": {
+    "title": "Contacts",
+    "subtitle": "All your contacts at a glance — hot, warm, customers and new",
+    "searchPlaceholder": "Name, email, phone…",
+    "import": "Import CSV",
+    "new": "New contact",
+    "filter": {
+      "status": "Status"
+    },
+    "col": {
+      "name": "Contact",
+      "status": "Status",
+      "phone": "Phone",
+      "email": "Email",
+      "need": "Need",
+      "urgency": "Urgency",
+      "last": "Last contact"
+    },
+    "field": {
+      "email": "Email",
+      "phone": "Phone",
+      "company": "Company",
+      "source": "Source",
+      "need": "Need",
+      "budget": "Budget",
+      "next": "Next action",
+      "created": "Created on",
+      "last": "Last contact",
+      "tags": "Tags"
+    },
+    "tabs": {
+      "info": "Info",
+      "history": "History",
+      "notes": "Notes"
+    },
+    "history": {
+      "empty": "No history yet"
+    },
+    "notes": {
+      "empty": "No notes added for this contact"
+    },
+    "empty": {
+      "title": "No contacts",
+      "default": "Contacts will appear here as they interact with your assistant",
+      "filtered": "No contacts match your criteria"
+    }
   }
 }

@@ -64,7 +64,7 @@ export default function Dashboard() {
         fetch(`${API}/api/v1/config?company_id=${cid}`, { headers }),
         fetch(`${API}/api/v1/dashboard/activity?company_id=${cid}&limit=20`, { headers }),
         fetch(`${API}/api/v1/calendar/appointments?company_id=${cid}&upcoming=true&limit=4`, { headers }),
-        fetch(`${API}/api/v1/crm?company_id=${cid}&limit=50`, { headers }),
+        fetch(`${API}/api/v1/contacts?company_id=${cid}&limit=50`, { headers }),
         fetch(`${API}/api/v1/knowledge?company_id=${cid}&limit=100`, { headers }),
       ]);
       if (sRes.ok)   setStats((await sRes.json()).kpis || null);
