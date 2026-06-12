@@ -341,11 +341,16 @@ function ContactDetailSheet({ contactId, open, onClose, token, t, lang, onEdit, 
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent data-testid="contact-detail-sheet" className="overflow-y-auto">
         {loading || !c ? (
-          <div className="p-6 space-y-3">
-            <div className="h-16 w-16 rounded-full bg-white/5 animate-pulse" />
-            <div className="h-4 w-2/3 rounded bg-white/5 animate-pulse" />
-            <div className="h-3 w-1/2 rounded bg-white/5 animate-pulse" />
-          </div>
+          <>
+            <SheetHeader>
+              <SheetTitle className="sr-only">{t("contacts.detail.loading", "Chargement du contact")}</SheetTitle>
+            </SheetHeader>
+            <div className="p-6 space-y-3">
+              <div className="h-16 w-16 rounded-full bg-white/5 animate-pulse" />
+              <div className="h-4 w-2/3 rounded bg-white/5 animate-pulse" />
+              <div className="h-3 w-1/2 rounded bg-white/5 animate-pulse" />
+            </div>
+          </>
         ) : (
           <>
             <SheetHeader>
@@ -353,13 +358,13 @@ function ContactDetailSheet({ contactId, open, onClose, token, t, lang, onEdit, 
                 <Avatar name={c.full_name} status={c.status} size="lg" />
                 <div className="flex-1 min-w-0">
                   <SheetTitle data-testid="detail-name">{c.full_name}</SheetTitle>
-                  <SheetDescription className="flex flex-wrap items-center gap-2 mt-1.5">
+                  <div className="flex flex-wrap items-center gap-2 mt-1.5 text-sm text-text-secondary">
                     <StatusBadge status={c.status} />
                     <UrgencyPill urgency={c.urgency} />
                     {c.tags?.length > 0 && c.tags.slice(0, 3).map((tg) => (
                       <Badge key={tg} variant="ghost"><Tag size={9} />{tg}</Badge>
                     ))}
-                  </SheetDescription>
+                  </div>
                 </div>
               </div>
 
