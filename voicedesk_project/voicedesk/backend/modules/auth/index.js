@@ -9,7 +9,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
 import crypto from "crypto";
 import dotenv from "dotenv";
-import { buildInvitationEmail, buildPasswordResetEmail } from "../../frontend/utils/auth-helpers.js";
+import { buildInvitationEmail, buildPasswordResetEmail } from "../../../frontend/src/utils/auth-helpers.js";
 
 dotenv.config();
 
