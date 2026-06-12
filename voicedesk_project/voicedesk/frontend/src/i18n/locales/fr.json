@@ -45,15 +45,17 @@
   },
   "auth": {
     "login": {
-      "title": "Connexion à VoiceDesk",
+      "title": "Connexion",
       "subtitle": "Accédez à votre assistante IA",
+      "brand": "Exevori Voice IA",
       "email": "Adresse courriel",
       "password": "Mot de passe",
       "rememberMe": "Se souvenir de moi",
       "forgotPassword": "Mot de passe oublié?",
       "signIn": "Se connecter",
+      "signingIn": "Connexion en cours...",
       "noAccount": "Pas de compte? Contactez-nous",
-      "loginError": "Identifiants invalides"
+      "loginError": "Courriel ou mot de passe invalide"
     },
     "invite": {
       "title": "Bienvenue chez VoiceDesk!",
@@ -84,7 +86,12 @@
     "config": "Configuration",
     "support": "Support",
     "billing": "Facturation",
-    "admin": "Administration"
+    "admin": "Administration",
+    "admin_dashboard": "Console Admin",
+    "admin_clients": "PMEs clientes",
+    "admin_billing": "Facturation globale",
+    "admin_calls": "Appels (global)",
+    "admin_settings": "Paramètres système"
   },
   "dashboard": {
     "title": "Tableau de bord",

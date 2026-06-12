@@ -17,10 +17,17 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: 3000,
+    host: true,
+    strictPort: true,
+    allowedHosts: true,
+    hmr: {
+      clientPort: 443,
+      protocol: "wss",
+    },
     proxy: {
-      "/api": "http://localhost:3000",
-      "/webhooks": "http://localhost:3000",
+      "/api": "http://localhost:8001",
+      "/webhooks": "http://localhost:8001",
     },
   },
   build: {

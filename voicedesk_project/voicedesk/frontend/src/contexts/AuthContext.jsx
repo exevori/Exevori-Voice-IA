@@ -51,7 +51,7 @@ export function AuthProvider({ children }) {
 
   const loadProfile = async (accessToken) => {
     try {
-      const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
+      const API = import.meta.env.VITE_API_URL || "";
       const res = await fetch(`${API}/api/v1/auth/me`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });

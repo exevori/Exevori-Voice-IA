@@ -45,15 +45,17 @@
   },
   "auth": {
     "login": {
-      "title": "Sign in to VoiceDesk",
+      "title": "Sign in",
       "subtitle": "Access your AI assistant",
+      "brand": "Exevori Voice IA",
       "email": "Email address",
       "password": "Password",
       "rememberMe": "Remember me",
       "forgotPassword": "Forgot password?",
       "signIn": "Sign in",
+      "signingIn": "Signing in...",
       "noAccount": "No account? Contact us",
-      "loginError": "Invalid credentials"
+      "loginError": "Invalid email or password"
     },
     "invite": {
       "title": "Welcome to VoiceDesk!",
@@ -84,7 +86,12 @@
     "config": "Configuration",
     "support": "Support",
     "billing": "Billing",
-    "admin": "Administration"
+    "admin": "Administration",
+    "admin_dashboard": "Admin Console",
+    "admin_clients": "SMB Clients",
+    "admin_billing": "Global Billing",
+    "admin_calls": "Calls (global)",
+    "admin_settings": "System Settings"
   },
   "dashboard": {
     "title": "Dashboard",
