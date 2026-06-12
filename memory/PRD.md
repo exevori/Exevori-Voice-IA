@@ -42,6 +42,18 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 - **Toast** léger pour confirmations (create/update/delete/import)
 - Backend `/modules/import/index.js` réécrit pour format `{csvHeader: field}` + `duplicate_action` enum
 
+### Phase 4A — Appels (DONE — 12 juin 2026)
+- Backend `modules/calls/index.js` (nouveau) : `GET /api/v1/calls` (liste filtrée + enrichissement contact), `GET /api/v1/calls/stats` (counts par status/intent), `GET /api/v1/calls/:id` (détail + parseTranscript défensif)
+- Frontend `pages/Calls.jsx` : DataTable réutilisée (3A) avec 7 colonnes (Heure / Contact / Téléphone / Durée / Intent IA / Status / Confiance%) + FilterBar par status + search + Sheet détail avec Résumé IA + bouton "Voir fiche contact" → `/contacts?focus=<id>`
+- Frontend `components/calls/TranscriptView.jsx` — composant réutilisable (Phase 8) : bulles chat-style (assistant gauche / caller droite / transfer séparateur orange), accepte array JSON / string-JSON / texte brut
+- Seed `seed-phase4-mock.js` — 7 appels FR plausibles pour Garage Tremblay (variés : completed/in_progress/transferred/abandoned + intents pneus/freins/urgence/promo)
+- `assistant_name` toujours lu depuis `assistant_configs.name` (jamais hardcodé)
+- Testing iteration_2 : **100% PASS** sur tous les flows critiques
+
+### Testing (Iteration 2 — 12 juin 2026)
+- ✅ Phase 4A `/calls` : **100% PASS** (login + impersonation + table 11 rows + filtres + détail Sheet + TranscriptView + bouton "Voir fiche contact")
+- Rapport: `/app/test_reports/iteration_2.json`
+
 ### Testing (Iteration 1 — 12 juin 2026)
 - ✅ Tous les flows critiques passent (100% frontend)
 - ✅ Fuzzy auto-mapping : 6/6 colonnes détectées sur en-têtes FR multi-mots
@@ -52,7 +64,7 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 ## Backlog priorisé
 
 ### P0 (next)
-- **Phase 4** — Dashboards Calls + Emails (real-time logs Twilio + Resend)
+- **Phase 4B** — Page `/emails` : 2 Tabs (Boîte de réception + Brouillons à valider) + DraftCard avec 4 actions (Approve / Edit / Regen / Reject). Backend : nouvelles routes `GET /api/v1/emails` (list) et `GET /api/v1/emails/:id` (detail) à créer — les routes drafts existent déjà.
 
 ### P1
 - **Phase 8** — Intégrations: Twilio (voice), ElevenLabs (TTS), Resend (mail)
