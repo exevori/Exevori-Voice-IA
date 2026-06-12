@@ -20,6 +20,26 @@ const supabase = createClient(
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────
+// GET /api/v1/admin/companies
+// Liste des PMEs (pour switcher impersonation super_admin)
+// ─────────────────────────────────────────────────────────────
+router.get("/companies", async (req, res) => {
+  try {
+    if (req.user?.role !== "super_admin") {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const { data, error } = await supabase
+      .from("companies")
+      .select("id, name, city, province, country, plan, status, assistant_name")
+      .order("name", { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ companies: data || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
 // GET /api/v1/admin/dashboard
 // Dashboard global Exevori : MRR, ARR, churn, coûts, marges
 // ─────────────────────────────────────────────────────────────

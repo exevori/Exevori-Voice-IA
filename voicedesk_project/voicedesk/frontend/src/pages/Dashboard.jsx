@@ -1,250 +1,360 @@
 // ============================================================
-// EXEVORI VOICE IA — PAGE DASHBOARD
-// Phase 1 : version safe (super_admin welcome + PME stats si applicable)
-// Phase 2 : design complet avec KPI cards + Assistant Profile + ...
+// EXEVORI VOICE IA — DASHBOARD (Phase 2A)
+// - Super admin (no impersonation) : console admin placeholder
+// - Super admin (impersonating)    : dashboard PME complet
+// - PME user                       : dashboard PME complet
 // ============================================================
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  Phone, Mail, Calendar, Users, AlertTriangle, BookOpen,
-  Sparkles, ShieldCheck, ArrowRight, Clock,
+  Phone, Mail, Calendar, Users, BookOpen, Sparkles, Clock,
+  ShieldCheck, AlertTriangle, ArrowRight, Activity,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext.jsx";
+import { Button } from "../components/ui/button.jsx";
+import { Badge } from "../components/ui/badge.jsx";
+import { Card, CardContent } from "../components/ui/card.jsx";
+import KpiCard from "../components/dashboard/KpiCard.jsx";
 
 const API = import.meta.env.VITE_API_URL || "";
 
 export default function Dashboard() {
   const { t } = useTranslation();
-  const { token, profile } = useAuth();
+  const { token, profile, effectiveCompanyId, impersonatedCompany } = useAuth();
+
   const [stats, setStats] = useState(null);
   const [alerts, setAlerts] = useState([]);
-  const [activity, setActivity] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState("today");
-  const [statsError, setStatsError] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   const isSuperAdmin = profile?.role === "super_admin";
+  const isAdminConsole = isSuperAdmin && !impersonatedCompany;
+  const companyName = impersonatedCompany?.name || profile?.company?.name;
+  const companyCity = impersonatedCompany?.city || profile?.company?.city;
+  const assistantName = impersonatedCompany?.assistant_name || profile?.company?.assistant_name || t("dashboard.assistant_fallback", "votre assistante");
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || isAdminConsole) { setLoading(false); return; }
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, period]);
+  }, [token, period, effectiveCompanyId, isAdminConsole]);
 
-  const loadData = async () => {
+  async function loadData() {
+    if (!effectiveCompanyId) return;
     setLoading(true);
-    setStatsError(null);
     try {
       const headers = { Authorization: `Bearer ${token}` };
-      const [sRes, aRes, actRes] = await Promise.all([
-        fetch(`${API}/api/v1/dashboard/stats?period=${period}`, { headers }),
-        fetch(`${API}/api/v1/dashboard/alerts`, { headers }),
-        fetch(`${API}/api/v1/dashboard/activity?limit=10`, { headers }),
+      const q = new URLSearchParams({ company_id: effectiveCompanyId, period }).toString();
+      const [sRes, aRes] = await Promise.all([
+        fetch(`${API}/api/v1/dashboard/stats?${q}`, { headers }),
+        fetch(`${API}/api/v1/dashboard/alerts?company_id=${effectiveCompanyId}`, { headers }),
       ]);
-
       if (sRes.ok) {
         const s = await sRes.json();
         setStats(s.kpis || null);
-      } else {
-        setStatsError((await sRes.json().catch(() => ({}))).error || "stats_unavailable");
       }
-      if (aRes.ok) setAlerts((await aRes.json()).alerts || []);
-      if (actRes.ok) setActivity((await actRes.json()).activities || []);
-    } catch (err) {
-      console.error("[Dashboard] load error:", err);
-      setStatsError("network_error");
+      if (aRes.ok) {
+        const a = await aRes.json();
+        setAlerts(a.alerts || []);
+      }
+    } catch (e) {
+      console.error("[Dashboard] load error:", e);
     } finally {
       setLoading(false);
     }
-  };
-
-  if (loading) {
-    return (
-      <div className="page-loading" data-testid="dashboard-loading">
-        {t("common.loading")}
-      </div>
-    );
   }
 
-  // ── SUPER ADMIN — placeholder Phase 1 (Phase 7 = vrai admin dashboard) ──
-  if (isSuperAdmin) {
-    return (
-      <div className="dashboard super-admin" data-testid="dashboard-super-admin">
-        <div className="page-header">
-          <div>
-            <h1 data-testid="dashboard-title">{t("navigation.admin_dashboard", "Console Admin")}</h1>
-            <p className="subtitle">
-              {t("dashboard.subtitle", "Vue d'ensemble Exevori")} — {profile?.email}
-            </p>
-          </div>
-        </div>
-
-        <div className="admin-welcome-card" data-testid="admin-welcome-card">
-          <div className="admin-welcome-icon">
-            <ShieldCheck size={28} />
-          </div>
-          <div className="admin-welcome-body">
-            <h2>Bienvenue, {profile?.full_name || "Super Admin"}</h2>
-            <p>
-              Vous êtes connecté en tant que <strong>super_admin</strong>. La console
-              d'administration complète (gestion PMEs, facturation globale, configuration
-              voix) sera disponible en <strong>Phase 7</strong>.
-            </p>
-            <div className="admin-welcome-meta">
-              <div className="meta-pill">
-                <Sparkles size={14} />
-                <span>Phase 1 — Auth opérationnelle</span>
-              </div>
-              <div className="meta-pill">
-                <Clock size={14} />
-                <span>Prochaine étape : Dashboard PME (Phase 2)</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="admin-quick-stats" data-testid="admin-quick-stats">
-          <div className="quick-stat" data-testid="quick-stat-companies">
-            <div className="quick-stat-icon" style={{ background: "rgba(59,130,246,0.12)", color: "var(--primary)" }}>
-              <Users size={18} />
-            </div>
-            <div>
-              <div className="quick-stat-value">—</div>
-              <div className="quick-stat-label">PMEs actives</div>
-            </div>
-          </div>
-          <div className="quick-stat" data-testid="quick-stat-revenue">
-            <div className="quick-stat-icon" style={{ background: "rgba(16,185,129,0.12)", color: "var(--green)" }}>
-              <BookOpen size={18} />
-            </div>
-            <div>
-              <div className="quick-stat-value">—</div>
-              <div className="quick-stat-label">MRR (CAD)</div>
-            </div>
-          </div>
-          <div className="quick-stat" data-testid="quick-stat-calls">
-            <div className="quick-stat-icon" style={{ background: "rgba(139,92,246,0.12)", color: "var(--purple)" }}>
-              <Phone size={18} />
-            </div>
-            <div>
-              <div className="quick-stat-value">—</div>
-              <div className="quick-stat-label">Appels traités (7j)</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="admin-roadmap" data-testid="admin-roadmap">
-          <h3>Feuille de route — prochaines phases</h3>
-          <ul>
-            <li><span className="phase-tag done">✓ Phase 0</span> Setup Supabase + migrations + seed</li>
-            <li><span className="phase-tag active">→ Phase 1</span> Auth opérationnelle (en cours)</li>
-            <li><span className="phase-tag">Phase 2</span> Dashboard PME complet (KPI + sparklines + Assistant Profile)</li>
-            <li><span className="phase-tag">Phase 3</span> CRM + Import CSV</li>
-            <li><span className="phase-tag">Phase 4</span> Calls + Emails (validation brouillons IA)</li>
-          </ul>
-        </div>
-      </div>
-    );
+  // ─── SUPER ADMIN console placeholder ─────────────────────────
+  if (isAdminConsole) {
+    return <AdminConsole profile={profile} t={t} />;
   }
 
-  // ── COMPANY USER / ADMIN — Phase 2 stub (sera étoffé en Phase 2) ──
-  const kpiCards = stats ? [
-    { key: "inboundCalls", icon: Phone, value: stats.inbound_calls, color: "blue" },
-    { key: "totalMinutes", icon: Phone, value: stats.total_minutes, color: "cyan" },
-    { key: "emailsReceived", icon: Mail, value: stats.emails_received, color: "purple" },
-    { key: "draftsPending", icon: Mail, value: stats.drafts_pending, color: "orange" },
-    { key: "appointmentsUpcoming", icon: Calendar, value: stats.appointments_upcoming, color: "pink" },
-    { key: "hotLeads", icon: Users, value: stats.hot_leads, color: "red" },
-    { key: "knowledgeBaseSize", icon: BookOpen, value: stats.knowledge_base_size, color: "green" },
-  ] : [];
-
+  // ─── DASHBOARD PME ───────────────────────────────────────────
   return (
-    <div className="dashboard" data-testid="dashboard-pme">
-      <div className="page-header">
+    <div className="space-y-6 animate-fade-in" data-testid="dashboard-pme">
+      {/* Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1>{t("dashboard.title", "Tableau de bord")}</h1>
-          <p className="subtitle">
-            {t("dashboard.subtitle", "Vue d'ensemble")} — {profile?.company?.name || profile?.companies?.name}
+          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-text-tertiary mb-1">
+            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-brand-green animate-pulse-dot" />
+            {companyName} {companyCity && `— ${companyCity}`}
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-text-primary" data-testid="dashboard-title">
+            {t("dashboard.greeting", { name: assistantName, defaultValue: "{{name}} est à l'écoute" })}
+          </h1>
+          <p className="mt-1 text-sm text-text-secondary">
+            {t("dashboard.subtitle", "Vue d'ensemble de l'activité de votre assistante IA")}
           </p>
         </div>
 
-        <div className="period-selector">
-          {["today", "week", "month"].map(p => (
-            <button
-              key={p}
-              className={"period-btn" + (period === p ? " active" : "")}
-              onClick={() => setPeriod(p)}
-              data-testid={`period-btn-${p}`}
-            >
-              {t("common." + (p === "today" ? "today" : p === "week" ? "thisWeek" : "thisMonth"))}
-            </button>
-          ))}
-        </div>
+        <PeriodSelector value={period} onChange={setPeriod} t={t} />
       </div>
 
-      {statsError && (
-        <div className="alert-card severity-low" data-testid="dashboard-warning">
-          <AlertTriangle size={18} />
-          <div className="alert-content">
-            <div className="alert-title">
-              Les statistiques détaillées arriveront en Phase 2.
+      {/* Alerts */}
+      {alerts.length > 0 && (
+        <div className="space-y-2" data-testid="alerts-section">
+          {alerts.map((a, i) => (
+            <AlertBanner key={i} alert={a} />
+          ))}
+        </div>
+      )}
+
+      {/* KPI Grid */}
+      <KpiGrid stats={stats} loading={loading} t={t} />
+
+      {/* Phase 2B placeholder (sera rempli après validation 2A) */}
+      <Phase2BPlaceholder t={t} />
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// SOUS-COMPOSANTS
+// ────────────────────────────────────────────────────────────────
+
+function PeriodSelector({ value, onChange, t }) {
+  const options = [
+    { v: "today", label: t("common.today", "Aujourd'hui") },
+    { v: "week",  label: t("common.thisWeek", "Semaine") },
+    { v: "month", label: t("common.thisMonth", "Mois") },
+  ];
+  return (
+    <div className="inline-flex rounded-lg border border-border bg-bg-card p-0.5" data-testid="period-selector">
+      {options.map((o) => (
+        <button
+          key={o.v}
+          onClick={() => onChange(o.v)}
+          data-testid={`period-btn-${o.v}`}
+          className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+            value === o.v
+              ? "bg-white/8 text-text-primary shadow-sm"
+              : "text-text-secondary hover:text-text-primary"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function KpiGrid({ stats, loading, t }) {
+  const cards = useMemo(() => {
+    const s = stats || {};
+    return [
+      {
+        testId: "kpi-calls",
+        icon: Phone,
+        label: t("dashboard.kpis.calls_today", "Appels traités"),
+        value: (s.inbound_calls ?? 0) + (s.outbound_calls ?? 0),
+        seed: 11,
+        color: "blue",
+        delta: "+18%",
+        deltaTrend: "up",
+      },
+      {
+        testId: "kpi-appointments",
+        icon: Calendar,
+        label: t("dashboard.kpis.appointments", "Rendez-vous"),
+        value: s.appointments_upcoming ?? 0,
+        seed: 23,
+        color: "pink",
+        delta: "+26%",
+        deltaTrend: "up",
+      },
+      {
+        testId: "kpi-emails",
+        icon: Mail,
+        label: t("dashboard.kpis.emails_processed", "Courriels traités"),
+        value: s.emails_received ?? 0,
+        seed: 7,
+        color: "purple",
+        delta: "+12%",
+        deltaTrend: "up",
+      },
+      {
+        testId: "kpi-leads",
+        icon: Users,
+        label: t("dashboard.kpis.hot_leads", "Leads chauds"),
+        value: s.hot_leads ?? 0,
+        seed: 17,
+        color: "green",
+        delta: "+30%",
+        deltaTrend: "up",
+      },
+    ];
+  }, [stats, t]);
+
+  if (loading) {
+    return (
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" data-testid="kpi-grid-loading">
+        {[0,1,2,3].map((i) => (
+          <div key={i} className="h-[180px] animate-pulse rounded-xl border border-border bg-bg-card" />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" data-testid="kpi-grid">
+      {cards.map((c) => (
+        <KpiCard key={c.testId} {...c} />
+      ))}
+    </div>
+  );
+}
+
+function AlertBanner({ alert }) {
+  const sevMap = {
+    high:   "border-brand-red/30    bg-brand-red/10    text-red-300",
+    medium: "border-brand-orange/30 bg-brand-orange/10 text-orange-300",
+    low:    "border-brand/30        bg-brand/10        text-blue-300",
+  };
+  return (
+    <div
+      data-testid={`alert-${alert.severity || "low"}`}
+      className={`flex items-center justify-between gap-3 rounded-lg border px-4 py-2.5 text-sm ${sevMap[alert.severity] || sevMap.low}`}
+    >
+      <div className="flex items-center gap-2.5">
+        <AlertTriangle size={16} />
+        <span>{alert.title}</span>
+      </div>
+      {alert.link && (
+        <a href={alert.link} className="flex items-center gap-1 text-xs font-medium hover:underline">
+          {alert.action || "Voir"}
+          <ArrowRight size={12} />
+        </a>
+      )}
+    </div>
+  );
+}
+
+function Phase2BPlaceholder({ t }) {
+  return (
+    <div
+      className="rounded-xl border border-dashed border-border bg-bg-card/30 p-8 text-center"
+      data-testid="phase2b-placeholder"
+    >
+      <div className="mx-auto mb-3 inline-flex h-10 w-10 items-center justify-center rounded-full bg-brand-purple/10 text-brand-purple">
+        <Activity size={18} />
+      </div>
+      <h3 className="text-sm font-semibold text-text-primary">
+        Phase 2B — Assistant Profile + cards opérationnelles
+      </h3>
+      <p className="mx-auto mt-1 max-w-md text-xs text-text-secondary">
+        Cette zone accueillera bientôt le portrait de l'assistante (anneau gradient + dropdowns voix/ton), les Live Calls, les Upcoming Appointments, l'Email Handling, le CRM, la Business Memory et le donut Analytics.
+      </p>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// SUPER ADMIN CONSOLE — placeholder Phase 1/7
+// ────────────────────────────────────────────────────────────────
+
+function AdminConsole({ profile, t }) {
+  return (
+    <div className="space-y-6 animate-fade-in" data-testid="dashboard-super-admin">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-text-primary">
+          {t("navigation.admin_dashboard", "Console Admin")}
+        </h1>
+        <p className="mt-1 text-sm text-text-secondary">
+          {t("admin.subtitle", "Vue d'ensemble Exevori")} — {profile?.email}
+        </p>
+      </div>
+
+      {/* Welcome card */}
+      <Card className="relative overflow-hidden border-brand-purple/20 bg-gradient-to-br from-brand/8 to-brand-purple/8" data-testid="admin-welcome-card">
+        <div className="pointer-events-none absolute -top-12 -right-12 h-48 w-48 rounded-full bg-brand-purple/15 blur-3xl" />
+        <CardContent className="relative flex items-start gap-5 p-6">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl gradient-brand shadow-glow-purple text-white">
+            <ShieldCheck size={26} />
+          </div>
+          <div className="flex-1">
+            <h2 className="text-lg font-bold text-text-primary">
+              Bienvenue, {profile?.full_name || "Super Admin"}
+            </h2>
+            <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+              Vous êtes connecté en tant que <strong className="text-text-primary">super_admin</strong>.
+              Pour voir le dashboard d'une PME démo (Garage Tremblay), utilisez le bouton{" "}
+              <Badge variant="purple" className="mx-0.5">Voir comme PME</Badge> en haut.
+              La console d'administration complète arrivera en Phase 7.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Badge variant="purple"><Sparkles size={11} /> Phase 1 — Auth opérationnelle</Badge>
+              <Badge variant="default"><Clock size={11} /> Phase 2A — Dashboard PME KPIs ✓</Badge>
+              <Badge variant="outline">Phase 2B — Cards signature à venir</Badge>
             </div>
           </div>
-        </div>
-      )}
+        </CardContent>
+      </Card>
 
-      {alerts.length > 0 && (
-        <div className="alerts-section">
-          {alerts.map((alert, i) => (
-            <div key={i} className={"alert-card severity-" + alert.severity}>
-              <AlertTriangle size={18} />
-              <div className="alert-content">
-                <div className="alert-title">{alert.title}</div>
-              </div>
-              {alert.link && (
-                <a href={alert.link} className="alert-action">
-                  {alert.action} <ArrowRight size={12} />
-                </a>
-              )}
+      {/* Quick stats */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3" data-testid="admin-quick-stats">
+        <Card data-testid="quick-stat-companies">
+          <CardContent className="flex items-center gap-4 p-5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand/15 text-brand">
+              <Users size={18} />
             </div>
-          ))}
-        </div>
-      )}
-
-      {kpiCards.length > 0 && (
-        <div className="kpi-grid">
-          {kpiCards.map(card => (
-            <div key={card.key} className={"kpi-card color-" + card.color}>
-              <card.icon size={20} />
-              <div className="kpi-value">{card.value ?? 0}</div>
-              <div className="kpi-label">{t("dashboard.kpis." + card.key, card.key)}</div>
+            <div>
+              <div className="text-2xl font-bold text-text-primary leading-none">—</div>
+              <div className="mt-1 text-[11px] text-text-tertiary">PMEs actives</div>
             </div>
-          ))}
-        </div>
-      )}
-
-      <div className="dashboard-section">
-        <h2>{t("dashboard.todayActivity", "Activité récente")}</h2>
-        <div className="activity-list">
-          {activity.length === 0 ? (
-            <p className="empty-state">{t("common.none", "Aucune activité pour le moment")}</p>
-          ) : (
-            activity.map((item, i) => (
-              <div key={i} className="activity-item">
-                <span className="activity-icon">{item.icon}</span>
-                <div className="activity-content">
-                  <div className="activity-title">{item.title}</div>
-                  {item.description && <div className="activity-desc">{item.description}</div>}
-                </div>
-                <div className="activity-time">
-                  {new Date(item.timestamp).toLocaleString()}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+          </CardContent>
+        </Card>
+        <Card data-testid="quick-stat-revenue">
+          <CardContent className="flex items-center gap-4 p-5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-green/15 text-brand-green">
+              <BookOpen size={18} />
+            </div>
+            <div>
+              <div className="text-2xl font-bold text-text-primary leading-none">—</div>
+              <div className="mt-1 text-[11px] text-text-tertiary">MRR (CAD)</div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card data-testid="quick-stat-calls">
+          <CardContent className="flex items-center gap-4 p-5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-purple/15 text-brand-purple">
+              <Phone size={18} />
+            </div>
+            <div>
+              <div className="text-2xl font-bold text-text-primary leading-none">—</div>
+              <div className="mt-1 text-[11px] text-text-tertiary">Appels traités (7j)</div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
+
+      {/* Roadmap */}
+      <Card data-testid="admin-roadmap">
+        <CardContent className="p-6">
+          <h3 className="mb-4 text-[11px] font-semibold uppercase tracking-wider text-text-secondary">
+            Feuille de route — prochaines phases
+          </h3>
+          <ul className="space-y-2.5">
+            {[
+              { tag: "✓ Phase 0", label: "Setup Supabase + migrations", state: "done" },
+              { tag: "✓ Phase 1", label: "Auth opérationnelle", state: "done" },
+              { tag: "→ Phase 2A", label: "Dashboard PME — KPI row (en cours)", state: "active" },
+              { tag: "Phase 2B",  label: "Assistant Profile + cards signature", state: "next" },
+              { tag: "Phase 3",   label: "CRM + Import CSV", state: "later" },
+              { tag: "Phase 4",   label: "Calls + Emails (validation brouillons IA)", state: "later" },
+            ].map((p, i) => (
+              <li key={i} className="flex items-center gap-3 text-xs">
+                <span className={`inline-block min-w-[90px] rounded-md px-2 py-1 text-center text-[10px] font-semibold ${
+                  p.state === "done"   ? "bg-brand-green/15 text-brand-green"
+                : p.state === "active" ? "bg-brand/15 text-brand"
+                : "bg-white/5 text-text-tertiary"
+                }`}>{p.tag}</span>
+                <span className="text-text-secondary">{p.label}</span>
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
     </div>
   );
 }

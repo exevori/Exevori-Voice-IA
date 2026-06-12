@@ -55,7 +55,7 @@ router.get("/stats", async (req, res) => {
       supabase.from("learning_suggestions").select("id", { count: "exact" })
         .eq("company_id", company_id).eq("status", "pending"),
       supabase.from("contacts").select("id", { count: "exact" })
-        .eq("company_id", company_id).eq("status", "hot_lead"),
+        .eq("company_id", company_id).in("status", ["hot", "hot_lead"]),
       supabase.from("knowledge_base").select("id", { count: "exact" })
         .eq("company_id", company_id).eq("status", "active"),
     ]);

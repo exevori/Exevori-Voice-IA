@@ -36,6 +36,8 @@ function App() {
           <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />
             <Route path="dashboard" element={<Dashboard />} />
+            <Route path="admin" element={<Dashboard />} />
+            <Route path="admin/clients" element={<Dashboard />} />
             {/* Autres pages à construire par Emergent dans frontend/src/pages/ */}
           </Route>
 

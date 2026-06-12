@@ -1,9 +1,9 @@
 // ============================================================
-// VOICEDESK IA — AUTH CONTEXT
-// État global de l'authentification + profile
+// EXEVORI VOICE IA — AUTH CONTEXT
+// État global auth + profile + impersonation super_admin
 // ============================================================
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { initLanguageFromProfile } from "../i18n";
 
@@ -13,15 +13,21 @@ const supabase = createClient(
 );
 
 const AuthContext = createContext(null);
+const IMPERSONATE_KEY = "voicedesk_impersonate_company";
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [impersonatedCompany, setImpersonatedCompany] = useState(() => {
+    try {
+      const raw = localStorage.getItem(IMPERSONATE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
 
   useEffect(() => {
-    // Récupérer la session initiale
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         setUser(session.user);
@@ -32,7 +38,6 @@ export function AuthProvider({ children }) {
       }
     });
 
-    // Écouter les changements d'auth
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
         setUser(session.user);
@@ -42,6 +47,8 @@ export function AuthProvider({ children }) {
         setUser(null);
         setProfile(null);
         setToken(null);
+        setImpersonatedCompany(null);
+        try { localStorage.removeItem(IMPERSONATE_KEY); } catch {}
         setLoading(false);
       }
     });
@@ -58,7 +65,6 @@ export function AuthProvider({ children }) {
       if (res.ok) {
         const data = await res.json();
         setProfile(data);
-        // Initialiser la langue depuis le profile
         initLanguageFromProfile(data);
       }
     } catch (err) {
@@ -79,10 +85,40 @@ export function AuthProvider({ children }) {
     setUser(null);
     setProfile(null);
     setToken(null);
+    setImpersonatedCompany(null);
+    try { localStorage.removeItem(IMPERSONATE_KEY); } catch {}
   };
 
+  // === IMPERSONATION (super_admin only) ===
+  const impersonateCompany = useCallback((company) => {
+    if (profile?.role !== "super_admin") return;
+    if (!company) {
+      setImpersonatedCompany(null);
+      try { localStorage.removeItem(IMPERSONATE_KEY); } catch {}
+    } else {
+      const minimal = { id: company.id, name: company.name, city: company.city, assistant_name: company.assistant_name };
+      setImpersonatedCompany(minimal);
+      try { localStorage.setItem(IMPERSONATE_KEY, JSON.stringify(minimal)); } catch {}
+    }
+  }, [profile]);
+
+  // company_id effectif (impersonation override pour super_admin)
+  const effectiveCompanyId = impersonatedCompany?.id || profile?.company_id || null;
+
   return (
-    <AuthContext.Provider value={{ user, profile, token, loading, signIn, signOut }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        profile,
+        token,
+        loading,
+        signIn,
+        signOut,
+        impersonatedCompany,
+        impersonateCompany,
+        effectiveCompanyId,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

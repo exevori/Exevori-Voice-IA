@@ -1,14 +1,13 @@
 // ============================================================
-// VOICEDESK IA — NOTIFICATION BELL
-// Cloche avec badge de notifications non lues + dropdown
+// EXEVORI VOICE IA — NOTIFICATION BELL (Tailwind)
 // ============================================================
 
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Bell, X, Check } from "lucide-react";
+import { Bell, CheckCheck } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
+const API = import.meta.env.VITE_API_URL || "";
 
 export default function NotificationBell() {
   const { t, i18n } = useTranslation();
@@ -23,9 +22,11 @@ export default function NotificationBell() {
       const res = await fetch(`${API}/api/v1/notifications/unread-count`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json();
-      setUnreadCount(data.unread_count || 0);
-    } catch (e) { /* silencieux */ }
+      if (res.ok) {
+        const data = await res.json();
+        setUnreadCount(data.unread_count || 0);
+      }
+    } catch {}
   };
 
   const fetchNotifications = async () => {
@@ -34,85 +35,86 @@ export default function NotificationBell() {
       const res = await fetch(`${API}/api/v1/notifications?limit=10`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json();
-      setNotifications(data.notifications || []);
-    } catch (e) { /* silencieux */ }
-  };
-
-  const markAsRead = async (id) => {
-    await fetch(`${API}/api/v1/notifications/${id}/read`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-    setUnreadCount(c => Math.max(0, c - 1));
+      if (res.ok) {
+        const data = await res.json();
+        setNotifications(data.notifications || []);
+      }
+    } catch {}
   };
 
   const markAllAsRead = async () => {
     await fetch(`${API}/api/v1/notifications/mark-all-read`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
-    });
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    }).catch(() => {});
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     setUnreadCount(0);
   };
 
-  // Polling toutes les 30 secondes
   useEffect(() => {
     fetchUnreadCount();
-    const interval = setInterval(fetchUnreadCount, 30000);
-    return () => clearInterval(interval);
+    const id = setInterval(fetchUnreadCount, 30000);
+    return () => clearInterval(id);
   }, [token]);
 
-  useEffect(() => {
-    if (open) fetchNotifications();
-  }, [open]);
-
-  const formatTime = (ts) => {
-    const d = new Date(ts);
-    return d.toLocaleString(i18n.language, { dateStyle: "short", timeStyle: "short" });
-  };
+  useEffect(() => { if (open) fetchNotifications(); }, [open]);
 
   return (
-    <div className="notification-bell">
-      <button className="bell-button" onClick={() => setOpen(!open)}>
-        <Bell size={18} />
+    <div className="relative">
+      <button
+        data-testid="notification-bell"
+        onClick={() => setOpen(!open)}
+        className="relative rounded-lg p-2 text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors"
+        aria-label="Notifications"
+      >
+        <Bell size={16} />
         {unreadCount > 0 && (
-          <span className="bell-badge">{unreadCount > 99 ? "99+" : unreadCount}</span>
+          <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-brand-red px-1 text-[9px] font-semibold text-white">
+            {unreadCount > 99 ? "99+" : unreadCount}
+          </span>
         )}
       </button>
 
       {open && (
         <>
-          <div className="bell-backdrop" onClick={() => setOpen(false)} />
-          <div className="bell-dropdown">
-            <div className="bell-header">
-              <h3>{t("notifications.title", "Notifications")}</h3>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div
+            data-testid="notification-dropdown"
+            className="absolute right-0 top-full z-40 mt-2 w-80 origin-top-right rounded-xl border border-border bg-bg-elevated/95 backdrop-blur-xl shadow-2xl animate-fade-in"
+          >
+            <div className="flex items-center justify-between border-b border-border px-3 py-2">
+              <h3 className="text-xs font-semibold text-text-primary">
+                {t("notifications.title", "Notifications")}
+              </h3>
               {unreadCount > 0 && (
-                <button className="mark-all-btn" onClick={markAllAsRead}>
+                <button
+                  onClick={markAllAsRead}
+                  className="flex items-center gap-1 text-[11px] text-brand hover:underline"
+                >
+                  <CheckCheck size={12} />
                   {t("notifications.markAllRead", "Tout marquer lu")}
                 </button>
               )}
             </div>
-
-            <div className="bell-list">
+            <div className="max-h-80 overflow-y-auto py-1">
               {notifications.length === 0 ? (
-                <div className="bell-empty">
+                <div className="px-3 py-6 text-center text-xs text-text-tertiary">
                   {t("notifications.empty", "Aucune notification")}
                 </div>
               ) : (
-                notifications.map(n => (
+                notifications.map((n) => (
                   <div
                     key={n.id}
-                    className={"bell-item type-" + n.type + (n.read ? "" : " unread")}
-                    onClick={() => {
-                      if (!n.read) markAsRead(n.id);
-                      if (n.link) window.location.href = n.link;
-                    }}
+                    className={`mx-1 my-0.5 cursor-pointer rounded-md px-3 py-2 transition-colors hover:bg-white/5 ${
+                      !n.read ? "border-l-2 border-brand-purple bg-white/3" : ""
+                    }`}
+                    onClick={() => n.link && (window.location.href = n.link)}
                   >
-                    <div className="bell-item-title">{n.title}</div>
-                    {n.body && <div className="bell-item-body">{n.body}</div>}
-                    <div className="bell-item-time">{formatTime(n.created_at)}</div>
+                    <div className="text-xs font-medium text-text-primary">{n.title}</div>
+                    {n.body && <div className="mt-0.5 text-[11px] text-text-secondary">{n.body}</div>}
+                    <div className="mt-1 text-[10px] text-text-tertiary">
+                      {new Date(n.created_at).toLocaleString(i18n.language === "fr" ? "fr-CA" : "en-CA", { dateStyle: "short", timeStyle: "short" })}
+                    </div>
                   </div>
                 ))
               )}
