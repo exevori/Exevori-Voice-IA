@@ -78,7 +78,13 @@ router.post("/preview", upload.single("file"), async (req, res) => {
 // Étape 2 — Exécuter l'import après validation par l'admin
 // ─────────────────────────────────────────────────────────────
 router.post("/execute", upload.single("file"), async (req, res) => {
-  const { company_id, column_mapping, skip_duplicates = "true", default_status = "new", default_source = "csv_import" } = req.body;
+  const {
+    company_id,
+    column_mapping,
+    duplicate_action = "skip", // skip | overwrite | create
+    default_status = "new",
+    default_source = "csv_import",
+  } = req.body;
   const file = req.file;
 
   if (!company_id || !file) {
@@ -97,66 +103,107 @@ router.post("/execute", upload.single("file"), async (req, res) => {
     const mapping = typeof column_mapping === "string" ? JSON.parse(column_mapping) : column_mapping;
 
     let imported = 0;
+    let updated = 0;
     let skipped = 0;
-    let errors = [];
+    const errors = [];
 
-    // Lookup existing contacts pour détection doublons
+    // Lookup existing contacts pour détection doublons (id + email + phone + name)
     const { data: existingContacts } = await supabase
       .from("contacts")
-      .select("phone, email")
+      .select("id, full_name, phone, email")
       .eq("company_id", company_id);
 
-    const existingPhones = new Set((existingContacts || []).map(c => c.phone).filter(Boolean));
-    const existingEmails = new Set((existingContacts || []).map(c => c.email).filter(Boolean));
+    const byEmail = new Map();
+    const byPhone = new Map();
+    const byName  = new Map();
+    (existingContacts || []).forEach((c) => {
+      if (c.email)     byEmail.set(c.email.toLowerCase(), c);
+      if (c.phone)     byPhone.set(c.phone, c);
+      if (c.full_name) byName.set(c.full_name.trim().toLowerCase(), c);
+    });
 
-    // Importer par batch de 100
-    const BATCH_SIZE = 100;
-    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-      const batch = rows.slice(i, i + BATCH_SIZE);
-      const records = [];
+    const findExisting = (contact) => {
+      if (contact.email && byEmail.has(contact.email)) return byEmail.get(contact.email);
+      if (contact.phone && byPhone.has(contact.phone)) return byPhone.get(contact.phone);
+      if (contact.full_name && byName.has(contact.full_name.trim().toLowerCase()))
+        return byName.get(contact.full_name.trim().toLowerCase());
+      return null;
+    };
 
-      for (const row of batch) {
-        try {
-          const contact = mapRowToContact(row, mapping, {
-            company_id,
-            default_status,
-            default_source,
-          });
+    const indexNew = (c, id) => {
+      const ref = { id, full_name: c.full_name, phone: c.phone, email: c.email };
+      if (c.email)     byEmail.set(c.email.toLowerCase(), ref);
+      if (c.phone)     byPhone.set(c.phone, ref);
+      if (c.full_name) byName.set(c.full_name.trim().toLowerCase(), ref);
+    };
 
-          if (!contact.full_name) {
-            errors.push({ row: i + records.length + 1, error: "Nom manquant" });
+    const VALID_STATUS = new Set(["new", "cold", "warm", "hot", "customer"]);
+    const VALID_URGENCY = new Set(["low", "normal", "high"]);
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 2; // header + 0-based
+      try {
+        const contact = mapRowToContact(row, mapping, {
+          company_id,
+          default_status,
+          default_source,
+        });
+
+        // Au moins un identifiant requis
+        if (!contact.full_name && !contact.email && !contact.phone) {
+          errors.push({ row: rowNum, message: "Aucun nom, courriel ou téléphone" });
+          continue;
+        }
+        if (!contact.full_name) {
+          contact.full_name = contact.email || contact.phone;
+        }
+
+        // Validation
+        if (contact.status && !VALID_STATUS.has(contact.status)) {
+          contact.status = default_status;
+        }
+        if (contact.urgency && !VALID_URGENCY.has(contact.urgency)) {
+          delete contact.urgency;
+        }
+
+        const existing = findExisting(contact);
+
+        if (existing) {
+          if (duplicate_action === "skip") {
+            skipped++;
             continue;
           }
-
-          // Skip si doublon
-          if (skip_duplicates === "true" || skip_duplicates === true) {
-            if (contact.phone && existingPhones.has(contact.phone)) {
-              skipped++;
-              continue;
+          if (duplicate_action === "overwrite") {
+            const patch = { ...contact };
+            delete patch.company_id;
+            const { error } = await supabase
+              .from("contacts")
+              .update(patch)
+              .eq("id", existing.id);
+            if (error) {
+              errors.push({ row: rowNum, message: error.message });
+            } else {
+              updated++;
             }
-            if (contact.email && existingEmails.has(contact.email)) {
-              skipped++;
-              continue;
-            }
+            continue;
           }
-
-          records.push(contact);
-
-          // Ajouter aux sets pour éviter les doublons dans le même batch
-          if (contact.phone) existingPhones.add(contact.phone);
-          if (contact.email) existingEmails.add(contact.email);
-        } catch (e) {
-          errors.push({ row: i + records.length + 1, error: e.message });
+          // duplicate_action === "create" → on continue à insérer
         }
-      }
 
-      if (records.length > 0) {
-        const { error } = await supabase.from("contacts").insert(records);
+        const { data, error } = await supabase
+          .from("contacts")
+          .insert(contact)
+          .select("id")
+          .single();
         if (error) {
-          errors.push({ batch: i, error: error.message });
+          errors.push({ row: rowNum, message: error.message });
         } else {
-          imported += records.length;
+          imported++;
+          indexNew(contact, data.id);
         }
+      } catch (e) {
+        errors.push({ row: rowNum, message: e.message });
       }
     }
 
@@ -167,8 +214,10 @@ router.post("/execute", upload.single("file"), async (req, res) => {
       details: {
         total_rows: rows.length,
         imported,
+        updated,
         skipped,
         errors: errors.length,
+        duplicate_action,
       },
     });
 
@@ -176,8 +225,9 @@ router.post("/execute", upload.single("file"), async (req, res) => {
       success: true,
       total_rows: rows.length,
       imported,
+      updated,
       skipped,
-      errors: errors.slice(0, 20),
+      errors: errors.slice(0, 50),
     });
   } catch (err) {
     console.error("[IMPORT] Execute error:", err);
@@ -246,31 +296,39 @@ async function detectColumnMapping(sampleRows) {
   if (sampleRows.length === 0) return {};
 
   const headers = Object.keys(sampleRows[0]);
+  // Format: { csvHeader: field } — aligné avec ImportWizard frontend
   const mapping = {};
 
-  // Détection heuristique de base
+  // Détection heuristique fuzzy — ordre IMPORTANT (plus spécifique d'abord)
   const patterns = {
-    full_name: /^(nom|name|nom complet|full[\s_-]?name|fullname|client|customer)$/i,
-    first_name: /^(pr[ée]nom|first[\s_-]?name|firstname|given[\s_-]?name)$/i,
-    last_name: /^(nom de famille|last[\s_-]?name|lastname|surname|family[\s_-]?name)$/i,
-    email: /^(e?[\s_-]?mail|courriel|courriel[\s_-]?[ée]lectronique)$/i,
-    phone: /^(t[ée]l[ée]?phone|t[ée]l|phone|mobile|cellulaire|cell)$/i,
-    company: /^(entreprise|company|compagnie|organisation|business)$/i,
-    notes: /^(notes?|commentaires?|remarques?|description)$/i,
-    status: /^(statut|status|[ée]tat)$/i,
+    notes:       /(notes?|commentaires?|remarques?|description|m[ée]mo)/i,
+    next_action: /(prochaine?\s*action|next[\s_-]?action|todo|t[âa]che|follow[\s_-]?up)/i,
+    main_need:   /(besoin|need|raison|motif|demande|^objet$|^sujet$)/i,
+    first_name:  /(pr[ée]nom|first[\s_-]?name|firstname|given[\s_-]?name)/i,
+    last_name:   /(nom de famille|last[\s_-]?name|lastname|surname|family[\s_-]?name)/i,
+    email:       /(e?[\s_-]?mail|courriel|adresse courriel)/i,
+    phone:       /(t[ée]l[ée]?phone|^t[ée]l\b|^phone|mobile|cellulaire|\bcell\b|portable|num[ée]ro)/i,
+    company:     /(entreprise|^company$|compagnie|organisation|business|soci[ée]t[ée]|employeur)/i,
+    status:      /(statut|^status$|^[ée]tat$|stage|level)/i,
+    urgency:     /(urgence|urgency|priorit[ée]|priority)/i,
+    tags:        /(^tags?$|^[ée]tiquettes?$|cat[ée]gories?|labels?)/i,
+    budget:      /(budget|montant|prix\s*estim[ée]|estimated[\s_-]?value)/i,
+    full_name:   /(nom\s*complet|fullname|full[\s_-]?name|^client$|^customer$|^contact$|^nom$|^name$)/i,
   };
 
   for (const header of headers) {
+    const cleaned = String(header).trim();
+    if (!cleaned) continue;
     for (const [field, pattern] of Object.entries(patterns)) {
-      if (pattern.test(header.trim())) {
-        mapping[field] = header;
+      if (pattern.test(cleaned)) {
+        mapping[header] = field;
         break;
       }
     }
   }
 
-  // Si pas assez de mapping détecté, demander à DeepSeek
-  if (Object.keys(mapping).length < 3) {
+  // Si pas assez de mapping détecté, demander à DeepSeek (best-effort)
+  if (Object.keys(mapping).length < 2) {
     try {
       const response = await fetch(`${AI_GATEWAY_URL}/api/ai/respond`, {
         method: "POST",
@@ -284,7 +342,12 @@ async function detectColumnMapping(sampleRows) {
 
       if (response.ok) {
         const ai = await response.json();
-        if (ai.mapping) Object.assign(mapping, ai.mapping);
+        // ai.mapping attendu en { csvHeader: field }
+        if (ai.mapping) {
+          for (const [h, f] of Object.entries(ai.mapping)) {
+            if (!mapping[h] && f) mapping[h] = f;
+          }
+        }
       }
     } catch (e) {
       console.warn("[IMPORT] AI mapping failed, using heuristics only");
@@ -301,10 +364,28 @@ function mapRowToContact(row, mapping, defaults) {
     source: defaults.default_source,
   };
 
-  for (const [field, csvColumn] of Object.entries(mapping)) {
-    if (csvColumn && row[csvColumn]) {
-      contact[field] = String(row[csvColumn]).trim();
+  const notesParts = [];
+
+  // mapping: { csvHeader: field }
+  for (const [csvHeader, field] of Object.entries(mapping || {})) {
+    if (!field || field === "ignore") continue;
+    const raw = row[csvHeader];
+    if (raw == null) continue;
+    const value = String(raw).trim();
+    if (!value) continue;
+
+    if (field === "tags") {
+      const arr = value.split(/[,;|]/).map((s) => s.trim()).filter(Boolean);
+      contact.tags = [...new Set([...(contact.tags || []), ...arr])];
+    } else if (field === "notes") {
+      notesParts.push(`${csvHeader}: ${value}`);
+    } else {
+      contact[field] = value;
     }
+  }
+
+  if (notesParts.length > 0) {
+    contact.notes = notesParts.join("\n");
   }
 
   // Construire full_name si on a first+last mais pas full
@@ -312,16 +393,20 @@ function mapRowToContact(row, mapping, defaults) {
     contact.full_name = [contact.first_name, contact.last_name].filter(Boolean).join(" ");
   }
 
-  // Nettoyer phone
+  // Nettoyer phone (E.164 best-effort pour numéros nord-américains)
   if (contact.phone) {
-    contact.phone = contact.phone.replace(/[^\d+]/g, "");
-    if (contact.phone.length === 10) contact.phone = "+1" + contact.phone;
+    const digits = contact.phone.replace(/[^\d+]/g, "");
+    contact.phone = digits.length === 10 ? "+1" + digits : digits;
   }
 
   // Nettoyer email
   if (contact.email) {
     contact.email = contact.email.toLowerCase();
   }
+
+  // Normaliser status / urgency en minuscules
+  if (contact.status) contact.status = contact.status.toLowerCase();
+  if (contact.urgency) contact.urgency = contact.urgency.toLowerCase();
 
   return contact;
 }
@@ -334,24 +419,37 @@ async function findPotentialDuplicates(company_id, rows, mapping) {
 
   const existingByPhone = new Map();
   const existingByEmail = new Map();
-  (existing || []).forEach(c => {
-    if (c.phone) existingByPhone.set(c.phone, c);
-    if (c.email) existingByEmail.set(c.email.toLowerCase(), c);
+  const existingByName  = new Map();
+  (existing || []).forEach((c) => {
+    if (c.phone)     existingByPhone.set(c.phone, c);
+    if (c.email)     existingByEmail.set(c.email.toLowerCase(), c);
+    if (c.full_name) existingByName.set(c.full_name.trim().toLowerCase(), c);
   });
+
+  // Inverser le mapping { csvHeader: field } → { field: csvHeader }
+  const fieldToHeader = {};
+  for (const [h, f] of Object.entries(mapping || {})) {
+    if (f && f !== "ignore") fieldToHeader[f] = h;
+  }
 
   const duplicates = [];
   for (const row of rows) {
-    const phone = mapping.phone && row[mapping.phone]
-      ? String(row[mapping.phone]).replace(/[^\d+]/g, "")
-      : null;
-    const email = mapping.email && row[mapping.email]
-      ? String(row[mapping.email]).toLowerCase()
-      : null;
+    const rawPhone = fieldToHeader.phone ? row[fieldToHeader.phone] : null;
+    const rawEmail = fieldToHeader.email ? row[fieldToHeader.email] : null;
+    const rawName  = fieldToHeader.full_name ? row[fieldToHeader.full_name] : null;
 
-    if (phone && existingByPhone.has(phone)) {
-      duplicates.push({ row, existing: existingByPhone.get(phone), matched_on: "phone" });
-    } else if (email && existingByEmail.has(email)) {
+    const phone = rawPhone
+      ? (() => { const d = String(rawPhone).replace(/[^\d+]/g, ""); return d.length === 10 ? "+1" + d : d; })()
+      : null;
+    const email = rawEmail ? String(rawEmail).toLowerCase().trim() : null;
+    const name  = rawName  ? String(rawName).trim().toLowerCase()  : null;
+
+    if (email && existingByEmail.has(email)) {
       duplicates.push({ row, existing: existingByEmail.get(email), matched_on: "email" });
+    } else if (phone && existingByPhone.has(phone)) {
+      duplicates.push({ row, existing: existingByPhone.get(phone), matched_on: "phone" });
+    } else if (name && existingByName.has(name)) {
+      duplicates.push({ row, existing: existingByName.get(name), matched_on: "full_name" });
     }
   }
   return duplicates;

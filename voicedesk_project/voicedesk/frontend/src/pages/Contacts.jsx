@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next";
 import {
   Users, Search, FlameKindling, Snowflake, UserPlus, ShoppingBag, Sun,
   Phone, Mail, MessageSquare, Calendar as CalendarIcon, Tag, Activity,
-  ChevronDown, Plus, Upload, Eye, MoreHorizontal, Sparkles,
+  ChevronDown, Plus, Upload, Eye, MoreHorizontal, Sparkles, Pencil, Trash2,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { Badge } from "../components/ui/badge.jsx";
@@ -18,6 +18,8 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs.jsx";
 import DataTable, { RowActionButton } from "../components/common/DataTable.jsx";
 import FilterBar from "../components/common/FilterBar.jsx";
+import ContactForm from "../components/contacts/ContactForm.jsx";
+import ImportWizard from "../components/contacts/ImportWizard.jsx";
 import { cn } from "../lib/utils.js";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -43,6 +45,10 @@ export default function Contacts() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState(null);
   const [selected, setSelected] = useState(null); // contact id pour Sheet
+  const [formContact, setFormContact] = useState(null); // null = create, obj = edit
+  const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [toast, setToast] = useState(null);
 
   useEffect(() => {
     if (!token || !effectiveCompanyId) { setLoading(false); return; }
@@ -167,10 +173,19 @@ export default function Contacts() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" disabled data-testid="btn-import" title="Disponible en Phase 3B">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setShowImport(true)}
+            data-testid="btn-import"
+          >
             <Upload size={14} /> {t("contacts.import", "Importer CSV")}
           </Button>
-          <Button size="sm" disabled data-testid="btn-new-contact" title="Disponible en Phase 3B">
+          <Button
+            size="sm"
+            onClick={() => { setFormContact(null); setShowForm(true); }}
+            data-testid="btn-new-contact"
+          >
             <Plus size={14} /> {t("contacts.new", "Nouveau contact")}
           </Button>
         </div>
@@ -218,7 +233,86 @@ export default function Contacts() {
         token={token}
         t={t}
         lang={i18n.language}
+        onEdit={(c) => { setSelected(null); setFormContact(c); setShowForm(true); }}
+        onDelete={async (c) => {
+          if (!window.confirm(t("contacts.confirmDelete", "Supprimer définitivement {{name}} ?", { name: c.full_name }))) return;
+          try {
+            const res = await fetch(`${API}/api/v1/contacts/${c.id}`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!res.ok) throw new Error(await res.text());
+            setSelected(null);
+            setContacts((arr) => arr.filter((x) => x.id !== c.id));
+            setToast({ type: "success", msg: t("contacts.deleted", "Contact supprimé") });
+          } catch (e) {
+            setToast({ type: "error", msg: e.message });
+          }
+        }}
       />
+
+      {/* Contact Form Sheet (create + edit) */}
+      <Sheet open={showForm} onOpenChange={(o) => !o && setShowForm(false)}>
+        <SheetContent data-testid="contact-form-sheet" className="overflow-y-auto sm:max-w-lg">
+          <SheetHeader>
+            <SheetTitle>
+              {formContact?.id
+                ? t("contacts.form.editTitle", "Modifier le contact")
+                : t("contacts.form.newTitle", "Nouveau contact")}
+            </SheetTitle>
+            <SheetDescription>
+              {formContact?.id
+                ? t("contacts.form.editSubtitle", "Mettez à jour les informations.")
+                : t("contacts.form.newSubtitle", "Ajoutez manuellement une fiche contact.")}
+            </SheetDescription>
+          </SheetHeader>
+          <div className="px-6 py-4">
+            <ContactForm
+              key={formContact?.id || "new"}
+              contact={formContact}
+              companyId={effectiveCompanyId}
+              token={token}
+              onCancel={() => setShowForm(false)}
+              onSaved={(saved) => {
+                setShowForm(false);
+                setToast({
+                  type: "success",
+                  msg: formContact?.id
+                    ? t("contacts.updated", "Contact mis à jour")
+                    : t("contacts.created", "Contact créé"),
+                });
+                if (formContact?.id) {
+                  setContacts((arr) => arr.map((c) => (c.id === saved.id ? { ...c, ...saved } : c)));
+                } else {
+                  setContacts((arr) => [saved, ...arr]);
+                }
+              }}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Import CSV Wizard */}
+      <ImportWizard
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        companyId={effectiveCompanyId}
+        token={token}
+        onImported={(res) => {
+          setToast({
+            type: "success",
+            msg: t("contacts.importDone", "{{imported}} importés, {{updated}} mis à jour, {{skipped}} ignorés", {
+              imported: res?.imported || 0,
+              updated:  res?.updated  || 0,
+              skipped:  res?.skipped  || 0,
+            }),
+          });
+          load();
+        }}
+      />
+
+      {/* Toast */}
+      {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
     </div>
   );
 }
@@ -226,7 +320,7 @@ export default function Contacts() {
 // ────────────────────────────────────────────────────────────────
 //  DÉTAIL CONTACT — SHEET avec 3 tabs
 // ────────────────────────────────────────────────────────────────
-function ContactDetailSheet({ contactId, open, onClose, token, t, lang }) {
+function ContactDetailSheet({ contactId, open, onClose, token, t, lang, onEdit, onDelete }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -281,6 +375,20 @@ function ContactDetailSheet({ contactId, open, onClose, token, t, lang }) {
                     <a href={`mailto:${c.email}`}><Mail size={12} /> Courriel</a>
                   </Button>
                 )}
+                <div className="ml-auto flex items-center gap-1.5">
+                  <Button size="sm" variant="ghost" onClick={() => onEdit && onEdit(c)} data-testid="detail-edit">
+                    <Pencil size={12} /> {t("common.edit", "Modifier")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onDelete && onDelete(c)}
+                    className="text-red-300 hover:text-red-200 hover:bg-brand-red/10"
+                    data-testid="detail-delete"
+                  >
+                    <Trash2 size={12} />
+                  </Button>
+                </div>
               </div>
             </SheetHeader>
 
@@ -523,4 +631,29 @@ function formatDate(iso, lang) {
   if (!iso) return "—";
   const locale = lang?.startsWith("fr") ? "fr-CA" : "en-CA";
   return new Intl.DateTimeFormat(locale, { dateStyle: "long" }).format(new Date(iso));
+}
+
+
+// ────────────────────────────────────────────────────────────────
+//  TOAST (lightweight, auto-dismiss)
+// ────────────────────────────────────────────────────────────────
+function Toast({ toast, onClose }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 4000);
+    return () => clearTimeout(t);
+  }, [toast, onClose]);
+  return (
+    <div
+      role="status"
+      data-testid="toast"
+      className={cn(
+        "fixed bottom-6 right-6 z-50 max-w-sm rounded-lg border px-4 py-3 text-sm shadow-xl animate-fade-in",
+        toast.type === "success"
+          ? "border-brand-green/30 bg-brand-green/10 text-emerald-100"
+          : "border-brand-red/30 bg-brand-red/10 text-red-200"
+      )}
+    >
+      {toast.msg}
+    </div>
+  );
 }
