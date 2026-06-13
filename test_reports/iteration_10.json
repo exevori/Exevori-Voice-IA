@@ -1,0 +1,52 @@
+{
+  "summary": "Phase 6A Settings — backend 13/13 PASS (company GET/PATCH whitelist + 401s + team GET/cancel/patch validation). Frontend Settings page renders 7 tabs with correct testids, AssistantTab/CompanyTab/TeamTab + 4 ComingSoon tabs all work. Greeting save+persist OK. Company save OK. qa-bot member row visible. Direct URL ?tab=team navigation OK. ONE INTEGRATION BUG: Team invite UI hits wrong endpoint (/api/v1/auth/invite which expects company_name+contact_name+contact_email for super-admin onboarding) → returns 400 'Champs requis manquants'. Fix wiring at frontend or add a dedicated team invite endpoint.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/v1/auth/invite", "issue": "Used by TeamTab to invite team members but body shape mismatch: handler validates {company_name, contact_name, contact_email} (super-admin onboarding shape) while TeamTab sends {company_id, email, role} → 400 'Champs requis manquants'. Need a dedicated POST /api/v1/team/invitations endpoint OR add a polymorphic branch to /auth/invite."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Settings.jsx TextArea primitive", "issue": "Used testId={...} as prop but spread {...props} onto <textarea>, so data-testid was never set on greeting/voicemail/signature/system-prompt fields. React warned 'unknown prop testId'. FIXED by destructuring testId and mapping to data-testid.", "selector": "[data-testid=assistant-greeting-fr] etc", "priority": "LOW (fixed)"}
+    ],
+    "integration_issues": [
+      {"flow": "Team invite", "issue": "POST /api/v1/auth/invite returns 400 because TeamTab sends {company_id,email,role} but endpoint expects {company_name,contact_name,contact_email}. No invitation row is created so team-pending-invites card never appears.", "affected_selectors": ["invite-submit", "team-pending-invites", "cancel-invite-{id}"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_settings_phase_6a.py",
+    "/app/test_reports/pytest/iteration_10.xml"
+  ],
+  "action_items": [
+    "Wire TeamTab.handleInvite() to a proper team-member invitation endpoint, OR create POST /api/v1/team/invitations accepting {company_id,email,role} that inserts into invitations table and sends email via Resend. Current /auth/invite is for super-admin onboarding of NEW companies and should not be reused.",
+    "After fix, retest invite + cancel flow (testids invite-email-input, invite-submit, team-pending-invites, cancel-invite-{id})."
+  ],
+  "critical_code_review_comments": [
+    "Settings.jsx TextArea component was missing data-testid wiring — TestId prop was spread as-is causing React DOM-attribute warnings AND breaking automated tests. Fix applied: destructure testId, set data-testid={testId}.",
+    "TeamTab.handleInvite endpoint mismatch is the only functional integration gap in Phase 6A. Company + Team GET/PATCH + ComingSoon all wired correctly.",
+    "Backend company whitelist enforced cleanly — plan field silently ignored as required.",
+    "Frontend uses VITE_API_URL='' (relative path via Vite proxy) which works because requests stay on same origin. OK for preview.",
+    "Console error 'Failed to load profile: Failed to fetch' appears once on dashboard mount post-login but does not block Settings page. Worth investigating in next phase (likely AuthContext.loadProfile racing with Supabase session resolution)."
+  ],
+  "updated_files": [
+    "/app/voicedesk_project/voicedesk/frontend/src/pages/Settings.jsx (TextArea: testId → data-testid)",
+    "/app/backend/tests/test_settings_phase_6a.py (created — 13 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (13/13)",
+    "frontend": "92% — 11/12 flows pass; only team invite write flow fails due to backend endpoint mismatch (not a UI bug)"
+  },
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (company_id=af5f079f-6fc2-4d70-8c8d-51d83d301906, user_id=cd8e2abc-1eb5-4b35-91af-e838065b3823)",
+  "seed_data_creation": "None destructive. PATCH /company.website updated to a timestamped URL twice during testing (test_patch_company_updates_website + UI company save). No team members suspended. No invitation rows persisted (calls 400'd).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 6A is 95% green. Only blocker is the team-invite endpoint mismatch. After main agent adds POST /api/v1/team/invitations (or routes /auth/invite polymorphically), rerun pytest /app/backend/tests/test_settings_phase_6a.py and the Playwright invite+cancel block. Note: the cancel-invitation endpoint POST /api/v1/team/invitations/:id/cancel is already implemented and tested (404 path verified) — only the CREATE path is missing.",
+  "rca of the issue": {
+    "bug": "TeamTab.handleInvite() POSTs to /api/v1/auth/invite with {company_id,email,role}.",
+    "root_cause": "The /api/v1/auth/invite endpoint is the super-admin onboarding flow that creates a NEW company + admin invite, requiring {company_name,contact_name,contact_email}. Phase 6A introduced the Team UI but did not add a corresponding endpoint to invite ADDITIONAL members to an EXISTING company.",
+    "reproduction": "Login qa-bot → /settings?tab=team → enter any email → click Envoyer → 400 'Champs requis manquants' (network) → toast shows feedback but no invitation persisted.",
+    "mitigation": "Add new endpoint POST /api/v1/team/invitations accepting {company_id,email,role} → INSERT into invitations table with token+expires_at, optionally send email via Resend. Update TeamTab fetch URL accordingly."
+  }
+}
