@@ -66,6 +66,42 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 - Texte dynamique : "X en direct" (compteur tabular-nums)
 - Réutilisable Phase 8 quand Twilio sera branché
 
+### Phase Reports+A — Dashboard ROI + TimeSavedCard (DONE — 13 juin 2026)
+- **Backend** `modules/reports/index.js` (nouveau, agrégation pure, **READ-ONLY**) :
+  - `GET /api/v1/reports/summary?company_id=...&period=today|week|month|year` → response `{period, kpis, time_saved, series, counts}`
+  - 4 KPIs : `total_handled` (calls+emails), `appointments_booked`, `time_saved_seconds`, `recovery_rate_pct`
+  - `time_saved` détaillé : `sans_lea_seconds`, `avec_lea_seconds`, `saved_seconds`, `saved_hours`, `saved_cad`, `hourly_rate_cad` + `breakdown` (calls / emails / appointments / overhead)
+  - Facteurs ROI configurables `.env` : `PME_HOURLY_RATE_CAD=35`, `SEC_PER_EMAIL_WITHOUT_AI=180`, `SEC_PER_APPOINTMENT_BOOK=300`, `SEC_PER_DRAFT_VALIDATION=60`, `SEC_PER_TRANSFER=120`
+  - `series` granularité adaptative : hour (today) / day (week+month) / month (year)
+- **Frontend nouvelle page** `pages/Reports.jsx` routée sur `/analytics` et `/reports` :
+  - PeriodSelector 4 boutons + Refresh
+  - 4 KPI cards avec couleurs distinctes (purple/blue/green/pink)
+  - **TimeSavedCard détaillée** : Sans Léa (strikethrough red) / Avec Léa (vert) / Vous économisez (gros, vert + équivalent $CAD)
+  - Tremor LineChart 2 séries (Appels purple / Courriels cyan)
+  - Breakdown card avec 4 rows (calls / emails / appts / overhead)
+- **Frontend nouveau composant** `components/dashboard/TimeSavedCard.jsx` — **monté aussi sur main Dashboard** sous les KPIs (effet wow démo immédiat)
+  - Démo Garage Tremblay 7j : Sans Léa 49 min → Avec Léa 1 min → Économie **48 min ≈ 28 $ CAD**
+- **Testing iteration_7** : **14/14 backend + 100% frontend PASS**
+- ⚠️ Points trackés (non-bloquants, Phase 8 hardening) :
+  - `/summary` n'enforce pas `JWT.user.company_id == query.company_id` → user authentifié pourrait théoriquement requêter une autre PME
+  - 2 fetchs identiques simultanés sur /analytics (Reports + TimeSavedCard chacun) — V1 acceptable, optimisable plus tard
+  - `formatDuration` dupliqué dans TimeSavedCard + Reports → extraire à `/lib/format.js`
+
+### Phase Reports+B — Export PDF / CSV (DONE — 13 juin 2026)
+- **Backend** ajouté au module reports :
+  - `GET /api/v1/reports/export/csv?company_id=...&period=...` → CSV UTF-8 (BOM) avec séparateur `;` (Excel Québec FR), 3 sections (KPIs + ROI + Série temporelle)
+  - `GET /api/v1/reports/export/pdf?company_id=...&period=...` → PDF A4 mono-page via `pdfkit` (header Exevori + 4 KPIs grid 2x2 + carte ROI vert avec montant économisé + détail comptages + footer Lévis Québec)
+  - Filename canonique : `exevori-rapport-{company-slug}-{period}-YYYYMMDD.{csv|pdf}`
+  - Helper `buildSummaryPayload` réutilisé par `/summary`, `/export/csv`, `/export/pdf` — DRY
+- **Frontend** composant `ExportButtons` dans le header de Reports.jsx :
+  - 2 boutons CSV / PDF avec icônes lucide + Loader2 spinner pendant download
+  - `fetch` blob + `URL.createObjectURL` + `<a download>` + extraction du filename depuis `Content-Disposition`
+- **Deps ajoutées** : `pdfkit ^0.19.1`, `csv-stringify ^6.x`
+- **Testing iteration_8 + iteration_9** : 
+  - Backend 17/17 PASS (iteration_8) — auth, validation, 4 périodes, signatures fichiers, BOM UTF-8, cohérence cross-endpoint
+  - 1 bug trouvé iteration_8 : `<ExportButtons />` déclaré mais pas monté dans JSX. **Fixé** ligne 86 de Reports.jsx.
+  - Frontend retest iteration_9 : **5/5 downloads PASS** sur 4 périodes × 2 formats, 0 erreur console
+
 ### Phase KB+B — Embeddings & Semantic Search (DONE — 13 juin 2026)
 - **DB migration** `migrations/002_kb_plus_b.sql` exécutée manuellement par user :
   - Colonne `knowledge_sources.embeddings_ready_at TIMESTAMPTZ` (tracking ingest)
@@ -146,10 +182,20 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 
 ## Backlog priorisé
 
-### P0 (next) — Ordre validé par Karim
+### P0 (next) — Ordre validé par Karim (mis à jour 13 juin 2026)
 1. ~~**Phase KB+B**~~ ✅ DONE
-2. **Phase Reports+A** — Dashboard ROI live + `TimeSavedCard` (4 KPIs) sur main Dashboard
-3. **Phase Reports+B** — Export PDF/CSV (pdfkit + csv-stringify + archiver)
+2. ~~**Phase Reports+A élargie**~~ ✅ DONE (avec widget Avant/Après inclus)
+3. ~~**Phase Reports+B**~~ ✅ DONE (Export PDF/CSV)
+4. **Phase 6 COMPLÈTE MULTI-PROVIDER** (~108 crédits) — *self-dogfooding chez Exevori*
+   - 6A Settings UI (assistant, horaires, équipe)
+   - 6B Email multi-provider : OAuth Gmail/Google Workspace + OAuth Outlook/Microsoft 365 + IMAP/SMTP universel (Zoho, Yahoo, Hostpapa, OVH, cPanel)
+   - 6C Calendar multi-provider : OAuth Google Calendar + OAuth Outlook Calendar
+   - 6D Twilio config par PME (numéro assigné + test + forwarding doc)
+   - 6E Notifications canaux
+5. **Phase 9** — Déploiement Vercel + Fly.io Montréal + `.nvmrc` (Node v22)
+6. **Phase 8** — Twilio + ElevenLabs + DeepSeek réels + hardening sécurité
+   (cross-check `JWT.user → profile.company_id` sur tous endpoints KB/CRM/Calls/Emails/Reports)
+7. 🎙️ **Test Léa COMPLET** avec tout configuré comme client réel (self-dogfooding démo)
 
 ### P1
 - **Phase 8 — Hardening sécurité** : ajouter middleware `enforceTenantOwnership` qui valide `JWT.user → profile.company_id` vs `req.body/query.company_id` sur tous les endpoints KB (et progressivement CRM/Calls/Emails). High priority avant prod.
