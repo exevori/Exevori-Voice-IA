@@ -184,21 +184,63 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 
 ### P0 (next) — Ordre validé par Karim (mis à jour 13 juin 2026)
 1. ~~**Phase KB+B**~~ ✅ DONE
-2. ~~**Phase Reports+A élargie**~~ ✅ DONE (avec widget Avant/Après inclus)
-3. ~~**Phase Reports+B**~~ ✅ DONE (Export PDF/CSV)
-4. **Phase 6 COMPLÈTE MULTI-PROVIDER** (~108 crédits) — *self-dogfooding chez Exevori*
-   - 6A Settings UI (assistant, horaires, équipe)
-   - 6B Email multi-provider : OAuth Gmail/Google Workspace + OAuth Outlook/Microsoft 365 + IMAP/SMTP universel (Zoho, Yahoo, Hostpapa, OVH, cPanel)
-   - 6C Calendar multi-provider : OAuth Google Calendar + OAuth Outlook Calendar
-   - 6D Twilio config par PME (numéro assigné + test + forwarding doc)
-   - 6E Notifications canaux
-5. **Phase 9** — Déploiement Vercel + Fly.io Montréal + `.nvmrc` (Node v22)
-6. **Phase 8** — Twilio + ElevenLabs + DeepSeek réels + hardening sécurité
-   (cross-check `JWT.user → profile.company_id` sur tous endpoints KB/CRM/Calls/Emails/Reports)
-7. 🎙️ **Test Léa COMPLET** avec tout configuré comme client réel (self-dogfooding démo)
+2. ~~**Phase Reports+A élargie**~~ ✅ DONE
+3. ~~**Phase Reports+B**~~ ✅ DONE
+4. ~~**Phase 6A — Settings UI**~~ ✅ DONE
+5. **Phase 6B — Email multi-comptes** (~50 crédits) **← NEXT, après validation visuelle 6A + credentials OAuth**
+   - Migration DB requise (tables `email_accounts`, `oauth_tokens`, `imap_configs`, colonne `email_account_id` sur `emails`) — Karim doit donner GO + exécuter
+   - 3 providers : OAuth Gmail/Workspace + OAuth Outlook/M365 + IMAP/SMTP universel (Zoho, Hostpapa, OVH, etc.)
+   - Chiffrement AES-256-GCM (clé maître `ENCRYPTION_KEY` 32 bytes en `.env`)
+   - UI Wizard 3 étapes (provider → credentials → persona/auto_reply/kb_filter)
+   - Multi-persona : `assistant_configs` devient multi-instance par PME (chaque email peut avoir sa propre Léa)
+   - Tests : 3 comptes factices, RLS strict, IMAP serveur test, chiffrement/déchiffrement
+6. **Phase 6C** — Calendar multi-provider (Google Calendar + Outlook Calendar) (~15 crédits)
+7. **Phase 6D** — Twilio config par PME (~5 crédits)
+8. **Phase 6E** — Notifications canaux + Resend pour invites (~5 crédits)
+9. **Phase 9** — Déploiement Vercel + Fly.io Montréal + `.nvmrc` (Node v22)
+10. **Phase 8** — Twilio + ElevenLabs + DeepSeek réels + hardening sécurité
+11. 🎙️ **Test Léa COMPLET** self-dogfooding (démo commerciale)
+12. 🎨 **Phase Esthétique finale** (~25-35 crédits — passe globale)
+13. 🚀 Démarchage commercial
 
 ### P1
 - **Phase 8 — Hardening sécurité** : ajouter middleware `enforceTenantOwnership` qui valide `JWT.user → profile.company_id` vs `req.body/query.company_id` sur tous les endpoints KB (et progressivement CRM/Calls/Emails). High priority avant prod.
+- **Phase 9** — Déploiement Vercel (frontend) + Fly.io (backend) + `.nvmrc` pour fixer Node v22
+- **Phase 8 (suite)** — Branchement intégrations réelles : Twilio (voice webhook → `calls`), ElevenLabs (TTS), Resend (real `RESEND_API_KEY`)
+- **Refactor**: Découper `Contacts.jsx` (660 lignes) → `/components/contacts/{DetailSheet,InfoTab,HistoryTab,NotesTab}.jsx`
+- **Refactor**: Extraire les `fetch()` éparpillés vers `lib/contactsApi.js`
+- **A11y mineur** : `SourceDetailSheet` → ajouter `SheetDescription` pour silence Radix warning
+- **Refactor**: Découper `Contacts.jsx` (660 lignes) → `/components/contacts/{DetailSheet,InfoTab,HistoryTab,NotesTab}.jsx`
+- **Refactor**: Extraire les `fetch()` éparpillés vers `lib/contactsApi.js`
+- **A11y**: Ajouter `data-testid` par option sur `<Select>` (form-status-option-{hot,warm,...}) pour QA déterministe
+
+### P2 (Future)
+- **Phase 5/6/7** — Outbound dialer, Knowledge Base tuning, AI fine-tuning (différées après 1er client)
+
+## Known issues
+- Console: Supabase realtime WSS échoue (`wss://localhost/...`) — cosmétique uniquement, n'affecte aucun flow.
+- Environnement: la conteneurisation Emergent peut reset Node v22 → v20 au restart superviseur. Workaround : `apt-get install -y nodejs` + relancer `node index.js` sur port 8001.
+
+## Tech stack
+- Frontend: React 18, Vite, Tailwind, shadcn/ui, Tremor, framer-motion, i18next, lucide-react
+- Backend: Node.js v22, Express, multer, csv-parse, @supabase/supabase-js
+- DB/Auth: Supabase (Postgres + RLS + Auth)
+
+## Key API endpoints
+- `GET /api/v1/auth/me`
+- `GET|POST /api/v1/contacts`, `GET|PATCH|DELETE /api/v1/contacts/:id`
+- `POST /api/v1/import/preview` (multipart: file, company_id)
+- `POST /api/v1/import/execute` (multipart: file, company_id, column_mapping JSON, duplicate_action, default_status)
+
+## Files of reference
+- `frontend/src/pages/Contacts.jsx` — page principale + Sheets pour form/wizard/détail
+- `frontend/src/components/contacts/ContactForm.jsx`
+- `frontend/src/components/contacts/ImportWizard.jsx`
+- `backend/modules/import/index.js`
+- `backend/modules/crm/index.js`
+- `test-jwt.js` — JWT minting (admin)
+- `set-test-password.js` — set test password for E2E
+d.
 - **Phase 9** — Déploiement Vercel (frontend) + Fly.io (backend) + `.nvmrc` pour fixer Node v22
 - **Phase 8 (suite)** — Branchement intégrations réelles : Twilio (voice webhook → `calls`), ElevenLabs (TTS), Resend (real `RESEND_API_KEY`)
 - **Refactor**: Découper `Contacts.jsx` (660 lignes) → `/components/contacts/{DetailSheet,InfoTab,HistoryTab,NotesTab}.jsx`
