@@ -83,6 +83,7 @@ export default function Reports() {
         </div>
         <div className="flex items-center gap-2">
           <PeriodSelector value={period} onChange={setPeriod} t={t} />
+          <ExportButtons token={token} companyId={effectiveCompanyId} period={period} t={t} />
           <button
             onClick={fetchSummary}
             data-testid="reports-refresh"
