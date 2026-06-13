@@ -66,6 +66,27 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 - Texte dynamique : "X en direct" (compteur tabular-nums)
 - Réutilisable Phase 8 quand Twilio sera branché
 
+### Phase KB+A — Knowledge Base ingestion (DONE — 13 juin 2026)
+- **DB migration** `migrations/001_kb_plus_a.sql` exécutée manuellement par user :
+  - Tables `knowledge_sources` (id, company_id, type[upload/url/manual], name, url, storage_path, mime_type, size_bytes, status[pending/processing/ready/error], error_message, chunks_count, created_by) et `knowledge_chunks` (id, source_id, chunk_index, content, token_count, embedding vector(1536) [null en KB+A])
+  - Extension `vector` activée + bucket Supabase Storage `kb-uploads`
+  - RLS `company_isolation` sur les 2 tables
+- **Backend** `modules/kb/index.js` (nouveau, 394 lignes) — monté avec `requireAuth` middleware dans `index.js` :
+  - `POST /api/v1/kb/sources/upload` (multer 25 Mo, MIMEs PDF/DOCX/TXT/MD) → upload Storage + extract (pdf-parse / mammoth / utf-8) + chunk (350 tokens target, 40 overlap, via gpt-tokenizer) + insert chunks
+  - `POST /api/v1/kb/sources/scrape` ({url}) → fetch 15s timeout + cheerio retire scripts/styles/nav/footer + html-to-text + chunk + insert (422 si <100 chars = SPA)
+  - `GET /api/v1/kb/sources?company_id=...&status=...&limit=...&offset=...` (liste paginée)
+  - `GET /api/v1/kb/sources/:id` → metadata + chunks (limit 50)
+  - `DELETE /api/v1/kb/sources/:id` → cascade chunks via FK + best-effort storage delete
+- **Frontend** `pages/Knowledge.jsx` (461 lignes) :
+  - Tabs Upload (dropzone drag&drop + click) / URL (input + Importer)
+  - DataTable des sources (Type / Nom / Chunks / Taille / État / Importé) + actions view/delete
+  - SourceDetailSheet avec preview chunks + token_count par chunk
+  - 3 stats compactes (Sources / Chunks / Prêts) + Toast système 4.5s
+  - Tous les `data-testid` en place (kb-page, kb-title, tab-upload, tab-url, upload-dropzone, scrape-url-input, kb-sources-table, source-detail-sheet, chunks-preview, etc.)
+- **Compte test QA bot** créé (`qa-bot@garage-tremblay.test` / `QaBot_Test_2026!`, role `company_admin` ISOLÉ à Garage Tremblay) — scripts `create-qa-bot.mjs` + `delete-qa-bot.mjs`
+- **Testing iteration_5** : **100% PASS** (14/14 backend pytest + 7/7 frontend flows)
+- ⚠️ **Findings sécurité documentés pour Phase 8** : le backend ne cross-check pas `JWT.user → profile.company_id` vs `req.body/query.company_id` — un user authentifié pourrait théoriquement passer un UUID d'un autre tenant. À durcir en Phase 8 (ajout middleware `enforceTenantOwnership`).
+
 ### Testing (Iteration 4 — 13 juin 2026, URGENT bug fix)
 - 🚨 **Login bug bloquant résolu (100% PASS)** :
   - **Root cause #1** : Node v22 downgradé à v20 par le superviseur Emergent → `@supabase/realtime-js` crashe au démarrage (« Node.js 20 detected without native WebSocket support ») → backend Express ne démarrait pas → les defaults Emergent (uvicorn Python sur 8001 + CRA sur 3000) prenaient la place.
@@ -93,14 +114,18 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 
 ## Backlog priorisé
 
-### P0 (next)
-- **Phase 8** OU **Phase 9** au choix client :
-  - **Phase 8** — Branchement intégrations réelles : Twilio (voice webhook → table `calls`), ElevenLabs (TTS), Resend (real `RESEND_API_KEY` au lieu du placeholder). Le LIVE badge sera alors connecté à des appels réels et le bouton Approve enverra réellement les courriels.
-  - **Phase 9** — Déploiement Vercel (frontend) + Fly.io (backend) pour démos clients.
+### P0 (next) — Ordre validé par Karim
+1. **Phase KB+B** — Embeddings OpenAI text-embedding-3-small via Emergent LLM Key + UI recherche sémantique (testing avec qa-bot)
+2. **Phase Reports+A** — Dashboard ROI live + `TimeSavedCard` (4 KPIs) sur main Dashboard
+3. **Phase Reports+B** — Export PDF/CSV (pdfkit + csv-stringify + archiver)
 
 ### P1
-- **Phase 8** — Intégrations: Twilio (voice), ElevenLabs (TTS), Resend (mail)
-- **Phase 9** — Déploiement Vercel (frontend) + Fly.io (backend)
+- **Phase 8 — Hardening sécurité** : ajouter middleware `enforceTenantOwnership` qui valide `JWT.user → profile.company_id` vs `req.body/query.company_id` sur tous les endpoints KB (et progressivement CRM/Calls/Emails). High priority avant prod.
+- **Phase 9** — Déploiement Vercel (frontend) + Fly.io (backend) + `.nvmrc` pour fixer Node v22
+- **Phase 8 (suite)** — Branchement intégrations réelles : Twilio (voice webhook → `calls`), ElevenLabs (TTS), Resend (real `RESEND_API_KEY`)
+- **Refactor**: Découper `Contacts.jsx` (660 lignes) → `/components/contacts/{DetailSheet,InfoTab,HistoryTab,NotesTab}.jsx`
+- **Refactor**: Extraire les `fetch()` éparpillés vers `lib/contactsApi.js`
+- **A11y mineur** : `SourceDetailSheet` → ajouter `SheetDescription` pour silence Radix warning
 - **Refactor**: Découper `Contacts.jsx` (660 lignes) → `/components/contacts/{DetailSheet,InfoTab,HistoryTab,NotesTab}.jsx`
 - **Refactor**: Extraire les `fetch()` éparpillés vers `lib/contactsApi.js`
 - **A11y**: Ajouter `data-testid` par option sur `<Select>` (form-status-option-{hot,warm,...}) pour QA déterministe
