@@ -14,6 +14,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   BarChart3, Phone, Calendar, Clock, Target, Loader2, Sparkles, ArrowRight, Mail, RefreshCcw,
+  FileText, FileSpreadsheet,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { LineChart } from "@tremor/react";
@@ -186,6 +187,60 @@ export default function Reports() {
 }
 
 // ─── Subcomponents ─────────────────────────────────────────────
+// ─── Subcomponents ─────────────────────────────────────────────
+function ExportButtons({ token, companyId, period, t }) {
+  const [busy, setBusy] = useState(null); // "csv" | "pdf" | null
+
+  const doDownload = async (format) => {
+    if (!token || !companyId) return;
+    setBusy(format);
+    try {
+      const url = `${API}/api/v1/reports/export/${format}?company_id=${companyId}&period=${period}`;
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      // Récupère le nom de fichier du header Content-Disposition
+      const cd = r.headers.get("content-disposition") || "";
+      const m = /filename="?([^";]+)"?/.exec(cd);
+      const fname = m ? m[1] : `exevori-rapport-${period}.${format}`;
+      const a = document.createElement("a");
+      a.href = blobUrl; a.download = fname;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      alert(t("reports.export.error", "Échec export") + " : " + e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="inline-flex rounded-lg border border-border bg-bg-card p-0.5" data-testid="reports-export-buttons">
+      <button
+        onClick={() => doDownload("csv")}
+        disabled={!!busy}
+        data-testid="export-csv-button"
+        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+        title={t("reports.export.csvTooltip", "Télécharger CSV (Excel)")}
+      >
+        {busy === "csv" ? <Loader2 size={12} className="animate-spin" /> : <FileSpreadsheet size={12} />}
+        CSV
+      </button>
+      <button
+        onClick={() => doDownload("pdf")}
+        disabled={!!busy}
+        data-testid="export-pdf-button"
+        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+        title={t("reports.export.pdfTooltip", "Télécharger PDF")}
+      >
+        {busy === "pdf" ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
+        PDF
+      </button>
+    </div>
+  );
+}
+
 function PeriodSelector({ value, onChange, t }) {
   return (
     <div className="inline-flex rounded-lg border border-border bg-bg-card p-0.5" data-testid="reports-period-selector">

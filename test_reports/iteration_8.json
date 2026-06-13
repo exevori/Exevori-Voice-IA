@@ -1,0 +1,59 @@
+{
+  "summary": "Phase Reports+B testing — Backend 100% PASS (17/17 pytest). Frontend BLOCKED: the <ExportButtons /> component is defined in Reports.jsx but never rendered in the Reports() JSX tree, so 'export-csv-button', 'export-pdf-button', and 'reports-export-buttons' are not present in the DOM. Users cannot trigger CSV/PDF download from the UI.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Reports.jsx → ExportButtons",
+        "issue": "ExportButtons function is declared (lines 191–242) but never invoked inside the Reports() JSX. The header (lines 84–94) only renders <PeriodSelector/> and the refresh <button>. As a result, data-testid='reports-export-buttons' / 'export-csv-button' / 'export-pdf-button' are absent from the /analytics page DOM. The CSV/PDF feature is completely unreachable via UI even though the backend works perfectly.",
+        "selector": "[data-testid=\"reports-export-buttons\"]",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Reports export (CSV & PDF)",
+        "issue": "Cannot test page.expect_download() because the buttons are not in the DOM. Backend endpoints are confirmed functional via pytest, so once the component is mounted in JSX, integration should work (the ExportButtons fetch logic itself looks correct — Bearer header, blob, Content-Disposition filename extraction, busy state).",
+        "affected_selectors": ["[data-testid=\"export-csv-button\"]", "[data-testid=\"export-pdf-button\"]"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_reports_phase_b.py",
+    "/app/test_reports/pytest/iteration_8_reports_b.xml"
+  ],
+  "action_items": [
+    "Render <ExportButtons token={token} companyId={effectiveCompanyId} period={period} t={t} /> inside the Reports() header — most likely next to <PeriodSelector/> around line 85 (or in a sibling flex container so 'reports-export-buttons' lives in the page header as required by the spec).",
+    "After fix: rerun the frontend portion (click each button, verify page.expect_download() yields files matching exevori-rapport-*.csv and exevori-rapport-*.pdf, and that both buttons go to opacity-50 / disabled while busy)."
+  ],
+  "critical_code_review_comments": [
+    "ExportButtons subcomponent is dead code as currently committed — it must be referenced in the parent JSX, otherwise the whole Reports+B feature is invisible to end users.",
+    "Backend /export/csv and /export/pdf correctly: enforce auth via requireAuth (returns 401), validate company_id (returns 400), set proper Content-Type and Content-Disposition headers, emit UTF-8 BOM, use ';' separator for Excel FR-CA, and produce valid PDF (signature %PDF-1.x, > 1500 bytes for QA company).",
+    "Filenames follow spec: exevori-rapport-garage-tremblay-week-YYYYMMDD.{csv,pdf}.",
+    "Empty/unknown company_id correctly returns a CSV/PDF with zeros — no crash, no NaN.",
+    "ROI — Économisé value in CSV matches formatDurationFr(time_saved_seconds) from /summary endpoint for the same period (cross-endpoint coherence verified).",
+    "All 4 periods (today/week/month/year) correctly emit the French label in CSV 'Période;...' row and produce valid PDFs."
+  ],
+  "updated_files": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_reports_phase_b.py (new file — 17 pytest cases)"
+  ],
+  "success_rate": {
+    "backend": "100% (17/17)",
+    "frontend": "0% — buttons not in DOM, cannot interact"
+  },
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! / company_id=af5f079f-6fc2-4d70-8c8d-51d83d301906",
+  "seed_data_creation": "None — read-only tests on existing Garage Tremblay data + one random UUID for empty-company case.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend Reports+B is fully validated (17/17). Only frontend gap is the missing JSX invocation of <ExportButtons/> in Reports.jsx. After main agent adds the component reference in the header, just rerun the Playwright download capture portion to close the loop — backend tests do not need to be re-run unless backend code changes.",
+  "rca of the issue": {
+    "bug": "data-testid 'reports-export-buttons', 'export-csv-button', 'export-pdf-button' not present in DOM on /analytics.",
+    "reproduction": "1) Log in as qa-bot. 2) Navigate to /analytics. 3) Inspect header — only Period selector + refresh button visible. 4) document.querySelector('[data-testid=\"reports-export-buttons\"]') returns null.",
+    "root_cause": "Reports.jsx declares function ExportButtons({token, companyId, period, t}) {...} (lines 191-242) but the parent Reports() component never includes <ExportButtons .../> in its returned JSX. The Phase Reports+B frontend wiring was forgotten.",
+    "mitigation": "In Reports.jsx, inside the header flex container around line 84, add: <ExportButtons token={token} companyId={effectiveCompanyId} period={period} t={t} /> — ideally just before or after <PeriodSelector .../> so it sits alongside the period selector in the Reports header."
+  }
+}
