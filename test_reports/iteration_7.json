@@ -1,0 +1,35 @@
+{
+  "summary": "Phase Reports+A (ROI Dashboard + TimeSavedCard) — backend + frontend testing COMPLETE. 14/14 backend pytest cases PASS (auth, validation, 4 periods, schema, math coherence, empty-company). Frontend e2e validated on /dashboard and /analytics: 4 KPI cards, 4 period buttons, TimeSavedCard Avant/Apres, Tremor LineChart, breakdown rows, refresh button, period switching. Smoke values match spec: total_handled=18, saved_seconds=2930 (48 min), saved_cad=28.49 $.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_reports_phase_a.py",
+    "/app/test_reports/pytest/iteration_7_reports_a.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Reports.jsx page-level fetch and TimeSavedCard fetch independently from /reports/summary on /analytics — 2 simultaneous identical requests every period change. Spec acknowledges this and defers optimization. Acceptable for V1 but consider lifting state up or React Query cache to dedupe.",
+    "buildSeries() uses approximate 30-day step for 'month' granularity (line 199-200 in modules/reports/index.js). This is fine for the year-view bucketing but can drift across leap years / DST. Prefer cursor.setMonth(+1) which is already used for the increment — minor inconsistency between bucket-init step constant vs increment logic.",
+    "modules/reports/index.js uses Promise.all for 4 Supabase queries with no per-query error surface — if one of the 4 fails (e.g. appointments table missing/empty), the whole route throws 500. Each call already returns an .error field; consider logging individual non-fatal errors and continuing with empty arrays instead of bubbling up.",
+    "supabase service-role client is created at module load with no validation that env vars are present — would crash silently if SUPABASE_SERVICE_ROLE_KEY is missing. Add a startup assertion.",
+    "Frontend formatDuration is duplicated in TimeSavedCard.jsx and Reports.jsx (identical implementation). Extract to /lib/format.js to follow DRY.",
+    "Reports route lives under requireAuth middleware globally (good), but the route handler itself does not cross-check that the authenticated user's profile.company_id matches req.query.company_id. A logged-in user from company A could currently request company B's ROI data. Tighten by deriving company_id from JWT/profile, not query string (same pattern as flagged in KB phase 8 hardening)."
+  ],
+  "updated_files": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_reports_phase_a.py (created)"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% (all flows validated)"},
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (company_id af5f079f-6fc2-4d70-8c8d-51d83d301906)",
+  "seed_data_creation": "None. Module is READ-ONLY aggregation. Used existing Garage Tremblay seed (11 calls, 7 emails, 4 drafts). No mutations.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Reports+A is production-ready. test_reports_phase_a.py covers: auth (missing/invalid token → 401), validation (missing company_id → 400), all 4 periods with correct granularity (today=hour, week=day, month=day, year=month), full response schema (period/kpis/time_saved/breakdown/series/counts), math coherence (total_handled == calls+emails, saved_seconds = max(0, sans-avec), saved_cad = round(hours*35*100)/100), and empty-company UUID returns 200 with all zeros. UI: TimeSavedCard rendered both on /dashboard (Dashboard.jsx defaults to today period) and /analytics (Reports.jsx defaults to week). PeriodSelector buttons work — switching week→today refetches KPIs and chart. Refresh button works. Chart uses Tremor LineChart with 2 series (Appels purple, Courriels cyan). Breakdown card renders only when saved_seconds > 0 (4 rows: calls, emails, appts, overhead).",
+  "rca of the issue": "N/A — no bugs found in Reports+A implementation."
+}

@@ -14,6 +14,7 @@ import { useAuth } from "../contexts/AuthContext.jsx";
 import { Badge } from "../components/ui/badge.jsx";
 import { Card, CardContent } from "../components/ui/card.jsx";
 import KpiCard from "../components/dashboard/KpiCard.jsx";
+import TimeSavedCard from "../components/dashboard/TimeSavedCard.jsx";
 import { cn } from "../lib/utils.js";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -119,6 +120,9 @@ export default function Dashboard() {
 
       {/* KPI Grid (Phase 2A) */}
       <KpiGrid stats={stats} loading={loading} t={t} />
+
+      {/* === PHASE Reports+A : TimeSavedCard ROI === */}
+      <TimeSavedCard token={token} companyId={effectiveCompanyId} period={period} />
 
       {/* === PHASE 2B Row 1 : Assistant Profile + Live Calls + Upcoming Appointments === */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3" data-testid="row-2b-1">
