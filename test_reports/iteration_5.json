@@ -1,0 +1,43 @@
+{
+  "summary": "Phase KB+A end-to-end validation — PASS. All 14 backend pytest tests pass and all 7 frontend flows succeed against the preview URL using qa-bot credentials. Upload TXT (3 chunks), scrape https://fr.wikipedia.org/wiki/Pneu (2 chunks), source detail with chunks-preview, delete source, and invalid-URL error toast all work as specified. Backend tenant isolation via company_id query param is verified (random UUID returns empty list). Backend now also returns 401 when no Authorization header is sent on /api/v1/kb/sources, indicating auth middleware is in place.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/v1/kb/sources*", "issue": "Authorization header is now validated (401 without token), but the backend does NOT verify that the JWT user actually belongs to the company_id passed in the request. A logged-in user from company A could currently query/upload/scrape/delete on behalf of company B if they craft the request manually. This is the expected Phase 8 hardening — flagged here for tracking."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Knowledge — SourceDetailSheet", "issues": ["Console warning: 'Missing Description or aria-describedby={undefined} for {DialogContent}' — a11y nit, add SheetDescription or aria-describedby to <SheetContent>"]},
+      {"screen": "Global", "issues": ["React Router v6 future flag warnings (v7_startTransition, v7_relativeSplatPath) — informational only"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_kb_phase_a.py",
+    "/app/test_reports/pytest/iteration_5_kb.xml"
+  ],
+  "action_items": [
+    "(Phase 8) Add server-side guard in /api/v1/kb/* routes: extract user from JWT, fetch profile.company_id, then enforce that req.body.company_id / req.query.company_id matches — currently any authenticated user can pass any UUID.",
+    "(Nice-to-have) Add SheetDescription or aria-describedby to SourceDetailSheet to silence Radix a11y warning.",
+    "(Minor) Investigate the transient 'Failed to load profile: Failed to fetch' console error logged once during signIn → onAuthStateChange in AuthContext.jsx:73. Login still succeeds (fallback to Supabase user metadata), but this fetch error in loadProfile should be handled gracefully or retried."
+  ],
+  "critical_code_review_comments": [
+    "kb/index.js correctly handles 400/404/422 paths and uses transactional pattern (insert source as 'processing' → set 'ready' or 'error' on outcome). Good.",
+    "Tenant isolation relies entirely on the client-provided company_id since SERVICE_ROLE_KEY bypasses RLS. The backend MUST cross-check the JWT's user → profile.company_id before trusting the query/body value. This is acceptable for KB+A scope but is a HIGH-priority Phase 8 item.",
+    "DELETE /sources/:id does not check ownership — any authenticated user knowing a UUID could delete another tenant's source. Mitigation: same JWT-vs-company_id check as above, plus a WHERE company_id = <jwt-company> filter on DELETE.",
+    "scrapeUrl has 15s timeout + UA + redirect:follow + filters scripts/styles/nav/footer — solid. Chunking (target 350 / overlap 40) produced reasonable counts (2 chunks for Wikipedia Pneu page, 3 chunks for ~5KB TXT).",
+    "Knowledge.jsx properly clears toast after 4.5s, handles drag-and-drop, has all data-testid attributes, and uses confirm() for delete — fine for KB+A. Consider replacing window.confirm with a Radix Dialog for consistency in a later polish pass."
+  ],
+  "updated_files": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_kb_phase_a.py (new)"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% (7/7 flows)"},
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (company_admin, Garage Tremblay af5f079f-6fc2-4d70-8c8d-51d83d301906) — used exclusively, contact@exevori.com NOT touched.",
+  "seed_data_creation": "Created 2 KB sources during E2E test (TEST_e2e_kb.txt + fr.wikipedia.org/wiki/Pneu) and 1 additional source via backend tests that was deleted by the delete-flow test. Final state: ~3-4 Garage Tremblay sources in DB — within the 10-source limit stipulated. Backend pytest module also runs a session-scoped cleanup that DELETEs all sources created during the run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "KB+A is fully working end-to-end. Backend lives at /app/voicedesk_project/voicedesk/backend (Node Express :8001, kb router at modules/kb/index.js) and frontend at /app/voicedesk_project/voicedesk/frontend (Vite :3000, Knowledge.jsx). Use BASE_URL=https://720876eb-de73-4840-91bd-19cf23fab78e.preview.emergentagent.com — no /api on the host, prefix endpoints with /api/v1. Login via Supabase Auth (POST https://yptsvqhcnksjxufziech.supabase.co/auth/v1/token?grant_type=password) to get the JWT; the backend's KB endpoints now require Authorization: Bearer <jwt>. KB+B (OpenAI embeddings) is NOT implemented — embedding column is null, which is expected. data-testids confirmed working: kb-page, kb-title, stat-sources, stat-chunks, stat-ready, kb-ingest, tab-upload, tab-url, upload-dropzone, upload-input, scrape-url-input, scrape-url-button, kb-sources-table, view-source-{id}, delete-source-{id}, source-detail-sheet, chunks-preview, chunk-{i}, source-status-{state}, toast.",
+  "rca_of_the_issue": "N/A — no regression to RCA. The only behavioural finding worth tracking is that tenant isolation is enforced only by the query-param company_id (not cross-checked against the JWT's profile.company_id). Repro: with qa-bot JWT, POST /api/v1/kb/sources/upload with company_id of another tenant would write into that tenant. Mitigation (Phase 8): decode JWT in middleware, lookup profile.company_id, override or validate req.body.company_id / req.query.company_id."
+}
