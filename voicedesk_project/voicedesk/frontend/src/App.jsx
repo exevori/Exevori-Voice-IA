@@ -17,6 +17,7 @@ import Dashboard from "./pages/Dashboard.jsx";
 import Contacts from "./pages/Contacts.jsx";
 import Calls from "./pages/Calls.jsx";
 import Emails from "./pages/Emails.jsx";
+import Knowledge from "./pages/Knowledge.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext.jsx";
 
 import "./styles/global.css";
@@ -45,6 +46,8 @@ function App() {
             <Route path="contacts" element={<Contacts />} />
             <Route path="calls" element={<Calls />} />
             <Route path="emails" element={<Emails />} />
+            <Route path="knowledge" element={<Knowledge />} />
+            <Route path="kb" element={<Knowledge />} />
             {/* Autres pages à construire par Emergent dans frontend/src/pages/ */}
           </Route>
 
