@@ -2,7 +2,7 @@
 // EXEVORI VOICE IA — PAGE LOGIN (Tailwind + shadcn)
 // ============================================================
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Mail, Lock, ArrowRight, AlertCircle } from "lucide-react";
@@ -12,7 +12,7 @@ import LanguageSwitcher from "../common/LanguageSwitcher.jsx";
 
 export default function Login() {
   const { t } = useTranslation();
-  const { signIn } = useAuth();
+  const { signIn, user } = useAuth();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState("");
@@ -20,16 +20,25 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // Redirige proprement quand le user est effectivement présent dans le contexte
+  // (sinon ProtectedRoute renvoie vers /login → boucle après signIn).
+  // Aussi : si l'utilisateur est déjà connecté (session persistante), on le renvoie au dashboard.
+  useEffect(() => {
+    if (user) {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [user, navigate]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
       await signIn(email, password);
-      navigate("/dashboard");
+      // Le useEffect ci-dessus redirige dès que `user` est mis à jour dans le contexte.
+      // On garde loading=true jusqu'à la redirection.
     } catch (err) {
       setError(err?.message || t("auth.login.loginError"));
-    } finally {
       setLoading(false);
     }
   };

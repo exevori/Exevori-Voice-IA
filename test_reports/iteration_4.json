@@ -1,0 +1,41 @@
+{
+  "summary": "URGENT login bug retest — PASS. The Node v22 reinstall + Login.jsx useEffect([user]) refactor fully resolved the redirect race condition. Login with contact@exevori.com / Exevori_Test_2026! successfully redirects to /dashboard, session persists across reload, and protected routes /calls + /emails are accessible without re-login.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Dashboard page does NOT expose data-testid='patient-dashboard' or data-testid='dashboard' on its root element. The test relied on the absence of data-testid='login-card' + presence of nav-link-* sidebar items as proof of dashboard render. Consider adding data-testid='dashboard-page' on /dashboard root for cleaner E2E assertions in future iterations.",
+    "Login.jsx useEffect([user]) navigation pattern is correct and resolves the previous race condition with onAuthStateChange. Confirmed working across fresh login, page reload (Supabase localStorage persistence), and direct route navigation.",
+    "The frontend lives at /app/voicedesk_project/voicedesk/frontend (Vite on :3000) and backend at /app/voicedesk_project/voicedesk/backend (Node Express on :8001). REACT_APP_BACKEND_URL in /app/frontend/.env points to the preview URL but the actual app uses the local Vite dev URL — fine for this dev/preview setup."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only test)", "frontend": "100%"},
+  "test_credentials": "contact@exevori.com / Exevori_Test_2026! (super_admin, Exevori company)",
+  "seed_data_creation": "None — used existing seeded super_admin account.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login flow fully validated end-to-end. Confirmed data-testids on login: login-page, login-form, login-email-input, login-password-input, login-submit-button, login-card (removed after login). Confirmed nav sidebar testids: nav-link-dashboard, nav-link-calls, nav-link-outbound, nav-link-emails, nav-link-crm, nav-link-calendar, nav-link-knowledge, nav-link-config, nav-link-support. Dashboard does NOT have its own data-testid (use absence of login-card as proxy). Session persists via Supabase localStorage across page.reload() and direct route navigation. No console errors, no pageerrors, no network failures during login flow.",
+  "test_results_detail": {
+    "login_page_loads": "PASS — data-testid='login-page' (count=1) + data-testid='login-form' (count=1) present at http://localhost:3000/login",
+    "fill_credentials": "PASS — data-testid='login-email-input' and data-testid='login-password-input' both exist and accepted input",
+    "submit_redirects_to_dashboard": "PASS — wait_for_url('**/dashboard**', timeout=15s) succeeded; final URL = http://localhost:3000/dashboard",
+    "login_card_removed_after_login": "PASS — data-testid='login-card' count=0 on /dashboard",
+    "dashboard_testid_present": "PARTIAL — data-testid='patient-dashboard' nor data-testid='dashboard' is set (count=0). However sidebar + dashboard content render correctly, so this is a missing-testid observation, not a functional failure.",
+    "sidebar_nav_visible": "PASS — 9 nav-link-* items found including nav-link-calls and nav-link-emails",
+    "bonus_reload_persistence": "PASS — page.reload() kept user on /dashboard (Supabase localStorage session persisted)",
+    "bonus_nav_to_calls": "PASS — direct navigation to /calls stayed on /calls (no redirect to /login)",
+    "bonus_nav_to_emails": "PASS — direct navigation to /emails stayed on /emails (no redirect to /login)",
+    "console_errors": "NONE captured during login flow",
+    "page_errors": "NONE",
+    "network_failures": "NONE"
+  },
+  "rca_of_the_issue": "Previous bug: Login.jsx called navigate('/dashboard') immediately after supabase.auth.signInWithPassword resolved, BEFORE onAuthStateChange in AuthContext updated the user state. ProtectedRoute then saw !user and redirected back to /login, creating a loop. FIX VERIFIED: Login.jsx now uses useEffect with dependency [user] that triggers navigation only once user is set in AuthContext. Combined with Node v22 reinstall (Supabase realtime-js requires Node >=22 for native WebSocket support, otherwise backend crashes on startup), the entire login flow now works flawlessly."
+}
