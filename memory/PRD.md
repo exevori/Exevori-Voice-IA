@@ -66,6 +66,15 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 - Texte dynamique : "X en direct" (compteur tabular-nums)
 - Réutilisable Phase 8 quand Twilio sera branché
 
+### Testing (Iteration 4 — 13 juin 2026, URGENT bug fix)
+- 🚨 **Login bug bloquant résolu (100% PASS)** :
+  - **Root cause #1** : Node v22 downgradé à v20 par le superviseur Emergent → `@supabase/realtime-js` crashe au démarrage (« Node.js 20 detected without native WebSocket support ») → backend Express ne démarrait pas → les defaults Emergent (uvicorn Python sur 8001 + CRA sur 3000) prenaient la place.
+  - **Root cause #2** : `Login.jsx` appelait `navigate('/dashboard')` **avant** que `onAuthStateChange` ait mis à jour `user` dans `AuthContext` → `ProtectedRoute` voyait `!user` et redirigeait en boucle vers `/login`.
+  - **Fix #1** : Node ré-installé en v22 via `curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs`. Backend Express relancé sur 8001 + Vite sur 3000.
+  - **Fix #2** : `Login.jsx` refactoré pour utiliser `useEffect([user])` qui navigue dès que `user` est set. Bonus : redirige aussi si user déjà connecté à l'arrivée sur `/login`.
+- ✅ Validation : login + persistance localStorage + nav vers /calls /emails + reload → tous OK
+- Rapport: `/app/test_reports/iteration_4.json`
+
 ### Testing (Iteration 3 — 13 juin 2026)
 - ✅ Phase 4B `/emails` + LIVE badge `/calls` : **100% PASS** (login + impersonation + inbox 7 rows + filtres + détail Sheet + jump-to-draft + drafts 3 cards + Approve/Edit/Regenerate/Reject + LIVE badge 5s polling avec pulse)
 - 🐛 Bug post-test détecté et corrigé hors testing : la route `/drafts/:id/approve` tentait d'écrire status `"approved_pending_send"` qui viole la CHECK constraint `email_drafts_status_check` (valeurs valides : `pending_validation`, `sent`, `rejected`). Fix : toujours utiliser `"sent"` après approve manuel + warning Resend logué dans `ai_reasoning`. Contract API : `{success, sent_via_resend, send_warning}`.
