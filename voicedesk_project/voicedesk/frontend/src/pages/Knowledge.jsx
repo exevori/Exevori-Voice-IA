@@ -7,7 +7,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   BookOpen, Upload, Link as LinkIcon, FileText, Globe, Trash2,
-  Loader2, AlertCircle, CheckCircle2, Sparkles, Pencil, ChevronRight,
+  Loader2, AlertCircle, CheckCircle2, Sparkles, Pencil, ChevronRight, Brain, RefreshCw,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { Badge } from "../components/ui/badge.jsx";
@@ -16,6 +16,7 @@ import { Input } from "../components/ui/input.jsx";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../components/ui/sheet.jsx";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs.jsx";
 import DataTable, { RowActionButton } from "../components/common/DataTable.jsx";
+import SearchWidget from "../components/kb/SearchWidget.jsx";
 import { cn } from "../lib/utils.js";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -133,11 +134,41 @@ export default function Knowledge() {
     }
   };
 
+  const handleReembed = async (source) => {
+    // marker UI: on flag la source comme "reembedding" en local
+    setSources((arr) => arr.map((s) => s.id === source.id ? { ...s, _reembedding: true } : s));
+    try {
+      const r = await fetch(`${API}/api/v1/kb/sources/${source.id}/reembed`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ company_id: effectiveCompanyId }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      setSources((arr) => arr.map((s) => s.id === source.id
+        ? { ...s, _reembedding: false, embeddings_ready_at: d.embeddings_ready_at }
+        : s));
+      setToast({
+        type: "success",
+        msg: t("kb.toast.reembedded", "{{name}} ré-indexé — {{count}} chunks", { name: source.name, count: d.embedded_count }),
+      });
+    } catch (e) {
+      setSources((arr) => arr.map((s) => s.id === source.id ? { ...s, _reembedding: false } : s));
+      setToast({ type: "error", msg: e.message });
+    }
+  };
+
   const totals = useMemo(() => ({
     sources: sources.length,
     chunks:  sources.reduce((acc, s) => acc + (s.chunks_count || 0), 0),
     ready:   sources.filter((s) => s.status === "ready").length,
+    indexed: sources.filter((s) => s.embeddings_ready_at).length,
   }), [sources]);
+
+  const hasReadySources = useMemo(
+    () => sources.some((s) => s.status === "ready" && s.embeddings_ready_at),
+    [sources]
+  );
 
   const columns = useMemo(() => [
     {
@@ -183,6 +214,20 @@ export default function Knowledge() {
       render: (r) => <StatusBadge status={r.status} />,
     },
     {
+      key: "embeddings_ready_at",
+      header: t("kb.col.indexed", "Indexé IA"),
+      width: "120px",
+      render: (r) => (
+        r._reembedding
+          ? <Badge variant="default" className="text-[10px]" data-testid={`indexed-busy-${r.id}`}><Loader2 size={10} className="animate-spin" /> {t("kb.indexed.busy", "En cours")}</Badge>
+          : r.embeddings_ready_at
+            ? <Badge variant="green" className="text-[10px]" data-testid={`indexed-ready-${r.id}`}><Brain size={10} /> {t("kb.indexed.ready", "Indexé")}</Badge>
+            : r.status === "ready"
+              ? <Badge variant="ghost" className="text-[10px]" data-testid={`indexed-missing-${r.id}`}><AlertCircle size={10} /> {t("kb.indexed.missing", "À indexer")}</Badge>
+              : <span className="text-[10px] text-text-tertiary">—</span>
+      ),
+    },
+    {
       key: "created_at",
       header: t("kb.col.imported", "Importé"),
       width: "150px",
@@ -209,6 +254,7 @@ export default function Knowledge() {
           <Stat label={t("kb.stats.sources", "Sources")} value={totals.sources} testId="stat-sources" />
           <Stat label={t("kb.stats.chunks", "Chunks")}   value={totals.chunks}   testId="stat-chunks" />
           <Stat label={t("kb.stats.ready", "Prêts")}     value={totals.ready}    testId="stat-ready" />
+          <Stat label={t("kb.stats.indexed", "Indexés")} value={totals.indexed}  testId="stat-indexed" />
         </div>
       </div>
 
@@ -262,6 +308,16 @@ export default function Knowledge() {
         onRowClick={(row) => setSelectedId(row.id)}
         rowActions={(row) => (
           <div className="flex items-center gap-1">
+            {row.status === "ready" && (
+              <RowActionButton
+                onClick={() => handleReembed(row)}
+                data-testid={`reembed-source-${row.id}`}
+                disabled={row._reembedding}
+                title={t("kb.reembed.tooltip", "Régénérer les embeddings IA")}
+              >
+                {row._reembedding ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+              </RowActionButton>
+            )}
             <RowActionButton onClick={() => setSelectedId(row.id)} data-testid={`view-source-${row.id}`}>
               <ChevronRight size={14} />
             </RowActionButton>
@@ -283,6 +339,13 @@ export default function Knowledge() {
         onClose={() => setSelectedId(null)}
         token={token}
         t={t}
+      />
+
+      {/* KB+B — Widget "Testez votre IA" */}
+      <SearchWidget
+        token={token}
+        companyId={effectiveCompanyId}
+        hasReadySources={hasReadySources}
       />
 
       {toast && <Toast toast={toast} onClose={() => setToast(null)} />}

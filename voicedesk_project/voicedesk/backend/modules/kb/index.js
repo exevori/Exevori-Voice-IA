@@ -23,6 +23,8 @@ import * as cheerio from "cheerio";
 import { convert as htmlToText } from "html-to-text";
 import { encode as gptEncode } from "gpt-tokenizer";
 
+import { embedChunksOfSource, searchSimilarChunks } from "./rag.js";
+
 dotenv.config();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
@@ -111,11 +113,22 @@ router.post("/sources/upload", upload.single("file"), async (req, res) => {
     chunks_count: result.chunks_count,
   }).eq("id", source.id);
 
+  // KB+B — Embeddings (best-effort: si fail, source reste 'ready' mais sans embeddings,
+  // l'utilisateur pourra cliquer "Re-embed" plus tard).
+  let embeddings_ready_at = null;
+  try {
+    const emb = await embedChunksOfSource({ source_id: source.id, company_id });
+    embeddings_ready_at = emb.embeddings_ready_at;
+  } catch (e) {
+    console.warn(`[KB] embed upload source=${source.id}:`, e.message);
+  }
+
   return res.json({
     success: true,
-    source: { ...source, status: "ready", chunks_count: result.chunks_count, storage_path: storagePath },
+    source: { ...source, status: "ready", chunks_count: result.chunks_count, storage_path: storagePath, embeddings_ready_at },
     chunks_count: result.chunks_count,
     text_chars: text.length,
+    embeddings_ready: !!embeddings_ready_at,
   });
 });
 
@@ -184,11 +197,21 @@ router.post("/sources/scrape", express.json(), async (req, res) => {
     size_bytes: text.length,
   }).eq("id", source.id);
 
+  // KB+B — Embeddings (best-effort, idem upload)
+  let embeddings_ready_at = null;
+  try {
+    const emb = await embedChunksOfSource({ source_id: source.id, company_id });
+    embeddings_ready_at = emb.embeddings_ready_at;
+  } catch (e) {
+    console.warn(`[KB] embed scrape source=${source.id}:`, e.message);
+  }
+
   return res.json({
     success: true,
-    source: { ...source, status: "ready", chunks_count: result.chunks_count, size_bytes: text.length },
+    source: { ...source, status: "ready", chunks_count: result.chunks_count, size_bytes: text.length, embeddings_ready_at },
     chunks_count: result.chunks_count,
     text_chars: text.length,
+    embeddings_ready: !!embeddings_ready_at,
   });
 });
 
@@ -248,6 +271,70 @@ router.delete("/sources/:id", async (req, res) => {
     await supabase.storage.from("kb-uploads").remove([source.storage_path]).catch(() => {});
   }
   return res.json({ success: true });
+});
+
+// ─────────────────────────────────────────────────────────────
+// KB+B — POST /sources/search  (widget Knowledge + Phase 8 helper)
+// body: { company_id, query, topK?, minSimilarity? }
+// ─────────────────────────────────────────────────────────────
+router.post("/sources/search", express.json(), async (req, res) => {
+  const { company_id, query, topK, minSimilarity } = req.body;
+  if (!company_id || !query) {
+    return res.status(400).json({ error: "company_id et query requis" });
+  }
+  try {
+    const t0 = Date.now();
+    const results = await searchSimilarChunks({
+      company_id,
+      query,
+      topK: Number.isInteger(topK) ? topK : 3,
+      minSimilarity: typeof minSimilarity === "number" ? minSimilarity : 0.0,
+    });
+    return res.json({
+      success: true,
+      query,
+      results,
+      latency_ms: Date.now() - t0,
+    });
+  } catch (e) {
+    console.error("[KB] /search:", e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// KB+B — POST /sources/:id/reembed  (régénère embeddings d'une source)
+// body: { company_id }
+// ─────────────────────────────────────────────────────────────
+router.post("/sources/:id/reembed", express.json(), async (req, res) => {
+  const { id } = req.params;
+  const { company_id } = req.body;
+  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+
+  // Sanity check : la source existe et appartient bien à la company
+  const { data: source, error: sErr } = await supabase
+    .from("knowledge_sources")
+    .select("id, company_id, chunks_count, status")
+    .eq("id", id)
+    .maybeSingle();
+  if (sErr)                            return res.status(500).json({ error: sErr.message });
+  if (!source)                         return res.status(404).json({ error: "Source introuvable" });
+  if (source.company_id !== company_id) return res.status(403).json({ error: "Source d'un autre tenant" });
+  if (source.status !== "ready")       return res.status(409).json({ error: `Source en status '${source.status}' (doit être 'ready')` });
+
+  try {
+    const t0 = Date.now();
+    const result = await embedChunksOfSource({ source_id: id, company_id });
+    return res.json({
+      success: true,
+      embedded_count: result.embedded_count,
+      embeddings_ready_at: result.embeddings_ready_at,
+      latency_ms: Date.now() - t0,
+    });
+  } catch (e) {
+    console.error("[KB] /reembed:", e);
+    return res.status(500).json({ error: e.message });
+  }
 });
 
 // ============================================================

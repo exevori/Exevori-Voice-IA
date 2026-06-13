@@ -1,0 +1,38 @@
+{
+  "summary": "Phase KB+B (embeddings + semantic search) — backend + frontend testing COMPLETE. 13/13 backend pytest cases PASS. Frontend e2e flow validated end-to-end: stats (4 cards), upload auto-embed, search widget with relevance scoring, re-embed button transitions (busy → ready), toast notifications, and indexed stat counter. All success criteria met.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "KB Stats cards", "issues": ["Stat values render as '4Sources' (no space/separator between number and label). Cosmetic only — both elements visible but visually fused. Consider adding margin/break between value and label spans."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_kb_phase_b.py",
+    "/app/test_reports/pytest/iteration_6_kb_b.xml"
+  ],
+  "action_items": [
+    "(Optional cosmetic) Add visual separator in Stat component between value and label to avoid '4Sources' merged rendering.",
+    "(Pre-existing, not blocking KB+B) Dashboard page logs 'TypeError: Failed to fetch' in [Dashboard] loadAll — unrelated to KB but visible in console. Worth investigating in a separate iteration."
+  ],
+  "critical_code_review_comments": [
+    "rag.js embedChunksOfSource updates chunks one-by-one in a loop (lines 164-170). For sources with >50 chunks this becomes N round-trips to Supabase. Acceptable for current scale (target <200 chunks/source) but flagged for Phase 8 hardening — consider Postgres function or RPC bulk-update.",
+    "kb/index.js /reembed enforces source.company_id === company_id from request body, but body company_id comes from client. The Phase 8 hardening note (cross-check JWT.user vs company_id) still applies: a malicious client could pass another tenant's company_id only if they also have a valid source_id of that tenant — current 403 check prevents bleed, but consider deriving company_id from authenticated profile rather than trusting body. Already flagged in iteration_5.",
+    "Frontend SearchWidget: no debouncing on Enter key spam — could fire multiple parallel OpenAI requests if user mashes Enter while busy. Mitigated by `disabled={busy}` on button but Enter handler only checks `!busy` — minor.",
+    "embedChunksOfSource does not delete prior embeddings before re-embedding; just overwrites column by column. Safe but worth noting if a chunk count shrinks (e.g. content re-chunked elsewhere)."
+  ],
+  "updated_files": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_kb_phase_b.py (created)"
+  ],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (all e2e flows validated)"},
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (company_id af5f079f-6fc2-4d70-8c8d-51d83d301906)",
+  "seed_data_creation": "No persistent seed. All TEST_-prefixed sources + Wikipedia scrape source created during testing have been cleaned up post-run via DELETE /api/v1/kb/sources/:id. Final DB state for QA company: 0 sources (was empty before — table reverted to pre-test state).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "KB+B is production-ready. test_kb_phase_b.py covers: auto-embed on upload + scrape, search (success + edge cases empty/missing/unknown-tenant), reembed (success + 403 wrong tenant + 404 not found), and auth enforcement (401 on search/reembed/list without token). UI validated: stats refresh, indexed badges (ready/missing/busy states), reembed button workflow, search widget input + button + results layout + score % + source name + content, and off-topic query handling (very low scores 5-8%). Note: the spec said 'soit results=[] avec no-results visible, soit results avec scores tres bas (<30%)' — implementation returns scores in the 5-8% range for off-topic, satisfying the second clause.",
+  "rca of the issue": "N/A — no bugs found in KB+B implementation."
+}
