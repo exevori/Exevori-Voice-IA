@@ -353,7 +353,7 @@ function TeamTab() {
     if (!inviteEmail.trim()) return;
     setBusy(true); setFeedback(null);
     try {
-      const r = await fetch(`${API}/api/v1/auth/invite`, {
+      const r = await fetch(`${API}/api/v1/team/invitations`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -365,7 +365,7 @@ function TeamTab() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setInviteEmail("");
-      setFeedback({ type: "success", msg: t("settings.team.invited", "Invitation envoyée à {{email}}", { email: d.email || inviteEmail }) });
+      setFeedback({ type: "success", msg: t("settings.team.invited", "Invitation envoyée à {{email}}", { email: d.invitation?.email || inviteEmail }) });
       fetchTeam();
     } catch (e) {
       setFeedback({ type: "error", msg: e.message });

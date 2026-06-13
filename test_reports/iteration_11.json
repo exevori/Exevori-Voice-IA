@@ -1,0 +1,45 @@
+{
+  "summary": "Phase 6A RETEST — Team invite endpoint fix VERIFIED. Backend POST /api/v1/team/invitations: 10/10 pytest pass (success, invalid role 'admin'/'foo', malformed email, missing company_id, missing email, duplicate-member 409, duplicate-pending 409, no-token 401, cancel + idempotent re-cancel). Frontend invite flow: 4/4 UI tests pass (success+row+input cleared, cancel removes row, duplicate-member error 'Ce courriel correspond déjà à un membre de cette entreprise', malformed email 'Courriel invalide'). Cleanup verified — 0 leftover pending invitations. Bug from iteration_10 fully resolved.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_team_invitations_phase_6a.py",
+    "/app/backend/tests/test_settings_phase_6a.py",
+    "/app/test_reports/pytest/iteration_11.xml"
+  ],
+  "action_items": [
+    "Phase 6A complete and green. Ready to move to Phase 6E (Resend email integration for invite_url) or next phase.",
+    "Optional (pre-existing, non-blocking): loadProfile race condition on dashboard mount logs 'Failed to fetch' once after Supabase signIn. Already noted iteration_10, did not regress and does not block any flow."
+  ],
+  "critical_code_review_comments": [
+    "POST /api/v1/team/invitations cleanly separates per-company member invites from super-admin onboarding /auth/invite — correct architectural split.",
+    "Validations are correct (role whitelist, email regex, duplicate-member 409, duplicate-pending 409). 401 enforced by upstream requireAuth middleware (verified).",
+    "Cancel is idempotent at HTTP level (200 on re-cancel) because the update sets status='cancelled' on a row that still exists — good. Note: maybeSingle() returns null only if 0 rows; an already-cancelled row still matches the id filter so .update returns the row → second cancel returns 200 as expected.",
+    "invite_url is returned in JSON for debug since Resend not wired yet (Phase 6E). Make sure to remove or guard this in production once email sending lands.",
+    "Frontend handleInvite correctly displays backend error via `d.error || HTTP ${r.status}` → preserves localized French messages. settings-feedback testid is present on both success and error states."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_team_invitations_phase_6a.py (NEW — 10 pytest cases)"
+  ],
+  "success_rate": {
+    "backend": "100% (10/10 new + 13/13 from iteration_10 still applicable)",
+    "frontend": "100% (4/4 invite flow scenarios)"
+  },
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (company_id=af5f079f-6fc2-4d70-8c8d-51d83d301906)",
+  "seed_data_creation": "Created and cancelled ~5 temporary invitations (qa-test-*, qa-dup-*, qa-cancel-*, qa-ui-invite-*) during testing. All cleaned up (verified 0 pending invitations remaining for the company).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 6A is now 100% green. Both backend pytest suites can be rerun as regression at any time. For Phase 6E (Resend email), focus on: (a) endpoint still returns invite_url for non-prod environments, (b) email send is non-blocking (don't fail invite creation if Resend is down), (c) /invite/:token consumption flow.",
+  "rca_of_the_issue": {
+    "bug": "iteration_10 — TeamTab.handleInvite() pointed at /api/v1/auth/invite (super-admin onboarding) so invites for an existing company always returned 400.",
+    "fix_applied": "New backend endpoint POST /api/v1/team/invitations in /app/voicedesk_project/voicedesk/backend/modules/team/index.js (lines 50-118). Frontend Settings.jsx handleInvite (line 356) now POSTs to the new endpoint with {company_id,email,role}.",
+    "verification": "10 backend pytest cases + 4 frontend Playwright scenarios all pass. Cleanup verified — no leftover pending invitations."
+  }
+}

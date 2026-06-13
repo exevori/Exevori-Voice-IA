@@ -9,6 +9,7 @@
 
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
+import crypto from "node:crypto";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -42,6 +43,76 @@ router.get("/", async (req, res) => {
     });
   } catch (err) {
     console.error("[TEAM] GET error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/v1/team/invitations  — créer une invitation pour une PME EXISTANTE
+// body: { company_id, email, role: 'company_admin' | 'company_member' }
+// Différent de /auth/invite qui crée un NOUVEAU tenant.
+router.post("/invitations", express.json(), async (req, res) => {
+  const { company_id, email, role = "company_member" } = req.body;
+  if (!company_id || !email) return res.status(400).json({ error: "company_id et email requis" });
+  if (!["company_admin", "company_member"].includes(role)) {
+    return res.status(400).json({ error: "role invalide (company_admin ou company_member)" });
+  }
+  const cleanEmail = String(email).trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    return res.status(400).json({ error: "Courriel invalide" });
+  }
+
+  try {
+    // Évite les doublons actifs
+    const { data: dup } = await supabase
+      .from("invitations")
+      .select("id, status")
+      .eq("company_id", company_id)
+      .eq("email", cleanEmail)
+      .in("status", ["pending"])
+      .maybeSingle();
+    if (dup) {
+      return res.status(409).json({ error: "Une invitation est déjà en attente pour ce courriel" });
+    }
+    // Évite d'inviter un membre déjà actif
+    const { data: existing } = await supabase
+      .from("profiles")
+      .select("id, status")
+      .eq("company_id", company_id)
+      .eq("email", cleanEmail)
+      .maybeSingle();
+    if (existing) {
+      return res.status(409).json({ error: "Ce courriel correspond déjà à un membre de cette entreprise" });
+    }
+
+    const token = crypto.randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(); // 7 jours
+    const sent_by = req.user?.id || null; // injecté par requireAuth middleware
+
+    const { data, error } = await supabase
+      .from("invitations")
+      .insert({
+        company_id,
+        email: cleanEmail,
+        role,
+        token,
+        status: "pending",
+        sent_by,
+        expires_at: expiresAt,
+      })
+      .select("id, email, role, status, expires_at, created_at")
+      .single();
+    if (error) throw error;
+
+    // Note: envoi email réel via Resend = Phase 6E ou Phase 8.
+    // En attendant on retourne l'URL pour debug/preview.
+    const inviteUrl = `${process.env.FRONTEND_URL || ""}/invite/${token}`;
+    return res.json({
+      success: true,
+      invitation: data,
+      invite_url: inviteUrl,
+    });
+  } catch (err) {
+    console.error("[TEAM] invite error:", err);
     return res.status(500).json({ error: err.message });
   }
 });
