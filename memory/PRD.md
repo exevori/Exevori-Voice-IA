@@ -50,6 +50,27 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 - `assistant_name` toujours lu depuis `assistant_configs.name` (jamais hardcodé)
 - Testing iteration_2 : **100% PASS** sur tous les flows critiques
 
+### Phase 4B — Courriels (DONE — 13 juin 2026)
+- Backend `modules/email/index.js` étendu :
+  - `GET /api/v1/emails` (NOUVEAU) — liste boîte de réception avec filtres status/classification/search + enrichissement contact
+  - `GET /api/v1/emails/:id` (NOUVEAU) — détail email + draft associé (best-effort)
+  - `PATCH /api/v1/emails/drafts/:id` (NOUVEAU) — sauvegarde inline du body/subject
+  - `GET /drafts`, `POST /drafts/:id/approve`, `/reject`, `/regenerate` **FIXÉS** (mauvaise relation Supabase `emails!related_email_id` → hydration manuelle via `email_id` ; colonnes inexistantes `rejection_reason`/`regenerated_count`/status `approved_pending_send` violant CHECK constraint → simplification + log dans `ai_reasoning`)
+- Frontend `pages/Emails.jsx` : 2 Tabs (Boîte de réception avec DataTable+FilterBar / Brouillons à valider avec liste de DraftCard) + badge orange counter sur tab brouillons + EmailDetailSheet avec bouton "Voir le brouillon de réponse"
+- Frontend `components/emails/DraftCard.jsx` — composant **réutilisable Phase 8+ et Phase 10+** : 4 actions (Approve+envoi Resend / Edit inline subject+body / Regenerate avec instruction optionnelle / Reject avec motif), affiche source meta + confidence pill colorée + ai_reasoning
+- Seed `seed-phase4b-emails.js` — 5 emails (devis pneus, confirmation RDV, garantie, spam B2B, support freins) + 3 drafts FR plausibles pour Garage Tremblay
+
+### Phase 4A BONUS — Live badge sur /calls (DONE — 13 juin 2026)
+- Polling `GET /api/v1/calls/stats` toutes les 5s
+- `LiveBadge` avec animation `animate-ping` (dot rouge clignotant) si `by_status.in_progress > 0`
+- Texte dynamique : "X en direct" (compteur tabular-nums)
+- Réutilisable Phase 8 quand Twilio sera branché
+
+### Testing (Iteration 3 — 13 juin 2026)
+- ✅ Phase 4B `/emails` + LIVE badge `/calls` : **100% PASS** (login + impersonation + inbox 7 rows + filtres + détail Sheet + jump-to-draft + drafts 3 cards + Approve/Edit/Regenerate/Reject + LIVE badge 5s polling avec pulse)
+- 🐛 Bug post-test détecté et corrigé hors testing : la route `/drafts/:id/approve` tentait d'écrire status `"approved_pending_send"` qui viole la CHECK constraint `email_drafts_status_check` (valeurs valides : `pending_validation`, `sent`, `rejected`). Fix : toujours utiliser `"sent"` après approve manuel + warning Resend logué dans `ai_reasoning`. Contract API : `{success, sent_via_resend, send_warning}`.
+- Rapport: `/app/test_reports/iteration_3.json`
+
 ### Testing (Iteration 2 — 12 juin 2026)
 - ✅ Phase 4A `/calls` : **100% PASS** (login + impersonation + table 11 rows + filtres + détail Sheet + TranscriptView + bouton "Voir fiche contact")
 - Rapport: `/app/test_reports/iteration_2.json`
@@ -64,7 +85,9 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 ## Backlog priorisé
 
 ### P0 (next)
-- **Phase 4B** — Page `/emails` : 2 Tabs (Boîte de réception + Brouillons à valider) + DraftCard avec 4 actions (Approve / Edit / Regen / Reject). Backend : nouvelles routes `GET /api/v1/emails` (list) et `GET /api/v1/emails/:id` (detail) à créer — les routes drafts existent déjà.
+- **Phase 8** OU **Phase 9** au choix client :
+  - **Phase 8** — Branchement intégrations réelles : Twilio (voice webhook → table `calls`), ElevenLabs (TTS), Resend (real `RESEND_API_KEY` au lieu du placeholder). Le LIVE badge sera alors connecté à des appels réels et le bouton Approve enverra réellement les courriels.
+  - **Phase 9** — Déploiement Vercel (frontend) + Fly.io (backend) pour démos clients.
 
 ### P1
 - **Phase 8** — Intégrations: Twilio (voice), ElevenLabs (TTS), Resend (mail)

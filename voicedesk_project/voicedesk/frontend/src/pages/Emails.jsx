@@ -162,12 +162,13 @@ export default function Emails() {
       body: JSON.stringify({ edited_body: body, edited_subject: subject }),
     });
     const d = await res.json();
+    if (!d.success) throw new Error(d.error || "Approbation échouée");
     setDrafts((arr) => arr.filter((x) => x.id !== id));
     setToast({
-      type: d.send_warning ? "warn" : "success",
-      msg: d.send_warning
-        ? t("emails.toast.approvedNoSend", "Brouillon approuvé (envoi Resend non configuré)")
-        : t("emails.toast.sent", "Courriel envoyé"),
+      type: d.sent_via_resend ? "success" : "warn",
+      msg: d.sent_via_resend
+        ? t("emails.toast.sent", "Courriel envoyé")
+        : t("emails.toast.approvedNoSend", "Brouillon approuvé — l'envoi automatique via Resend n'est pas configuré."),
     });
   }, [token, t]);
 

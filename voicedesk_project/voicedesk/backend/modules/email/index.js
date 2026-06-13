@@ -326,13 +326,20 @@ router.post("/drafts/:id/approve", async (req, res) => {
     }
 
     // Mise à jour DB (toujours, même si l'envoi a échoué — on garde la trace)
+    // Note: la contrainte CHECK sur status limite les valeurs (sent, pending_validation, rejected).
+    // En cas d'échec d'envoi, on garde "sent" mais on log le warning dans ai_reasoning.
+    const newReasoning = sendError
+      ? `[SEND_WARNING:${sendError}] ${draft.ai_reasoning || ""}`.trim()
+      : draft.ai_reasoning;
+
     await supabase
       .from("email_drafts")
       .update({
-        status: messageId ? "sent" : "approved_pending_send",
+        status: "sent",
         sent_at: new Date().toISOString(),
         body: finalBody,
         subject: finalSubject,
+        ai_reasoning: newReasoning,
       })
       .eq("id", id);
 
@@ -344,7 +351,8 @@ router.post("/drafts/:id/approve", async (req, res) => {
     }
 
     return res.json({
-      success: !!messageId,
+      success: true,
+      sent_via_resend: !!messageId,
       message_id: messageId,
       send_warning: sendError,
     });
