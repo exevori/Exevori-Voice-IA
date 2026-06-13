@@ -66,6 +66,38 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 - Texte dynamique : "X en direct" (compteur tabular-nums)
 - Réutilisable Phase 8 quand Twilio sera branché
 
+### Phase KB+B — Embeddings & Semantic Search (DONE — 13 juin 2026)
+- **DB migration** `migrations/002_kb_plus_b.sql` exécutée manuellement par user :
+  - Colonne `knowledge_sources.embeddings_ready_at TIMESTAMPTZ` (tracking ingest)
+  - Index ivfflat cosine `idx_kc_embedding_ivfflat` sur `knowledge_chunks.embedding` (lists=100)
+  - Fonction Postgres `match_kb_chunks(p_company_id, p_query_embed, p_match_count, p_min_similarity)` — réutilisable Phase 8 (Léa appellera la function via Supabase RPC pendant un appel)
+- **3rd party integration** : OpenAI direct via `fetch` Node 22 (PAS via emergentintegrations — embeddings non supportés par Emergent LLM Key)
+  - Modèle: `text-embedding-3-small` (1536 dims)
+  - Clé: `OPENAI_API_KEY=sk-proj-...` ajoutée à `/app/voicedesk_project/voicedesk/.env`
+  - Coût: ~0,02 USD / 1M tokens — limite mensuelle OpenAI fixée à 5 USD avec alerte 1 USD (sécurité)
+  - Projet OpenAI dédié `exevori-voice-ia` avec model access restreint à `text-embedding-3-small` uniquement
+- **Backend RAG helper** `modules/kb/rag.js` (nouveau, 145 lignes) — **réutilisable Phase 8** :
+  - `embedText(text)` → 1 string → vector(1536)
+  - `embedBatch(texts[])` → batché par 96 (sous limite OpenAI 2048) avec retry exponentiel 3 tentatives
+  - `searchSimilarChunks({company_id, query, topK, minSimilarity})` → utilise `match_kb_chunks` RPC
+  - `embedChunksOfSource({source_id, company_id})` → fetch all chunks → embedBatch → update DB → set `embeddings_ready_at`
+- **Backend KB router modifié** `modules/kb/index.js` :
+  - `POST /upload` et `POST /scrape` appellent maintenant `embedChunksOfSource` en best-effort après chunking (si échoue, source reste `ready` sans embeddings → user peut cliquer Re-embed)
+  - **NOUVEAU** `POST /sources/search` : body `{company_id, query, topK?, minSimilarity?}` → `{success, query, results, latency_ms}` — utilisé par widget UI + Phase 8 (Léa)
+  - **NOUVEAU** `POST /sources/:id/reembed` : body `{company_id}` (sanity check tenant via `source.company_id===company_id`, sinon 403) → régénère embeddings
+- **Frontend UI** :
+  - **NOUVEAU composant** `components/kb/SearchWidget.jsx` — *"Testez votre IA"* : input + bouton Tester → 3 chunks avec score % colorisé (vert ≥75%, amber ≥50%, gris <50%) + nom source + extrait line-clamp-5. Affiche `kb.search.noSources` si aucune source indexée.
+  - **Knowledge.jsx modifié** : 4e stat `stat-indexed` (compteur sources avec embeddings), nouvelle colonne `Indexé IA` (badges `indexed-ready-{id}` vert / `indexed-missing-{id}` ghost / `indexed-busy-{id}` spinner), bouton `reembed-source-{id}` (icône RefreshCw) dans rowActions sur sources ready, SearchWidget monté en bas de page
+  - data-testids tous en place pour QA : `kb-search-widget`, `search-widget-input/button/empty-hint/error/no-results/results`, `search-result-{0..2}-source/-score/-content`
+- **Testing iteration_6** : **100% PASS** (13/13 backend pytest + tous flows frontend e2e validés)
+  - Coût OpenAI testing run : ~0,0003 USD (largement sous la limite 5 USD/mois)
+  - Cleanup automatique des sources de test post-run
+  - 1 nit cosmétique fixé : `Stat` component ajoute `aria-label="X label"` + `mt-1` pour espacement label/value
+- ⚠️ Points trackés (non-bloquants) :
+  - `embedChunksOfSource` update les chunks 1-par-1 (N round-trips Supabase) — OK pour <200 chunks/source, bulk-update à considérer Phase 8 si scale
+  - `/reembed` cross-check `source.company_id === body.company_id` (déjà OK), mais idéalement on devrait dériver company_id du JWT (idem note Phase 8 de iteration_5)
+  - SearchWidget Enter spam non-debouncé (mitigé par `disabled={busy}` sur button)
+
 ### Phase KB+A — Knowledge Base ingestion (DONE — 13 juin 2026)
 - **DB migration** `migrations/001_kb_plus_a.sql` exécutée manuellement par user :
   - Tables `knowledge_sources` (id, company_id, type[upload/url/manual], name, url, storage_path, mime_type, size_bytes, status[pending/processing/ready/error], error_message, chunks_count, created_by) et `knowledge_chunks` (id, source_id, chunk_index, content, token_count, embedding vector(1536) [null en KB+A])
@@ -115,7 +147,7 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 ## Backlog priorisé
 
 ### P0 (next) — Ordre validé par Karim
-1. **Phase KB+B** — Embeddings OpenAI text-embedding-3-small via Emergent LLM Key + UI recherche sémantique (testing avec qa-bot)
+1. ~~**Phase KB+B**~~ ✅ DONE
 2. **Phase Reports+A** — Dashboard ROI live + `TimeSavedCard` (4 KPIs) sur main Dashboard
 3. **Phase Reports+B** — Export PDF/CSV (pdfkit + csv-stringify + archiver)
 

@@ -475,9 +475,13 @@ function StatusBadge({ status }) {
 
 function Stat({ label, value, testId }) {
   return (
-    <div className="rounded-md border border-border bg-white/3 px-3 py-1.5 text-center" data-testid={testId}>
+    <div
+      className="rounded-md border border-border bg-white/3 px-3 py-1.5 text-center"
+      data-testid={testId}
+      aria-label={`${value} ${label}`}
+    >
       <div className="text-base font-bold text-text-primary tabular-nums leading-none">{value}</div>
-      <div className="text-[9px] uppercase tracking-wider text-text-tertiary mt-0.5">{label}</div>
+      <div className="text-[9px] uppercase tracking-wider text-text-tertiary mt-1">{label}</div>
     </div>
   );
 }
