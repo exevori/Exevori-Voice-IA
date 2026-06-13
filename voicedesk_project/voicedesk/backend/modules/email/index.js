@@ -31,6 +31,70 @@ const AI_GATEWAY_URL = process.env.AI_GATEWAY_URL || "http://localhost:3100";
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────
+// GET /api/v1/emails
+// Liste boîte de réception (avec filtres status, classification, search)
+// ─────────────────────────────────────────────────────────────
+router.get("/", async (req, res) => {
+  const {
+    company_id,
+    status,
+    classification,
+    search,
+    sort = "received_at",
+    order = "desc",
+    limit = 50,
+    offset = 0,
+  } = req.query;
+
+  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+
+  try {
+    let query = supabase
+      .from("emails")
+      .select("*", { count: "exact" })
+      .eq("company_id", company_id);
+
+    if (status) query = query.eq("status", status);
+    if (classification) query = query.eq("classification", classification);
+    if (search) {
+      query = query.or(
+        `subject.ilike.%${search}%,from_email.ilike.%${search}%,from_name.ilike.%${search}%,ai_summary.ilike.%${search}%`
+      );
+    }
+
+    const { data, error, count } = await query
+      .order(sort, { ascending: order === "asc" })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+    if (error) throw error;
+
+    // Enrichir avec contact (best-effort)
+    const contactIds = [...new Set((data || []).map((e) => e.contact_id).filter(Boolean))];
+    let contactMap = {};
+    if (contactIds.length > 0) {
+      const { data: contacts } = await supabase
+        .from("contacts")
+        .select("id, full_name, status")
+        .in("id", contactIds);
+      contactMap = Object.fromEntries((contacts || []).map((c) => [c.id, c]));
+    }
+    const enriched = (data || []).map((e) => ({
+      ...e,
+      contact: e.contact_id ? contactMap[e.contact_id] || null : null,
+    }));
+
+    return res.json({
+      emails: enriched,
+      total: count,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
 // POST /api/v1/emails/incoming
 // Webhook appelé par Gmail Push OU Resend quand nouveau courriel
 // ─────────────────────────────────────────────────────────────
@@ -152,15 +216,49 @@ router.post("/incoming", async (req, res) => {
 router.get("/drafts", async (req, res) => {
   const { company_id, status = "pending_validation" } = req.query;
 
-  const { data, error } = await supabase
-    .from("email_drafts")
-    .select("*, emails!related_email_id(from_email, from_name, subject, body, received_at), contacts(full_name, company)")
-    .eq("company_id", company_id)
-    .eq("status", status)
-    .order("created_at", { ascending: false });
+  if (!company_id) return res.status(400).json({ error: "company_id requis" });
 
-  if (error) return res.status(500).json({ error: error.message });
-  return res.json({ drafts: data });
+  try {
+    const { data: drafts, error } = await supabase
+      .from("email_drafts")
+      .select("*")
+      .eq("company_id", company_id)
+      .eq("status", status)
+      .order("created_at", { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Hydrater email + contact
+    const emailIds   = [...new Set((drafts || []).map((d) => d.email_id).filter(Boolean))];
+    let emailMap = {};
+    let contactMap = {};
+    if (emailIds.length > 0) {
+      const { data: emails } = await supabase
+        .from("emails")
+        .select("id, from_email, from_name, subject, body, received_at, ai_summary, classification, contact_id")
+        .in("id", emailIds);
+      emailMap = Object.fromEntries((emails || []).map((e) => [e.id, e]));
+
+      const contactIds = [...new Set((emails || []).map((e) => e.contact_id).filter(Boolean))];
+      if (contactIds.length > 0) {
+        const { data: contacts } = await supabase
+          .from("contacts")
+          .select("id, full_name, company")
+          .in("id", contactIds);
+        contactMap = Object.fromEntries((contacts || []).map((c) => [c.id, c]));
+      }
+    }
+
+    const enriched = (drafts || []).map((d) => {
+      const email = emailMap[d.email_id] || null;
+      const contact = email?.contact_id ? contactMap[email.contact_id] || null : null;
+      return { ...d, email, contact };
+    });
+
+    return res.json({ drafts: enriched });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -172,52 +270,113 @@ router.post("/drafts/:id/approve", async (req, res) => {
   const { edited_body, edited_subject } = req.body;
 
   try {
-    const { data: draft } = await supabase
+    const { data: draft, error: dErr } = await supabase
       .from("email_drafts")
-      .select("*, emails!related_email_id(from_email, from_name, subject), companies(*)")
+      .select("*")
       .eq("id", id)
       .single();
+    if (dErr || !draft) return res.status(404).json({ error: "brouillon introuvable" });
 
-    if (!draft) return res.status(404).json({ error: "brouillon introuvable" });
+    // Récupérer l'email source (peut être null si standalone draft)
+    let sourceEmail = null;
+    if (draft.email_id) {
+      const { data: e } = await supabase
+        .from("emails")
+        .select("id, from_email, from_name, subject")
+        .eq("id", draft.email_id)
+        .maybeSingle();
+      sourceEmail = e || null;
+    }
 
+    const finalSubject = edited_subject || draft.subject;
+    const finalBody    = edited_body || draft.body;
+    const recipient    = draft.to_email || sourceEmail?.from_email;
+    if (!recipient) return res.status(400).json({ error: "Destinataire introuvable" });
+
+    // Config assistante (pour from + reply-to). Best-effort.
     const { data: config } = await supabase
       .from("assistant_configs")
       .select("*")
       .eq("company_id", draft.company_id)
-      .single();
+      .maybeSingle();
+    const { data: company } = await supabase
+      .from("companies")
+      .select("name")
+      .eq("id", draft.company_id)
+      .maybeSingle();
 
-    const finalSubject = edited_subject || draft.subject;
-    const finalBody = edited_body || draft.body;
+    // Envoi via Resend (si configuré)
+    let messageId = null;
+    let sendError = null;
+    if (process.env.RESEND_API_KEY && config?.email_from) {
+      try {
+        const result = await sendEmailViaResend({
+          from: `${company?.name || "Garage"} <${config.email_from}>`,
+          to: recipient,
+          subject: finalSubject,
+          html: finalBody.replace(/\n/g, "<br>"),
+          replyTo: config.email_reply_to,
+        });
+        messageId = result?.id;
+      } catch (e) {
+        sendError = e.message;
+      }
+    } else {
+      sendError = "resend_not_configured";
+    }
 
-    // Envoi via Resend
-    const result = await sendEmailViaResend({
-      from: `${draft.companies?.name} <${config.email_from}>`,
-      to: draft.emails.from_email,
-      subject: finalSubject,
-      html: finalBody.replace(/\n/g, "<br>"),
-      replyTo: config.email_reply_to,
-    });
+    // Mise à jour DB (toujours, même si l'envoi a échoué — on garde la trace)
+    await supabase
+      .from("email_drafts")
+      .update({
+        status: messageId ? "sent" : "approved_pending_send",
+        sent_at: new Date().toISOString(),
+        body: finalBody,
+        subject: finalSubject,
+      })
+      .eq("id", id);
 
-    // Mise à jour DB
-    await Promise.all([
-      supabase
-        .from("email_drafts")
-        .update({
-          status: "sent",
-          sent_at: new Date(),
-          final_body: finalBody,
-          final_subject: finalSubject,
-        })
-        .eq("id", id),
-      supabase
+    if (sourceEmail) {
+      await supabase
         .from("emails")
-        .update({ status: "replied", responded_at: new Date() })
-        .eq("id", draft.related_email_id),
-    ]);
+        .update({ status: "replied" })
+        .eq("id", sourceEmail.id);
+    }
 
-    return res.json({ success: true, message_id: result.id });
+    return res.json({
+      success: !!messageId,
+      message_id: messageId,
+      send_warning: sendError,
+    });
   } catch (err) {
     console.error("[EMAIL] Approve error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// PATCH /api/v1/emails/drafts/:id
+// Sauvegarder une modification inline (body/subject) avant approval
+// ─────────────────────────────────────────────────────────────
+router.patch("/drafts/:id", async (req, res) => {
+  const { id } = req.params;
+  const updates = {};
+  if (req.body.body != null) updates.body = req.body.body;
+  if (req.body.subject != null) updates.subject = req.body.subject;
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: "Aucune modification" });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("email_drafts")
+      .update(updates)
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) throw error;
+    return res.json({ success: true, draft: data });
+  } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 });
@@ -230,16 +389,18 @@ router.post("/drafts/:id/reject", async (req, res) => {
   const { id } = req.params;
   const { reason } = req.body;
 
-  await supabase
-    .from("email_drafts")
-    .update({
-      status: "rejected",
-      rejection_reason: reason || "Refusé par l'admin",
-      rejected_at: new Date(),
-    })
-    .eq("id", id);
-
-  return res.json({ success: true });
+  try {
+    // ai_reasoning sert de log post-mortem ; on stocke aussi la raison du rejet ici
+    const newReasoning = reason ? `[REJECTED] ${reason}` : "[REJECTED] Refusé par l'admin";
+    const { error } = await supabase
+      .from("email_drafts")
+      .update({ status: "rejected", ai_reasoning: newReasoning })
+      .eq("id", id);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -250,30 +411,99 @@ router.post("/drafts/:id/regenerate", async (req, res) => {
   const { id } = req.params;
   const { instruction } = req.body;
 
-  const { data: draft } = await supabase
-    .from("email_drafts")
-    .select("*, emails!related_email_id(*)")
-    .eq("id", id)
-    .single();
+  try {
+    const { data: draft, error: dErr } = await supabase
+      .from("email_drafts")
+      .select("*")
+      .eq("id", id)
+      .single();
+    if (dErr || !draft) return res.status(404).json({ error: "brouillon introuvable" });
 
-  const newDraft = await callAIGateway({
-    task: "regenerate_email_draft",
-    company_id: draft.company_id,
-    email: draft.emails,
-    previous_draft: draft.body,
-    instruction,
-  });
+    // Récupérer email source pour donner du contexte à l'IA
+    let sourceEmail = null;
+    if (draft.email_id) {
+      const { data: e } = await supabase
+        .from("emails")
+        .select("from_email, from_name, subject, body")
+        .eq("id", draft.email_id)
+        .maybeSingle();
+      sourceEmail = e || null;
+    }
 
-  await supabase
-    .from("email_drafts")
-    .update({
-      body: newDraft?.body || draft.body,
-      subject: newDraft?.subject || draft.subject,
-      regenerated_count: (draft.regenerated_count || 0) + 1,
-    })
-    .eq("id", id);
+    // Best-effort : appel AI Gateway (si configuré). Fallback : on garde l'ancien body.
+    let newDraft = null;
+    try {
+      newDraft = await callAIGateway({
+        task: "regenerate_email_draft",
+        company_id: draft.company_id,
+        email: sourceEmail,
+        previous_draft: draft.body,
+        instruction,
+      });
+    } catch (e) {
+      console.warn("[EMAIL] AI regenerate failed, keeping previous draft:", e.message);
+    }
 
-  return res.json({ success: true, draft: newDraft });
+    const finalBody = newDraft?.body || draft.body;
+    const finalSubject = newDraft?.subject || draft.subject;
+    const reasoning = instruction
+      ? `[REGEN] ${instruction}`
+      : (draft.ai_reasoning || "[REGEN] Régénération sans instruction");
+
+    const { data: updated, error: uErr } = await supabase
+      .from("email_drafts")
+      .update({ body: finalBody, subject: finalSubject, ai_reasoning: reasoning })
+      .eq("id", id)
+      .select()
+      .single();
+    if (uErr) throw uErr;
+
+    return res.json({ success: true, draft: updated });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/v1/emails/:id
+// Détail d'un email + draft associé (si existe) + contact
+// ATTENTION : doit rester APRÈS toutes les routes /drafts/*
+// ─────────────────────────────────────────────────────────────
+router.get("/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { data: email, error } = await supabase
+      .from("emails")
+      .select("*")
+      .eq("id", id)
+      .single();
+    if (error || !email) return res.status(404).json({ error: "Courriel introuvable" });
+
+    let contact = null;
+    if (email.contact_id) {
+      const { data: c } = await supabase
+        .from("contacts")
+        .select("id, full_name, email, phone, company, status")
+        .eq("id", email.contact_id)
+        .maybeSingle();
+      contact = c || null;
+    }
+
+    // Draft associé (best-effort — peut ne pas exister)
+    const { data: drafts } = await supabase
+      .from("email_drafts")
+      .select("*")
+      .eq("email_id", id)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    return res.json({
+      email: { ...email, contact },
+      draft: drafts?.[0] || null,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────

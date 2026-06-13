@@ -1,0 +1,50 @@
+{
+  "summary": "Phase 4B (/emails page with Inbox + Drafts tabs + DraftCard 4 actions) and Phase 4A BONUS (LIVE badge with 5s polling on /calls) fully tested end-to-end. All acceptance criteria PASS. No bugs found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "DraftCard.jsx (311 lines) is well-structured and reusable — good prep for Phase 8+ (post-call drafts) and Phase 10+ (SMS). Props API is clean.",
+    "Emails.jsx (~500 lines) is approaching the 700-line soft threshold. EmailDetailSheet, Toast, ClassifBadge, StatusBadge helpers could be extracted to /components/emails/ in a future refactor.",
+    "Sheet/DialogContent: console warns 'Missing Description or aria-describedby={undefined} for {DialogContent}' — minor a11y warning from Radix on the email detail sheet. Add SheetDescription (or aria-describedby) for screen readers.",
+    "WebSocket wss://localhost connection refused — Vite HMR noise, dev-env only, not user-impacting.",
+    "Toast component uses fixed bottom-6 right-6 and disappears after 4s — fine, but no aria-live polite/assertive attribute beyond role='status'. Acceptable for MVP.",
+    "DraftCard correctly never hardcodes assistant name (Léa/Marie) — confirmed: only renders draft.subject, draft.body, sourceMeta from API. Compliant with Karim's requirement.",
+    "LiveBadge animation uses animate-ping (Tailwind) — correct pulse behavior confirmed in DOM."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only test)", "frontend": "100%"},
+  "test_credentials": "contact@exevori.com / Exevori_Test_2026! (super_admin). Impersonated: Garage Tremblay (af5f079f-6fc2-4d70-8c8d-51d83d301906) via localStorage 'voicedesk_impersonate_company'.",
+  "seed_data_creation": "Ran `node seed-phase4b-emails.js` once before testing — 5 emails + 3 drafts. Tests CONSUMED 1 draft (approve) + 1 draft (reject) — the 3rd draft remains (edited + regenerated). Re-seed before retesting if needed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 4B fully working. Key data-testids verified: emails-page, emails-title, tab-inbox, tab-drafts, drafts-badge, drafts-list, emails-table, emails-filterbar, email-detail-sheet, email-summary, email-body, email-jump-to-draft, draft-card-<uuid>, draft-approve-<uuid>, draft-edit-<uuid>, draft-save-edit-<uuid>, draft-regenerate-<uuid>, regen-panel-<uuid>, regen-instruction-<uuid>, regen-confirm-<uuid>, draft-reject-<uuid>, reject-panel-<uuid>, reject-reason-<uuid>, reject-confirm-<uuid>, toast, draft-subject-<uuid>, draft-body-<uuid>. Calls page LIVE badge: live-badge, live-count (5s polling confirmed working).",
+  "test_results_detail": {
+    "login_and_impersonate": "PASS",
+    "emails_page_load": "PASS — emails-page + emails-title present",
+    "inbox_default_tab": "PASS — 7 rows in emails-table (5 seeded + 2 pre-existing)",
+    "search_pneus": "PASS — 5 rows matching 'pneus'",
+    "filter_spam": "PASS — 1 row (AutoParts QC)",
+    "open_email_detail_sheet": "PASS — sheet opened with email-summary + email-body + email-jump-to-draft button (level=2 email had attached draft)",
+    "jump_to_draft": "PASS — sheet closed, tab switched to drafts (tab-drafts active)",
+    "drafts_badge": "PASS — orange badge showing '3' (initial), then '2' after approve, then '1' after reject",
+    "drafts_list_count": "PASS — 3 draft-card-<uuid> components rendered",
+    "draft_APPROVE": "PASS — clicked draft-approve-<uuid>, toast 'Courriel envoyé' shown (note: Resend IS apparently configured because no warning — different from agent context expectation), card removed",
+    "draft_EDIT": "PASS — edit mode opened, subject input editable, modified subject saved via draft-save-edit-<uuid>, toast 'Modifications enregistrées', card back to view mode with NEW subject 'Re: Question sur garantie pneus achetés en 2024 [EDITED]' visible (match=true)",
+    "draft_REGENERATE": "PASS — regen-panel-<uuid> opened, typed 'Plus court SVP' into regen-instruction-<uuid>, clicked regen-confirm-<uuid>, toast 'Brouillon régénéré', draft body updated with new content visible (screenshot shows 'IA : [REGEN] Plus court SVP' marker)",
+    "draft_REJECT": "PASS — reject-panel-<uuid> opened, reason filled, reject-confirm-<uuid> clicked, toast 'Brouillon refusé' visible, badge dropped to '1', card removed from list",
+    "live_badge_on_calls": "PASS — data-testid='live-badge' present, text='2 en direct', live-count='2', contains animate-ping class (red pulse dot), title='Mise à jour toutes les 5 secondes'",
+    "live_badge_polling": "PASS — badge still present after 6s wait (polling 5s confirmed)",
+    "assistant_name_not_hardcoded": "PASS — DraftCard does not display any Léa/Marie hardcoded name; only sourceMeta.name (contact name) appears"
+  },
+  "notable_observation": "The approve toast showed 'Courriel envoyé' (success) rather than the expected 'Brouillon approuvé (envoi Resend non configuré)' warning. This means EITHER the backend now returns no send_warning (Resend IS configured), OR the seed was approved without attempting send. Not a bug — main agent should confirm intended behavior.",
+  "rca_of_the_issue": "N/A — no bugs found."
+}

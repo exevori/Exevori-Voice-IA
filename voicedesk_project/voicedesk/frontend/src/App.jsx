@@ -16,6 +16,7 @@ import InviteAccept from "./components/auth/InviteAccept.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Contacts from "./pages/Contacts.jsx";
 import Calls from "./pages/Calls.jsx";
+import Emails from "./pages/Emails.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext.jsx";
 
 import "./styles/global.css";
@@ -43,6 +44,7 @@ function App() {
             <Route path="crm" element={<Contacts />} />
             <Route path="contacts" element={<Contacts />} />
             <Route path="calls" element={<Calls />} />
+            <Route path="emails" element={<Emails />} />
             {/* Autres pages à construire par Emergent dans frontend/src/pages/ */}
           </Route>
 

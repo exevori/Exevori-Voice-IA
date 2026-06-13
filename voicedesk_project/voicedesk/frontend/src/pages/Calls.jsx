@@ -41,6 +41,7 @@ export default function Calls() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
+  const [liveCount, setLiveCount] = useState(0);
 
   // Assistant name (depuis impersonation > profile)
   const assistantName = useMemo(
@@ -52,6 +53,25 @@ export default function Calls() {
     if (!token || !effectiveCompanyId) { setLoading(false); return; }
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, effectiveCompanyId]);
+
+  // Polling stats — badge LIVE temps réel (5s)
+  useEffect(() => {
+    if (!token || !effectiveCompanyId) return;
+    let cancelled = false;
+    const fetchStats = async () => {
+      try {
+        const r = await fetch(
+          `${API}/api/v1/calls/stats?company_id=${effectiveCompanyId}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const d = await r.json();
+        if (!cancelled) setLiveCount(d?.by_status?.in_progress || 0);
+      } catch { /* silent */ }
+    };
+    fetchStats();
+    const id = setInterval(fetchStats, 5000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [token, effectiveCompanyId]);
 
   async function load() {
@@ -174,6 +194,9 @@ export default function Calls() {
             {t("calls.subtitle", "Historique complet — transcripts, intents et résumés générés par votre assistante.")}
           </p>
         </div>
+        {liveCount > 0 && (
+          <LiveBadge count={liveCount} label={t("calls.live", "en direct")} />
+        )}
       </div>
 
       <FilterBar
@@ -355,6 +378,24 @@ function CallDetailSheet({ callId, open, onClose, token, t, lang, assistantName,
 }
 
 // ─── Helpers ───────────────────────────────────────────────────
+function LiveBadge({ count, label }) {
+  return (
+    <div
+      className="flex items-center gap-2 rounded-full border border-brand-red/30 bg-brand-red/10 px-3 py-1.5 shadow-[0_0_24px_rgba(220,38,38,0.18)]"
+      data-testid="live-badge"
+      title="Mise à jour toutes les 5 secondes"
+    >
+      <span className="relative flex h-2.5 w-2.5">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-red opacity-75" />
+        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-brand-red" />
+      </span>
+      <span className="text-[11px] font-bold uppercase tracking-wider text-red-200 tabular-nums">
+        <span data-testid="live-count">{count}</span> {label}
+      </span>
+    </div>
+  );
+}
+
 function StatusBadge({ status }) {
   const meta = STATUS_META[status] || STATUS_META.completed;
   const Icon = meta.icon;
