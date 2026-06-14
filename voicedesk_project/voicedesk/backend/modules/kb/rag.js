@@ -100,16 +100,18 @@ export async function embedBatch(texts) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// searchSimilarChunks — semantic search via Postgres RPC match_kb_chunks
+// searchSimilarChunks — semantic search via JS-side cosine similarity
 //
-// Phase 8: Léa appellera CETTE fonction pendant un appel
-//   → on injecte les 3 chunks dans son system prompt
+// Phase 8C-3 : on bypass la RPC Postgres `match_kb_chunks` qui présente
+// un bug (retourne 0 résultats pour la plupart des queries même avec
+// min_similarity=-10). On fetch tous les chunks de la company (petit
+// volume par tenant, <1000 typique) et on calcule la cosine côté Node.
 //
 // Args:
 //   company_id    : UUID (isolation tenant — REQUIS)
-//   query         : string  (la question utilisateur)
-//   topK          : int     (default 3)
-//   minSimilarity : float [0..1] (default 0.0 — on filtre côté UI si besoin)
+//   query         : string (la question utilisateur)
+//   topK          : int (default 3)
+//   minSimilarity : float [0..1] (filter chunks below)
 //
 // Returns: [{chunk_id, source_id, source_name, source_type, chunk_index, content, similarity}]
 // ─────────────────────────────────────────────────────────────
@@ -117,17 +119,56 @@ export async function searchSimilarChunks({ company_id, query, topK = 3, minSimi
   if (!company_id) throw new Error("searchSimilarChunks: company_id requis");
   if (!query || !query.trim()) throw new Error("searchSimilarChunks: query non-vide requis");
 
+  // 1. Embed query
   const queryEmbed = await embedText(query);
 
-  const { data, error } = await supabase.rpc("match_kb_chunks", {
-    p_company_id: company_id,
-    p_query_embed: queryEmbed,
-    p_match_count: topK,
-    p_min_similarity: minSimilarity,
-  });
-  if (error) throw new Error(`match_kb_chunks: ${error.message}`);
+  // 2. Fetch all embedded chunks for this company (joined with source name)
+  const { data: chunks, error } = await supabase
+    .from("knowledge_chunks")
+    .select(`
+      id, source_id, chunk_index, content, embedding,
+      knowledge_sources!inner ( id, name, type )
+    `)
+    .eq("company_id", company_id)
+    .not("embedding", "is", null);
+  if (error) throw new Error(`fetch chunks: ${error.message}`);
+  if (!chunks || chunks.length === 0) return [];
 
-  return data || [];
+  // 3. Compute cosine similarity in JS
+  //    pgvector serialize embeddings as '[v1,v2,...]' string when fetched via REST
+  const parseEmb = (e) => {
+    if (Array.isArray(e)) return e;
+    if (typeof e === "string") {
+      try { return JSON.parse(e); } catch (_) { return null; }
+    }
+    return null;
+  };
+
+  const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+  const norm = (a) => Math.sqrt(dot(a, a));
+  const qNorm = norm(queryEmbed);
+
+  const scored = [];
+  for (const c of chunks) {
+    const emb = parseEmb(c.embedding);
+    if (!emb || emb.length !== queryEmbed.length) continue;
+    const sim = dot(queryEmbed, emb) / (qNorm * norm(emb));
+    if (sim >= minSimilarity) {
+      scored.push({
+        chunk_id: c.id,
+        source_id: c.source_id,
+        source_name: c.knowledge_sources?.name || null,
+        source_type: c.knowledge_sources?.type || null,
+        chunk_index: c.chunk_index,
+        content: c.content,
+        similarity: sim,
+      });
+    }
+  }
+
+  // 4. Sort by similarity DESC, take topK
+  scored.sort((a, b) => b.similarity - a.similarity);
+  return scored.slice(0, topK);
 }
 
 // ─────────────────────────────────────────────────────────────

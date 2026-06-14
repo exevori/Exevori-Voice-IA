@@ -18,6 +18,29 @@ import { logEvent, setLiveStatus, endCall } from "./lifecycle.js";
 import { streamChat } from "./llm.js";
 import { initSession, getSession, appendUser, appendAssistant, endSession } from "./memory.js";
 import { pickPreroll } from "./preroll.js";
+import { searchSimilarChunks } from "../kb/rag.js";
+
+// Construit un bloc system additionnel avec les chunks KB les plus pertinents
+// pour la question courante. Inséré JUSTE AVANT le dernier user message
+// dans le tableau passé au LLM, mais PAS persisté dans la memory.
+async function fetchRagContext(companyId, userQuery) {
+  try {
+    const startMs = Date.now();
+    const chunks = await searchSimilarChunks({
+      company_id: companyId,
+      query: userQuery,
+      topK: 3,
+      minSimilarity: 0.25,
+    });
+    return {
+      chunks: chunks || [],
+      latencyMs: Date.now() - startMs,
+    };
+  } catch (e) {
+    console.error("[voice/rag] searchSimilarChunks error:", e.message);
+    return { chunks: [], latencyMs: 0, error: e.message };
+  }
+}
 
 export function attachVoiceRelayWS(wss) {
   wss.on("connection", (ws, req) => {
@@ -126,6 +149,39 @@ export function attachVoiceRelayWS(wss) {
       const conv = getSession(session.callSid);
       if (!conv) return;
 
+      // ─── RAG (Phase 8C-3) ──────────────────────────────────
+      // Cherche les 3 chunks KB les plus proches AVANT le LLM.
+      // Latence: ~200-350ms (embed OpenAI + pgvector). Acceptable
+      // car le LLM derrière a besoin de ce contexte pour ne PAS halluciner.
+      const ragStart = Date.now();
+      const rag = await fetchRagContext(session.companyId, userText);
+      let messagesForLLM = conv.messages;
+      if (rag.chunks.length > 0) {
+        const ragBlock = "INFORMATIONS DE LA BASE DE CONNAISSANCES EXEVORI (utilise ces données pour répondre factuellement, ne JAMAIS inventer) :\n\n"
+          + rag.chunks.map((c, i) =>
+              `[Source: ${c.source_name || "n/a"} | score=${(c.similarity || 0).toFixed(2)}]\n${c.content}`
+            ).join("\n\n---\n\n");
+        const lastIdx = conv.messages.length - 1;
+        messagesForLLM = [
+          ...conv.messages.slice(0, lastIdx),
+          { role: "system", content: ragBlock },
+          conv.messages[lastIdx],
+        ];
+      }
+      await logEvent({
+        company_id: session.companyId, call_id: session.callId,
+        event_type: "rag_lookup",
+        payload: {
+          query: userText,
+          chunks_count: rag.chunks.length,
+          top_similarity: rag.chunks[0]?.similarity ?? null,
+          source_names: rag.chunks.map((c) => c.source_name).filter(Boolean),
+          latency_ms: Date.now() - ragStart,
+          error: rag.error || null,
+        },
+        ts_ms: Date.now() - session.startedAtMs,
+      }).catch(() => {});
+
       // ─── PRE-ROLL contextuel (Phase 8C-1) ──────────────────
       // Joue un filler court ("Très bien.", "Bonne question.", ...) AVANT
       // d'attendre le LLM, pour masquer la latence reasoning (~1-3s).
@@ -158,7 +214,7 @@ export function attachVoiceRelayWS(wss) {
       try {
         await setLiveStatus(session.callId, "ai_speaking");
         const result = await streamChat(
-          conv.messages,
+          messagesForLLM,
           (delta) => {
             assistantText += delta;
             if (!firstTokenLogged) {
@@ -176,7 +232,7 @@ export function attachVoiceRelayWS(wss) {
               }));
             } catch (_) {}
           },
-          { signal: llmAbort.signal, temperature: 0.6, max_tokens: 1024 }
+          { signal: llmAbort.signal, temperature: 0.6, max_tokens: 384 }
         );
 
         // Safety net: si le LLM n'a émis aucun token (ex: reasoning a consommé max_tokens),
