@@ -3,9 +3,13 @@
 // Assemble tous les modules avec middleware auth + logger
 // ============================================================
 
+// Node v20 polyfill : doit être importé en PREMIER (avant les modules qui
+// instancient un SupabaseClient via middleware/auth.js & routers).
+import "./lib/polyfill-websocket.js";
+
+import { WebSocketServer } from "ws";
 import express from "express";
 import http from "node:http";
-import { WebSocketServer } from "ws";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";

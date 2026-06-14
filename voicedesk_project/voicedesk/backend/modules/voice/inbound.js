@@ -143,18 +143,11 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
     language: "fr-FR",
     transcriptionProvider: "Deepgram",
     speechModel: "nova-2-general",
-    // Voix Google Twilio FR-CA en fallback (ElevenLabs Twilio TTS Keys non configurés).
-    // Phase 8C-2 brancher ElevenLabs via backend custom (côté WebSocket).
-    voice: "Google.fr-CA-Standard-A",
+    // Phase 8C-2 : ElevenLabs natif via Twilio TTS API Keys (compte upgradé Pay-as-you-go).
+    // Format Twilio ConversationRelay : voice="<voice_id>-<model>"
+    ttsProvider: "ElevenLabs",
+    voice: `${assistantConfig?.voice_id || "WW0JfNPk5DgcQdM0d6X6"}-eleven_flash_v2_5`,
   };
-
-  // ElevenLabs TTS désactivé Phase 8C-1 — nécessite linkage clé dans Twilio Console
-  // (Voice > TTS API Keys), pas disponible sur compte trial. Réactivé Phase 8C-2.
-  // const elevenKey = process.env.ELEVENLABS_API_KEY;
-  // if (elevenKey && !elevenKey.startsWith("placeholder")) {
-  //   relayAttrs.ttsProvider = "ElevenLabs";
-  //   relayAttrs.voice = `${voice_id}-${model}`;
-  // }
 
   connect.conversationRelay(relayAttrs)
     .parameter({ name: "wsAuthToken", value: wsAuthToken });
