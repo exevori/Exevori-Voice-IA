@@ -1,0 +1,38 @@
+{
+  "summary": "Phase 6E Notifications + Resend — Backend 7/7 pytest PASS + Frontend e2e PASS. Verified: GET /notifications empty, unread-count=0, GET /preferences default keys, PATCH /preferences persists, POST /send-test propagates Resend 403 sandbox error as 500 with explicit message, POST /team/invitations exposes email_sent/email_error and creates invite in DB despite Resend failure (cleaned up after). Frontend: bell shows no badge + 'Aucune notification' dropdown; /settings?tab=notifications shows 5 rows + toggles, toggle flip works, save → green feedback, send-test → red feedback with exact Resend message. No '6E' badge on sidebar Notifications tab (Calendrier still shows '6C').",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_notifications_phase_6e.py",
+    "/app/test_reports/pytest/iteration_15.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "modules/notifications/index.js — send-test propagates Resend error via 500 (good). The status code 500 for a downstream-policy error (Resend 403 sandbox) is technically a category mismatch; a 502/422 would be more semantically correct, but functionally it propagates the explicit error message which is what matters here. Acceptable for sandbox phase.",
+    "modules/notifications/index.js — notify() and notifyCompany()/notifyAdmins() use service_role key + no tenant guard, so any caller with a valid req.user.id can in principle dispatch. They are internal helpers (not exposed as routes) so risk is limited; still worth flagging for Phase 8 hardening.",
+    "modules/notifications/index.js — PATCH /preferences does NOT validate that booleans are actually booleans (e.g. ticket_email='yes' would be upserted as-is). Pydantic-style validation would harden the endpoint. Minor.",
+    "modules/notifications/index.js — getUnreadCount() is called inside list endpoint after the main query, so we pay an extra round-trip on every list call. Could be merged into a single query for perf. Minor.",
+    "modules/team/index.js — Resend email send is best-effort (try/catch returns email_error string). Good pattern: invitation row is preserved even when Resend fails. Verified by pytest (cleanup needed).",
+    "Frontend NotificationsTab.jsx — feedback auto-clears after 5s (save) / 8s (send-test). Good UX. Toggle component uses aria-checked + role='switch' for a11y. ",
+    "Frontend NotificationsTab.jsx — `setPrefs((p) => ({ ...p, [\\`${cat}_email\\`]: !p[\\`${cat}_email\\`] }))` assumes prefs is a non-null object. The useEffect sets prefs to `d.preferences || {}` which is always an object → safe.",
+    "Frontend NotificationBell.jsx — polls unread-count every 30s via setInterval. Could waste battery for inactive tabs; consider Visibility API. Minor.",
+    "Frontend NotificationsTab.jsx — when send-test returns a long Resend message, the entire raw English string is shown in the feedback (no i18n fallback). For Phase 7 the message should be translated/wrapped: 'Resend en mode sandbox — vérifiez un domaine sur resend.com/domains.' Minor UX nit."
+  ],
+  "updated_files": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_notifications_phase_6e.py (NEW — 7 pytest cases)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (company_admin, company_id af5f079f-6fc2-4d70-8c8d-51d83d301906). super_admin contact@exevori.com JAMAIS touché.",
+  "seed_data_creation": "Test 'test_team_invitation_returns_email_sent_and_email_error' crée une invitation (qa-bot-invite-test@garage-tremblay.test) puis la supprime via Supabase REST DELETE (service_role) dans finally. Vérifié: pas de résidu en DB. Le PATCH /preferences persiste l'état modifié pour qa-bot (ticket_email=false, billing_email=true, draft_email=true, learning_email=false, system_email=true) — c'est intentionnel et compatible avec les futures runs (le test ne réinitialise pas, mais accepte n'importe quel boolean en GET initial).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 6E vert. Tests pytest: tests/test_notifications_phase_6e.py (7 cases, 2.5s). Frontend e2e: login qa-bot → /settings?tab=notifications → 5 toggles avec data-testid='notif-row-{cat}' et 'notif-toggle-{cat}' (cat ∈ ticket, billing, draft, learning, system) + bouton 'notif-save-button' (vert success) + bouton 'notif-send-test-button' (rouge sandbox 'You can only send testing emails…'). Sidebar Notifications n'a PAS de badge (phase: null dans Settings.jsx ligne 40). NotificationBell affiche pas de badge rouge quand unread_count=0 et 'Aucune notification' dans le dropdown vide. POINT IMPORTANT: send-test renvoie 500 (pas 403) car le backend wrap l'erreur Resend en 500 — c'est par design. Le message Resend brut est propagé dans body.error et affiché tel quel en français/anglais sur l'UI. Phase 6C (Calendrier) toujours skipped.",
+  "rca of the issue": "N/A — aucune issue détectée. Tous les comportements attendus (y compris l'échec sandbox de Resend) sont correctement propagés et affichés."
+}

@@ -9,11 +9,13 @@
 
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
+import { Resend } from "resend";
 import crypto from "node:crypto";
 import dotenv from "dotenv";
 
 dotenv.config();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const router = express.Router();
 
@@ -103,13 +105,55 @@ router.post("/invitations", express.json(), async (req, res) => {
       .single();
     if (error) throw error;
 
-    // Note: envoi email réel via Resend = Phase 6E ou Phase 8.
-    // En attendant on retourne l'URL pour debug/preview.
+    // Lookup company name for email branding
+    const { data: companyRow } = await supabase
+      .from("companies").select("name").eq("id", company_id).maybeSingle();
+    const companyName = companyRow?.name || "Exevori";
+
     const inviteUrl = `${process.env.FRONTEND_URL || ""}/invite/${token}`;
+
+    // Envoi du courriel d'invitation via Resend (best-effort — n'empêche pas la création si Resend down)
+    let email_sent = false, email_error = null;
+    try {
+      const html = `
+        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#1a1a1a">
+          <div style="background:linear-gradient(135deg,#7c3aed,#ec4899);color:white;padding:18px 22px;border-radius:12px 12px 0 0">
+            <div style="font-size:11px;opacity:.85;letter-spacing:.08em;text-transform:uppercase">Exevori Voice IA</div>
+            <div style="font-size:18px;font-weight:600;margin-top:4px">Invitation à rejoindre ${companyName}</div>
+          </div>
+          <div style="background:#fff;border:1px solid #e5e7eb;border-top:none;padding:22px;border-radius:0 0 12px 12px">
+            <p style="margin:0 0 12px;font-size:14px">Bonjour,</p>
+            <p style="margin:0 0 16px;font-size:14px;line-height:1.55">
+              Vous avez été invité(e) à rejoindre <strong>${companyName}</strong> sur Exevori Voice IA en tant que
+              <strong>${role === "company_admin" ? "administrateur" : "membre"}</strong>.
+            </p>
+            <p style="text-align:center;margin:24px 0">
+              <a href="${inviteUrl}" style="display:inline-block;background:#7c3aed;color:#fff;padding:11px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px">Accepter l'invitation</a>
+            </p>
+            <p style="margin:0 0 6px;font-size:11px;color:#6b7280">Ce lien expire dans 7 jours.</p>
+            <p style="margin:0;font-size:11px;color:#9ca3af">Si vous n'attendiez pas cette invitation, ignorez ce courriel.</p>
+          </div>
+        </div>
+      `;
+      const r = await resend.emails.send({
+        from: process.env.EMAIL_FROM || "Exevori <onboarding@resend.dev>",
+        to: cleanEmail,
+        subject: `Invitation Exevori — ${companyName}`,
+        html,
+      });
+      if (r?.error) { email_error = r.error.message || String(r.error); }
+      else { email_sent = true; }
+    } catch (e) {
+      email_error = e.message;
+      console.error("[TEAM] Resend invite failed:", e.message);
+    }
+
     return res.json({
       success: true,
       invitation: data,
       invite_url: inviteUrl,
+      email_sent,
+      email_error,
     });
   } catch (err) {
     console.error("[TEAM] invite error:", err);

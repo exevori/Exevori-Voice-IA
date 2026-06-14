@@ -143,6 +143,62 @@ router.patch("/preferences", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// POST /api/v1/notifications/send-test
+// Envoie un email test à l'utilisateur courant via Resend.
+// Permet à la PME de vérifier que Resend est bien branché.
+// ─────────────────────────────────────────────────────────────
+router.post("/send-test", async (req, res) => {
+  const user_id = req.user?.id;
+  if (!user_id) return res.status(401).json({ error: "unauthorized" });
+
+  try {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("email, full_name")
+      .eq("user_id", user_id)
+      .single();
+
+    if (!profile?.email) return res.status(404).json({ error: "Aucun courriel dans votre profil" });
+
+    const name = profile.full_name || "vous";
+    const html = `
+      <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#1a1a1a">
+        <div style="background:linear-gradient(135deg,#7c3aed,#ec4899);color:white;padding:18px 22px;border-radius:12px 12px 0 0">
+          <div style="font-size:11px;opacity:.85;letter-spacing:.08em;text-transform:uppercase">Exevori Voice IA</div>
+          <div style="font-size:18px;font-weight:600;margin-top:4px">Courriel test ✅</div>
+        </div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-top:none;padding:22px;border-radius:0 0 12px 12px">
+          <p style="margin:0 0 12px;font-size:14px">Bonjour ${name},</p>
+          <p style="margin:0 0 12px;font-size:14px;line-height:1.55">
+            Si vous lisez ce courriel, c'est que votre configuration Resend fonctionne correctement.
+            Vous recevrez désormais les notifications activées dans votre tableau de bord.
+          </p>
+          <p style="margin:0 0 6px;font-size:13px;color:#6b7280">— L'équipe Exevori</p>
+        </div>
+      </div>
+    `;
+
+    const result = await resend.emails.send({
+      from: process.env.EMAIL_FROM || "Exevori <onboarding@resend.dev>",
+      to: profile.email,
+      subject: "Test Exevori Voice IA — Resend OK",
+      html,
+    });
+
+    if (result?.error) {
+      log.error("Test email failed", { error: result.error, to: profile.email });
+      return res.status(500).json({ error: result.error.message || "Échec d'envoi", details: result.error });
+    }
+
+    log.info("Test email sent", { to: profile.email, id: result?.data?.id });
+    return res.json({ success: true, to: profile.email, id: result?.data?.id });
+  } catch (err) {
+    log.error("Test email exception", { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
 // HELPERS — Appelés depuis les autres modules
 // ─────────────────────────────────────────────────────────────
 
