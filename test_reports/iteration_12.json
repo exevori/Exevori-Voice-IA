@@ -1,0 +1,36 @@
+{
+  "summary": "Phase Bonus KB — Note manuelle + édition de chunks 100% PASS. Backend (14/14 pytest): POST /api/v1/kb/sources/manual (success ready+embedded, content<30 → 400, content>200k → 400, missing company_id/name/content → 400, no token → 401) ; PATCH /api/v1/kb/chunks/:id (success+token_count recalculé, embeddings_ready_at de la source parente bien re-touché, content<10 → 400, content>50k → 400, chunk inconnu → 404, mauvais tenant → 403, /search retourne le chunk modifié avec le marker unique). Frontend (UI) : 3 onglets (tab-upload/tab-url/tab-manual) présents, manual-submit-button désactivé si titre vide ou body<30, activé sur body valide, soumission affiche toast success et nouvelle source 'Manuel' status 'Prêt' + badge 'Indexé' dans la table ; ouverture SourceDetailSheet → chunk-edit-0 visible, chunk-edit-textarea-0 préchargé, save persiste '— édité par QA' en mode lecture, cancel referme sans modifier. Cleanup UI delete-source vérifié — 0 source de test résiduelle (GET /sources final vide).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_kb_bonus_phase.py",
+    "/app/test_reports/pytest/iteration_12.xml"
+  ],
+  "action_items": [
+    "Aucune action bloquante. Phase Bonus KB validée — prêt pour Phase 6B.",
+    "Note de pré-existant (non-bloquant, déjà signalé iteration_10/11) : loadProfile dans AuthContext.jsx log 'TypeError: Failed to fetch' une fois au mount post-signIn ; n'affecte aucun flux."
+  ],
+  "critical_code_review_comments": [
+    "POST /sources/manual valide bien company_id+name+content, trim, bornes 30/200000, et ré-utilise ingestChunks puis embedChunksOfSource — cohérent avec upload/scrape. status='ready' uniquement après chunking ; embeddings best-effort comme les autres types.",
+    "PATCH /chunks/:id : sanity check tenant 403 (chunk.company_id !== body.company_id) — correct. Re-embed via embedText puis update content+embedding+token_count atomique. Bonus : embeddings_ready_at de la source parente est rafraîchi → bon signal UX pour 'Indexé'.",
+    "token_count recalculé avec gpt-tokenizer (gptEncode) — cohérent avec ingest. Valeur retournée et persistée (vérifié pytest).",
+    "Frontend Knowledge.jsx : la validation côté UI (body.length<30 désactive le bouton) miroir parfait de la validation serveur (400). Le ChunkRow expose bien data-testids chunk-edit-{i}, chunk-edit-textarea-{i}, chunk-save-{i}, chunk-cancel-{i}.",
+    "Pas de protection RBAC supplémentaire au-delà de requireAuth + check tenant : pour une PME company_admin c'est suffisant ; à surveiller si Phase 8 ajoute des rôles 'viewer' (qui ne devraient pas pouvoir PATCH)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_kb_bonus_phase.py (NEW — 14 pytest cases : 7 manual create + 7 patch chunk)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (company_id af5f079f-6fc2-4d70-8c8d-51d83d301906) — confirmé via /app/memory/test_credentials.md",
+  "seed_data_creation": "Toutes les sources créées (TEST_KB_Bonus_Note_A, TEST_KB_Bonus_Note_PatchTarget, UI Test Manual Note) nettoyées : pytest session fixture DELETE /sources/:id + UI delete-source bouton. Vérification finale GET /sources?company_id=... → 0 source résiduelle.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase Bonus KB complète (manual notes + chunk edit). Test file /app/backend/tests/test_kb_bonus_phase.py couvre tous les cas erreur + integration /search avec marker unique. Prochaine phase = 6B selon le contexte du main agent. Backend tourne en node index.js manuel (pas via supervisor stack par défaut)."
+}

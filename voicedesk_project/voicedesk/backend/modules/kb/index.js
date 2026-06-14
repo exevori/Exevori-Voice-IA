@@ -23,7 +23,7 @@ import * as cheerio from "cheerio";
 import { convert as htmlToText } from "html-to-text";
 import { encode as gptEncode } from "gpt-tokenizer";
 
-import { embedChunksOfSource, searchSimilarChunks } from "./rag.js";
+import { embedChunksOfSource, searchSimilarChunks, embedText } from "./rag.js";
 
 dotenv.config();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -213,6 +213,119 @@ router.post("/sources/scrape", express.json(), async (req, res) => {
     text_chars: text.length,
     embeddings_ready: !!embeddings_ready_at,
   });
+});
+
+// ─────────────────────────────────────────────────────────────
+// POST /sources/manual  — Note manuelle (Phase Bonus KB)
+//   body: { company_id, name, content, created_by? }
+//   → crée une knowledge_sources type='manual', chunke, embed
+// ─────────────────────────────────────────────────────────────
+router.post("/sources/manual", express.json({ limit: "5mb" }), async (req, res) => {
+  const { company_id, name, content, created_by } = req.body || {};
+  if (!company_id || !name || !content) {
+    return res.status(400).json({ error: "company_id, name et content requis" });
+  }
+  const cleanText = String(content).trim();
+  if (cleanText.length < 30) {
+    return res.status(400).json({ error: "Contenu trop court (< 30 caractères)" });
+  }
+  if (cleanText.length > 200_000) {
+    return res.status(400).json({ error: "Contenu trop long (> 200 000 caractères)" });
+  }
+
+  const { data: source, error: sErr } = await supabase
+    .from("knowledge_sources")
+    .insert({
+      company_id,
+      type: "manual",
+      name: String(name).slice(0, 200),
+      status: "processing",
+      size_bytes: cleanText.length,
+      created_by: created_by || null,
+    })
+    .select()
+    .single();
+  if (sErr) return res.status(500).json({ error: sErr.message });
+
+  const result = await ingestChunks({ company_id, source_id: source.id, text: cleanText });
+  if (result.error) {
+    await supabase.from("knowledge_sources").update({
+      status: "error", error_message: `chunk: ${result.error}`,
+    }).eq("id", source.id);
+    return res.status(500).json({ error: result.error });
+  }
+
+  await supabase.from("knowledge_sources").update({
+    status: "ready",
+    chunks_count: result.chunks_count,
+  }).eq("id", source.id);
+
+  // Embeddings best-effort
+  let embeddings_ready_at = null;
+  try {
+    const emb = await embedChunksOfSource({ source_id: source.id, company_id });
+    embeddings_ready_at = emb.embeddings_ready_at;
+  } catch (e) {
+    console.warn(`[KB] embed manual source=${source.id}:`, e.message);
+  }
+
+  return res.json({
+    success: true,
+    source: { ...source, status: "ready", chunks_count: result.chunks_count, embeddings_ready_at },
+    chunks_count: result.chunks_count,
+    embeddings_ready: !!embeddings_ready_at,
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// PATCH /chunks/:id  — Édition manuelle d'un chunk (Phase Bonus KB)
+//   body: { company_id, content }
+//   → met à jour content + re-embed CE chunk uniquement (rapide)
+// ─────────────────────────────────────────────────────────────
+router.patch("/chunks/:id", express.json(), async (req, res) => {
+  const { id } = req.params;
+  const { company_id, content } = req.body || {};
+  if (!company_id || !content) return res.status(400).json({ error: "company_id et content requis" });
+  const cleanText = String(content).trim();
+  if (cleanText.length < 10)      return res.status(400).json({ error: "Contenu trop court (< 10 caractères)" });
+  if (cleanText.length > 50_000)  return res.status(400).json({ error: "Contenu trop long (> 50 000 caractères)" });
+
+  // Sanity check : le chunk existe et appartient au bon tenant
+  const { data: chunk, error: cErr } = await supabase
+    .from("knowledge_chunks")
+    .select("id, company_id, source_id, chunk_index")
+    .eq("id", id)
+    .maybeSingle();
+  if (cErr)                             return res.status(500).json({ error: cErr.message });
+  if (!chunk)                           return res.status(404).json({ error: "Chunk introuvable" });
+  if (chunk.company_id !== company_id)  return res.status(403).json({ error: "Chunk d'un autre tenant" });
+
+  // Embed nouveau contenu
+  let embedding = null;
+  try {
+    embedding = await embedText(cleanText);
+  } catch (e) {
+    return res.status(500).json({ error: `Embedding échoué : ${e.message}` });
+  }
+
+  // gpt-tokenizer pour le token_count
+  const token_count = gptEncode(cleanText).length;
+
+  const { data: updated, error: uErr } = await supabase
+    .from("knowledge_chunks")
+    .update({ content: cleanText, embedding, token_count })
+    .eq("id", id)
+    .select("id, chunk_index, content, token_count")
+    .single();
+  if (uErr) return res.status(500).json({ error: uErr.message });
+
+  // Met à jour le timestamp embeddings_ready_at de la source (puisqu'on a re-embeddé)
+  await supabase
+    .from("knowledge_sources")
+    .update({ embeddings_ready_at: new Date().toISOString() })
+    .eq("id", chunk.source_id);
+
+  return res.json({ success: true, chunk: updated });
 });
 
 // ─────────────────────────────────────────────────────────────

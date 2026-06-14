@@ -44,6 +44,8 @@ export default function Knowledge() {
   const [toast, setToast] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [scrapeUrl, setScrapeUrl] = useState("");
+  const [noteTitle, setNoteTitle] = useState("");
+  const [noteBody, setNoteBody] = useState("");
 
   const load = useCallback(async () => {
     if (!token || !effectiveCompanyId) { setLoading(false); return; }
@@ -112,6 +114,38 @@ export default function Knowledge() {
         msg: t("kb.toast.scraped", "URL importée — {{count}} chunks créés", { count: d.chunks_count }),
       });
       setScrapeUrl("");
+      load();
+    } catch (e) {
+      setToast({ type: "error", msg: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleManualNote = async () => {
+    if (!noteTitle.trim() || !noteBody.trim()) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/kb/sources/manual`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_id: effectiveCompanyId,
+          name: noteTitle.trim(),
+          content: noteBody.trim(),
+          created_by: profile?.id || null,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      setToast({
+        type: "success",
+        msg: t("kb.toast.manualSaved", "Note « {{name}} » enregistrée — {{count}} chunks créés", {
+          name: noteTitle, count: d.chunks_count,
+        }),
+      });
+      setNoteTitle("");
+      setNoteBody("");
       load();
     } catch (e) {
       setToast({ type: "error", msg: e.message });
@@ -268,6 +302,9 @@ export default function Knowledge() {
             <TabsTrigger value="url" data-testid="tab-url">
               <LinkIcon size={12} /> {t("kb.url.tab", "Importer depuis une URL")}
             </TabsTrigger>
+            <TabsTrigger value="manual" data-testid="tab-manual">
+              <Pencil size={12} /> {t("kb.manual.tab", "Note manuelle")}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="upload" className="p-4">
@@ -294,6 +331,43 @@ export default function Knowledge() {
             <p className="text-[11px] text-text-tertiary">
               {t("kb.url.hint", "Le contenu HTML est nettoyé puis découpé en chunks. Les SPAs JS-only ne sont pas supportées en V1.")}
             </p>
+          </TabsContent>
+
+          <TabsContent value="manual" className="p-4 space-y-2">
+            <label className="text-[11px] uppercase tracking-wider text-text-secondary">
+              {t("kb.manual.titleLabel", "Titre de la note")}
+            </label>
+            <Input
+              value={noteTitle}
+              onChange={(e) => setNoteTitle(e.target.value)}
+              placeholder={t("kb.manual.titlePlaceholder", "Ex: Prix changement pneus hiver 2026")}
+              data-testid="manual-title-input"
+              maxLength={200}
+            />
+            <label className="text-[11px] uppercase tracking-wider text-text-secondary block mt-2">
+              {t("kb.manual.bodyLabel", "Contenu")}
+            </label>
+            <textarea
+              value={noteBody}
+              onChange={(e) => setNoteBody(e.target.value)}
+              placeholder={t("kb.manual.bodyPlaceholder", "Tapez ou collez votre note — prix, horaires, FAQs internes, procédures...")}
+              data-testid="manual-body-input"
+              rows={8}
+              className="w-full rounded-md border border-border bg-bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-brand-purple/30 focus:border-brand-purple/50 resize-y"
+            />
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] text-text-tertiary">
+                {noteBody.length} {t("kb.manual.chars", "caractères")} · {t("kb.manual.hint", "Minimum 30, maximum 200 000")}
+              </p>
+              <Button
+                onClick={handleManualNote}
+                disabled={busy || !noteTitle.trim() || noteBody.trim().length < 30}
+                data-testid="manual-submit-button"
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}
+                {t("kb.manual.action", "Enregistrer la note")}
+              </Button>
+            </div>
           </TabsContent>
         </Tabs>
       </div>
@@ -338,7 +412,9 @@ export default function Knowledge() {
         open={!!selectedId}
         onClose={() => setSelectedId(null)}
         token={token}
+        companyId={effectiveCompanyId}
         t={t}
+        onChunkUpdated={load}
       />
 
       {/* KB+B — Widget "Testez votre IA" */}
@@ -391,7 +467,7 @@ function UploadDropzone({ onFile, busy, t }) {
   );
 }
 
-function SourceDetailSheet({ sourceId, open, onClose, token, t }) {
+function SourceDetailSheet({ sourceId, open, onClose, token, companyId, t, onChunkUpdated }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -407,6 +483,14 @@ function SourceDetailSheet({ sourceId, open, onClose, token, t }) {
 
   const s = data?.source;
   const chunks = data?.chunks || [];
+
+  const handleChunkSaved = (updated) => {
+    setData((prev) => prev ? {
+      ...prev,
+      chunks: prev.chunks.map((c) => c.id === updated.id ? { ...c, ...updated } : c),
+    } : prev);
+    if (onChunkUpdated) onChunkUpdated();
+  };
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
@@ -441,15 +525,14 @@ function SourceDetailSheet({ sourceId, open, onClose, token, t }) {
               </h4>
               <ul className="space-y-2" data-testid="chunks-preview">
                 {chunks.slice(0, 30).map((c) => (
-                  <li key={c.id} className="rounded-md border border-border bg-white/3 p-3" data-testid={`chunk-${c.chunk_index}`}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px] font-mono text-text-tertiary">#{c.chunk_index}</span>
-                      <span className="text-[10px] text-text-tertiary">{c.token_count} tok</span>
-                    </div>
-                    <p className="text-xs leading-relaxed text-text-secondary whitespace-pre-wrap break-words line-clamp-6">
-                      {c.content}
-                    </p>
-                  </li>
+                  <ChunkRow
+                    key={c.id}
+                    chunk={c}
+                    token={token}
+                    companyId={companyId}
+                    t={t}
+                    onSaved={handleChunkSaved}
+                  />
                 ))}
                 {chunks.length > 30 && (
                   <li className="text-center text-[11px] text-text-tertiary py-2">… +{chunks.length - 30} chunks supplémentaires</li>
@@ -501,6 +584,103 @@ function Toast({ toast, onClose }) {
     >
       {toast.msg}
     </div>
+  );
+}
+
+// Composant chunk éditable (Phase Bonus KB — édition manuelle des chunks)
+function ChunkRow({ chunk, token, companyId, t, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(chunk.content);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const start = () => { setDraft(chunk.content); setEditing(true); setError(null); };
+  const cancel = () => { setEditing(false); setError(null); };
+
+  const save = async () => {
+    const txt = draft.trim();
+    if (txt.length < 10) { setError(t("kb.chunk.tooShort", "Trop court (< 10 caractères)")); return; }
+    if (txt === chunk.content) { setEditing(false); return; }
+    setSaving(true); setError(null);
+    try {
+      const r = await fetch(`${API}/api/v1/kb/chunks/${chunk.id}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ company_id: companyId, content: txt }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      if (onSaved) onSaved(d.chunk);
+      setEditing(false);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <li
+      className={cn("rounded-md border bg-white/3 p-3 transition-colors",
+        editing ? "border-brand-purple/40 bg-brand-purple/5" : "border-border hover:border-brand-purple/20"
+      )}
+      data-testid={`chunk-${chunk.chunk_index}`}
+    >
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[10px] font-mono text-text-tertiary">#{chunk.chunk_index}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-text-tertiary">{chunk.token_count} tok</span>
+          {!editing ? (
+            <button
+              onClick={start}
+              data-testid={`chunk-edit-${chunk.chunk_index}`}
+              className="rounded p-1 text-text-tertiary hover:text-brand-purple hover:bg-brand-purple/10 transition-colors"
+              title={t("kb.chunk.edit", "Éditer ce chunk")}
+            >
+              <Pencil size={11} />
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={cancel}
+                disabled={saving}
+                data-testid={`chunk-cancel-${chunk.chunk_index}`}
+                className="rounded px-1.5 py-0.5 text-[10px] text-text-tertiary hover:text-text-primary"
+              >
+                {t("kb.chunk.cancel", "Annuler")}
+              </button>
+              <button
+                onClick={save}
+                disabled={saving}
+                data-testid={`chunk-save-${chunk.chunk_index}`}
+                className="rounded bg-brand-purple/20 px-2 py-0.5 text-[10px] font-medium text-brand-purple hover:bg-brand-purple/30 disabled:opacity-50"
+              >
+                {saving ? <Loader2 size={10} className="animate-spin inline" /> : t("kb.chunk.save", "Enregistrer")}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      {editing ? (
+        <>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            data-testid={`chunk-edit-textarea-${chunk.chunk_index}`}
+            rows={6}
+            className="w-full rounded border border-border bg-bg-card px-2 py-1.5 text-xs text-text-primary focus:outline-none focus:ring-2 focus:ring-brand-purple/30 resize-y"
+          />
+          {error && <div className="mt-1 text-[10px] text-red-300">{error}</div>}
+          <div className="mt-1 text-[10px] text-text-tertiary">
+            {draft.length} {t("kb.manual.chars", "caractères")}
+          </div>
+        </>
+      ) : (
+        <p className="text-xs leading-relaxed text-text-secondary whitespace-pre-wrap break-words line-clamp-6">
+          {chunk.content}
+        </p>
+      )}
+    </li>
   );
 }
 
