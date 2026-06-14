@@ -17,6 +17,7 @@ import { consumeWsToken } from "./inbound.js";
 import { logEvent, setLiveStatus, endCall } from "./lifecycle.js";
 import { streamChat } from "./llm.js";
 import { initSession, getSession, appendUser, appendAssistant, endSession } from "./memory.js";
+import { pickPreroll } from "./preroll.js";
 
 export function attachVoiceRelayWS(wss) {
   wss.on("connection", (ws, req) => {
@@ -89,6 +90,8 @@ export function attachVoiceRelayWS(wss) {
         startedAtMs:  Date.now(),
         systemPrompt: entry.systemPrompt || "",
         assistantName: entry.assistantName || "Léa",
+        prerollEnabled: !!entry.prerollEnabled,
+        prerollState: { last: null, lastCategory: null },
       };
 
       initSession(session.callSid, session.systemPrompt);
@@ -122,6 +125,29 @@ export function attachVoiceRelayWS(wss) {
       appendUser(session.callSid, userText);
       const conv = getSession(session.callSid);
       if (!conv) return;
+
+      // ─── PRE-ROLL contextuel (Phase 8C-1) ──────────────────
+      // Joue un filler court ("Très bien.", "Bonne question.", ...) AVANT
+      // d'attendre le LLM, pour masquer la latence reasoning (~1-3s).
+      // Skip si voice_preroll_enabled=false ou contexte émotionnel.
+      let prerollText = null;
+      if (session.prerollEnabled) {
+        prerollText = pickPreroll(userText, session.prerollState);
+        if (prerollText) {
+          try {
+            ws.send(JSON.stringify({
+              type: "text", token: prerollText + " ",
+              last: false, interruptible: true, preemptible: true,
+            }));
+          } catch (_) {}
+          await logEvent({
+            company_id: session.companyId, call_id: session.callId,
+            event_type: "ai_speaking",
+            payload: { preroll: prerollText, category: session.prerollState.lastCategory },
+            ts_ms: Date.now() - session.startedAtMs,
+          });
+        }
+      }
 
       // Annule un éventuel stream LLM en cours (cas rare de prompts qui se chevauchent)
       if (llmAbort) { try { llmAbort.abort(); } catch (_) {} }

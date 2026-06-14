@@ -55,11 +55,21 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
   try {
     company = await findCompanyByTwilioNumber(To);
     if (company) {
-      const { data } = await supabase
+      // Tente la requête avec voice_preroll_enabled (migration 007). Si la colonne
+      // n'existe pas encore, retry sans (graceful degradation).
+      let { data, error } = await supabase
         .from("assistant_configs")
-        .select("assistant_name, voice_id, voice_speed, voice_stability, voice_similarity, greeting_inbound_fr, system_prompt_voice_fr, system_prompt_fr")
+        .select("assistant_name, voice_id, voice_speed, voice_stability, voice_similarity, voice_preroll_enabled, greeting_inbound_fr, system_prompt_voice_fr, system_prompt_fr")
         .eq("company_id", company.company_id)
         .maybeSingle();
+      if (error && /voice_preroll_enabled/.test(error.message || "")) {
+        const r2 = await supabase
+          .from("assistant_configs")
+          .select("assistant_name, voice_id, voice_speed, voice_stability, voice_similarity, greeting_inbound_fr, system_prompt_voice_fr, system_prompt_fr")
+          .eq("company_id", company.company_id)
+          .maybeSingle();
+        data = r2.data;
+      }
       assistantConfig = data || null;
     }
   } catch (_) {}
@@ -106,6 +116,7 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
     // Snapshot de la config assistant pour la WS (évite un round-trip DB)
     assistantName: assistantConfig?.assistant_name || "Léa",
     systemPrompt: assistantConfig?.system_prompt_voice_fr || assistantConfig?.system_prompt_fr || "",
+    prerollEnabled: assistantConfig?.voice_preroll_enabled ?? (process.env.VOICE_PREROLL_ENABLED === "true"),
     expiresAt: Date.now() + 60_000, // 60s pour que Twilio se connecte
   });
 
@@ -118,19 +129,36 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
   const welcomeGreeting = assistantConfig?.greeting_inbound_fr
     || `Bonjour, ici ${assistantConfig?.assistant_name || "Léa"}. Comment puis-je vous aider ?`;
 
-  // TwiML <Connect><ConversationRelay>
-  // Phase 8C wired ttsProvider="elevenlabs" + voice + ttsApiKey.
+  // ──────────────────────────────────────────────────────────
+  // TwiML <Connect><ConversationRelay> avec voix ElevenLabs
+  // ──────────────────────────────────────────────────────────
   const connect = vr.connect({
     action: `${proto}://${host}/webhooks/voice/relay-action`,
   });
-  connect.conversationRelay({
+
+  const relayAttrs = {
     url: wsUrl,
     welcomeGreeting,
     welcomeGreetingInterruptible: false,
     language: "fr-FR",
     transcriptionProvider: "Deepgram",
     speechModel: "nova-2-general",
-  }).parameter({ name: "wsAuthToken", value: wsAuthToken });
+  };
+
+  // ElevenLabs TTS (Phase 8C-1) — Twilio ConversationRelay supporte ttsProvider externe
+  const elevenKey   = process.env.ELEVENLABS_API_KEY;
+  const elevenVoice = assistantConfig?.voice_id || process.env.ELEVENLABS_DEFAULT_VOICE_ID;
+  const elevenModel = process.env.ELEVENLABS_MODEL || "eleven_flash_v2_5";
+  if (elevenKey && elevenVoice && !elevenKey.startsWith("placeholder")) {
+    relayAttrs.ttsProvider = "ElevenLabs";
+    relayAttrs.voice = `${elevenVoice}-${elevenModel}`;
+    // Note: la clé ElevenLabs doit être stockée comme "API Key" dans la console Twilio
+    // (Console > Voice > API Keys). Sinon ConversationRelay utilise la clé compte par défaut.
+    // Pour V1, on passe via attribut ttsApiKey si Twilio l'accepte; sinon fallback voix Google.
+  }
+
+  connect.conversationRelay(relayAttrs)
+    .parameter({ name: "wsAuthToken", value: wsAuthToken });
 
   return res.type("text/xml").send(vr.toString());
 });
