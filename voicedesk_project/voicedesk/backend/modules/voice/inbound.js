@@ -132,13 +132,18 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
   const welcomeGreeting = assistantConfig?.greeting_inbound_fr
     || `Bonjour, ici ${assistantConfig?.assistant_name || "Léa"}. Comment puis-je vous aider ?`;
 
-  const voiceId = assistantConfig?.voice_id
-    || process.env.ELEVENLABS_VOICE_ID
-    || "WW0JfNPk5DgcQdM0d6X6";
+  // IMPORTANT — Twilio ConversationRelay n'accepte QUE des voice IDs ElevenLabs
+  // pré-approuvées dans son catalogue interne (préfixe block_elevenlabs/<lang>/<voice>).
+  // On force la voix par défaut Twilio fr-CA (féminine) pour Phase 8C-2.
+  // TODO Phase suivante : permettre de sélectionner parmi la LISTE Twilio approved,
+  // pas depuis l'ElevenLabs perso du client.
+  const TWILIO_APPROVED_FR_CA_VOICE = "IPgYtHTNLjC7Bq7IPHrm";
+  const voiceId = TWILIO_APPROVED_FR_CA_VOICE;
 
   // TwiML <Connect><ConversationRelay ttsProvider="ElevenLabs"/>
-  // Twilio gère le routage vers ElevenLabs en interne (compte Pay-as-you-go requis,
-  // clé ElevenLabs liée via Twilio Console > Voice > Manage > TTS API Keys).
+  // IMPORTANT : Twilio ConversationRelay n'accepte QUE les voices ElevenLabs
+  // pré-approuvées dans son catalogue interne (block_elevenlabs/<lang>/<voice>).
+  // Liste : https://www.twilio.com/docs/voice/conversationrelay/voice-configuration
   const connect = vr.connect({
     action: `${proto}://${host}/api/voice/relay-action`,
   });
@@ -147,11 +152,12 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
     url: wsUrl,
     welcomeGreeting,
     welcomeGreetingInterruptible: false,
-    language: "fr-FR",
+    language: "fr-CA",
+    ttsLanguage: "fr-CA",
     transcriptionProvider: "Deepgram",
     speechModel: "nova-2-general",
     ttsProvider: "ElevenLabs",
-    voice: `${voiceId}-eleven_flash_v2_5`,
+    voice: voiceId,
   };
 
   connect.conversationRelay(relayAttrs)
