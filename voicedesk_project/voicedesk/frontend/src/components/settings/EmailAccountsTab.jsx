@@ -145,7 +145,8 @@ export default function EmailAccountsTab() {
 function AccountRow({ acc, onDelete }) {
   const { t } = useTranslation();
   const provider = PROVIDER_ICONS[acc.provider] || PROVIDER_ICONS.imap;
-  const imap = acc.imap_configs?.[0];
+  // Supabase retourne object OU array selon que la FK est UNIQUE — on normalise
+  const imap = Array.isArray(acc.imap_configs) ? acc.imap_configs[0] : acc.imap_configs;
 
   const statusBadge = {
     active:       { variant: "green", label: t("emails.status.active",  "Actif") },

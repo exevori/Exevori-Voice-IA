@@ -187,14 +187,8 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 2. ~~**Phase Reports+A élargie**~~ ✅ DONE
 3. ~~**Phase Reports+B**~~ ✅ DONE
 4. ~~**Phase 6A — Settings UI**~~ ✅ DONE
-5. **Phase 6B — Email multi-comptes** (~50 crédits) **← NEXT, après validation visuelle 6A + credentials OAuth**
-   - Migration DB requise (tables `email_accounts`, `oauth_tokens`, `imap_configs`, colonne `email_account_id` sur `emails`) — Karim doit donner GO + exécuter
-   - 3 providers : OAuth Gmail/Workspace + OAuth Outlook/M365 + IMAP/SMTP universel (Zoho, Hostpapa, OVH, etc.)
-   - Chiffrement AES-256-GCM (clé maître `ENCRYPTION_KEY` 32 bytes en `.env`)
-   - UI Wizard 3 étapes (provider → credentials → persona/auto_reply/kb_filter)
-   - Multi-persona : `assistant_configs` devient multi-instance par PME (chaque email peut avoir sa propre Léa)
-   - Tests : 3 comptes factices, RLS strict, IMAP serveur test, chiffrement/déchiffrement
-6. **Phase 6C** — Calendar multi-provider (Google Calendar + Outlook Calendar) (~15 crédits)
+5. ~~**Phase 6B — Email multi-comptes IMAP**~~ ✅ DONE (sans OAuth — voir Phase 11)
+6. **Phase 6C** — Calendar multi-provider (Google Calendar + Outlook Calendar) (~15 crédits) **← NEXT**
 7. **Phase 6D** — Twilio config par PME (~5 crédits)
 8. **Phase 6E** — Notifications canaux + Resend pour invites (~5 crédits)
 9. **Phase 9** — Déploiement Vercel + Fly.io Montréal + `.nvmrc` (Node v22)
