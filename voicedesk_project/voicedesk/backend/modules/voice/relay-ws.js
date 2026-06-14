@@ -123,7 +123,8 @@ export function attachVoiceRelayWS(wss) {
       const conv = getSession(session.callSid);
       if (!conv) return;
 
-      // Lance le stream LLM → envoie chaque token au ConversationRelay
+      // Annule un éventuel stream LLM en cours (cas rare de prompts qui se chevauchent)
+      if (llmAbort) { try { llmAbort.abort(); } catch (_) {} }
       llmAbort = new AbortController();
       let firstTokenLogged = false;
       let assistantText = "";
@@ -149,20 +150,32 @@ export function attachVoiceRelayWS(wss) {
               }));
             } catch (_) {}
           },
-          { signal: llmAbort.signal, temperature: 0.6, max_tokens: 220 }
+          { signal: llmAbort.signal, temperature: 0.6, max_tokens: 1024 }
         );
 
-        // Marquer la fin du tour (last=true sans token additionnel)
-        try { ws.send(JSON.stringify({ type: "text", token: "", last: true, interruptible: true })); } catch (_) {}
-
-        appendAssistant(session.callSid, result.text);
-
-        await logEvent({
-          company_id: session.companyId, call_id: session.callId,
-          event_type: "ai_speaking",
-          payload: { text: result.text, first_token_ms: result.firstTokenMs, total_ms: result.totalMs },
-          ts_ms: Date.now() - session.startedAtMs,
-        });
+        // Safety net: si le LLM n'a émis aucun token (ex: reasoning a consommé max_tokens),
+        // on envoie un fallback parlé au lieu de laisser un silence mort.
+        if (!result.text) {
+          const fallback = "Pardon, je n'ai pas saisi. Pouvez-vous reformuler votre question ?";
+          try { ws.send(JSON.stringify({ type: "text", token: fallback, last: true, interruptible: true })); } catch (_) {}
+          await logEvent({
+            company_id: session.companyId, call_id: session.callId,
+            event_type: "error",
+            payload: { empty_llm_response: true, reasoning_chars: result.reasoningChars || 0 },
+            ts_ms: Date.now() - session.startedAtMs,
+          });
+          appendAssistant(session.callSid, fallback);
+        } else {
+          // Marquer la fin du tour (last=true sans token additionnel)
+          try { ws.send(JSON.stringify({ type: "text", token: "", last: true, interruptible: true })); } catch (_) {}
+          appendAssistant(session.callSid, result.text);
+          await logEvent({
+            company_id: session.companyId, call_id: session.callId,
+            event_type: "ai_speaking",
+            payload: { text: result.text, first_token_ms: result.firstTokenMs, total_ms: result.totalMs, reasoning_chars: result.reasoningChars || 0 },
+            ts_ms: Date.now() - session.startedAtMs,
+          });
+        }
       } catch (err) {
         if (err.name !== "AbortError") {
           console.error("[voice/relay-ws] LLM error:", err.message);

@@ -35,12 +35,16 @@ export async function streamChat(messages, onToken, opts = {}) {
     messages,
     stream: true,
     temperature: opts.temperature ?? 0.6,
-    max_tokens: opts.max_tokens ?? 220,
+    // DeepSeek V4 Flash est un reasoning model : il émet delta.reasoning_content
+    // (silenced ici) AVANT delta.content. Il faut un max_tokens large pour laisser
+    // le reasoning se faire ET garder du budget pour la réponse parlée.
+    max_tokens: opts.max_tokens ?? 1024,
   };
 
   const startMs = Date.now();
   let firstTokenMs = null;
   let fullText = "";
+  let reasoningChars = 0;
 
   const res = await fetch(FIREWORKS_URL, {
     method: "POST",
@@ -62,36 +66,46 @@ export async function streamChat(messages, onToken, opts = {}) {
   const decoder = new TextDecoder();
   let buffer = "";
 
+  const consume = (line) => {
+    if (!line || !line.startsWith("data:")) return;
+    const payload = line.slice(5).trim();
+    if (payload === "[DONE]") return;
+    try {
+      const json = JSON.parse(payload);
+      const delta = json.choices?.[0]?.delta || {};
+      // Reasoning model: on accumule la longueur du reasoning mais on NE forward PAS
+      // au TTS — il ne doit pas parler son raisonnement interne.
+      if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+        reasoningChars += delta.reasoning_content.length;
+      }
+      if (typeof delta.content === "string" && delta.content) {
+        if (firstTokenMs === null) firstTokenMs = Date.now() - startMs;
+        fullText += delta.content;
+        try { onToken(delta.content); } catch (_) {}
+      }
+    } catch (_) {
+      // ignore malformed SSE chunk
+    }
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-
-    // SSE: lines starting with "data: ", terminated by \n\n
     let idx;
     while ((idx = buffer.indexOf("\n")) !== -1) {
       const line = buffer.slice(0, idx).trim();
       buffer = buffer.slice(idx + 1);
-      if (!line || !line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (payload === "[DONE]") continue;
-      try {
-        const json = JSON.parse(payload);
-        const delta = json.choices?.[0]?.delta?.content;
-        if (delta) {
-          if (firstTokenMs === null) firstTokenMs = Date.now() - startMs;
-          fullText += delta;
-          try { onToken(delta); } catch (_) {}
-        }
-      } catch (_) {
-        // ignore malformed SSE chunk
-      }
+      consume(line);
     }
   }
+  // Flush trailing buffer (last frame sans newline final)
+  if (buffer.trim()) consume(buffer.trim());
 
   return {
     text: fullText.trim(),
     firstTokenMs: firstTokenMs ?? Date.now() - startMs,
     totalMs: Date.now() - startMs,
+    reasoningChars,
   };
 }

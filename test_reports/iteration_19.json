@@ -1,0 +1,42 @@
+{
+  "summary": "Phase 8B RETEST after llm.js + relay-ws.js fixes: 7/8 pytest PASS. The ORIGINAL CRITICAL bug from iteration_18 (DeepSeek V4 Flash reasoning_content consuming the entire token budget → empty result.text → dead air on the line) is now FULLY RESOLVED. Evidence: streaming test now receives deltas, reasoningChars > 0 returned from streamChat (samples observed: 292, 515 chars), result.text is non-empty (e.g. 'Bonne question. Pour vous donner une estimation, pourriez-vous me dire combien d\\'appels recevez-vous par jour environ ?'), ai_speaking payload carries reasoning_chars field, conversation memory test now PASSES (2nd turn references garage context). The lone remaining failure (test_ws_streaming_response_and_events) is a DIFFERENT, non-critical assertion: ai_first_token ts_ms exceeds the <3000ms budget under reasoning-model variance (measured runs: 1621ms PASS standalone, 3178ms / 4671ms FAIL under full-suite load). 4 real Fireworks calls consumed (within the 5-call budget). CAtest* rows cleaned up (Supabase 204).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "WS /webhooks/voice/relay/ws (modules/voice/llm.js DeepSeek V4 Flash reasoning latency)",
+        "issue": "First-token latency frequently exceeds the test's 3000ms budget when DeepSeek V4 Flash emits a long reasoning trace (reasoning_chars 500+) before any delta.content. Observed first_token_ms: 1621 (standalone), 3178, 4671 (full-suite). The reasoning trace duration is non-deterministic and depends on prompt complexity. Two options: (a) raise the test budget to 5000ms — but spec says <3000ms, (b) switch FIREWORKS_MODEL to a non-reasoning model (e.g. accounts/fireworks/models/deepseek-v3p1 or qwen/llama variants) which would deliver first-token in ~300-800ms typical. Recommendation for Phase 8C: evaluate a non-reasoning model OR add a Fireworks 'reasoning:{exclude:true}' / 'reasoning_effort:low' param if supported, OR document that <3000ms is best-effort and relax test to <5000ms with median<3000ms over N runs."
+      },
+      {
+        "endpoint": "WS /webhooks/voice/relay/ws (relay-ws.js empty-result safety net — code-reviewed only, not LLM-mocked)",
+        "issue": "Safety net code path at relay-ws.js lines 158-167 is correctly implemented: if (!result.text) → sends fallback French text 'Pardon, je n\\'ai pas saisi. Pouvez-vous reformuler votre question ?' as a single last:true frame AND logs event_type='error' with payload={empty_llm_response:true, reasoning_chars}, AND appendAssistant() with the fallback so memory stays consistent. Could not exercise live because reasoning_content fix + max_tokens=1024 now makes empty result.text essentially unreachable on real Fireworks responses; verified by code review only."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_phase8b_llm.py",
+    "/app/test_reports/pytest/iteration_19.xml"
+  ],
+  "action_items": [
+    "Phase 8C decision: either (a) accept that <3000ms first-token is best-effort with deepseek-v4-flash reasoning and relax test to <5000ms, or (b) switch FIREWORKS_MODEL to a non-reasoning variant for predictable sub-second first-token. Today's behavior: median first-token ~2-3s, p95 ~5s, which is borderline for a real-time voice UX where Twilio ConversationRelay TTS adds another 200-400ms before the caller hears anything.",
+    "Optional: add a tiny pre-roll opener token (e.g. 'Hmm,') in handlePrompt BEFORE awaiting streamChat — masks the reasoning latency to the caller. Not blocking."
+  ],
+  "critical_code_review_comments": [
+    "llm.js — reasoning_content silencing is correctly implemented (lines 78-80, count chars but never call onToken). max_tokens default raised to 1024 (line 41). Trailing-buffer flush added (line 103). All three fixes from iteration_18 action items are present and correct.",
+    "relay-ws.js handlePrompt — in-flight llmAbort.abort() at the top of a new prompt (line 127) is correctly implemented. Empty-result safety net (lines 158-167) is correct. The new llmAbort = new AbortController() on each prompt + finally { llmAbort = null; } block is clean.",
+    "relay-ws.js line 170 — when result.text is non-empty, server sends an explicit final {token:'', last:true} marker. This is the protocol Twilio ConversationRelay expects to terminate the assistant turn — correct.",
+    "The minor concerns from iteration_18 (memory size cap, wsTokens Map LRU, empty system prompt safety fallback) are unchanged and remain valid follow-ups but are NOT blocking Phase 8B."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "87.5% (7/8 pytest). The original CRITICAL bug is closed. The remaining failure is a latency budget, not a correctness bug.",
+    "frontend": "skipped (testing_type=backend only)"
+  },
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (unused — Phase 8B tests hit /webhooks/voice/* directly under DEV_BYPASS_TWILIO_SIGNATURE=true). Supabase service-role key used for assertions.",
+  "seed_data_creation": "No new seed. Exevori company_id 992724ec-a5ec-4ecd-a2f4-9f2a6afa3f65 was already seeded with assistant_configs + twilio_configs. All test-generated calls with twilio_call_sid LIKE 'CAtest%' deleted at end (HTTP 204).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Phase 8B reasoning_content empty-response bug is RESOLVED. test_phase8b_llm.py at /app/voicedesk_project/voicedesk/backend/tests/ — 7/8 stable. The single flaky/failing assertion is at line 160: first_token_evs[0]['ts_ms'] < 3000 — this is a latency budget that DeepSeek V4 Flash reasoning model cannot reliably meet (typical 2-5s for reasoning_chars 300-800 before content). Either (a) relax to <5000ms, or (b) the main agent switches to a non-reasoning Fireworks model for Phase 8C. Backend is started via `nohup node backend/index.js` (NOT supervisor — pid 3041 was running during this run). Budget consumed: ~4 real Fireworks calls.",
+  "rca of the issue": "RCA — Remaining failure (first-token > 3000ms): DeepSeek V4 Flash is a reasoning model. Even with reasoning_content silenced at the parser layer, Fireworks still SPENDS time emitting the reasoning trace SSE frames before any delta.content arrives. Measured reasoning_chars in this run: 292 (first standalone), 515, 700+. At Fireworks generation speed (~50-100 reasoning tokens/sec), 500 chars ≈ 100 tokens ≈ 1.5-3s of wall time BEFORE the first content delta. Plus network + DeepSeek queue latency. Net result: ai_first_token ts_ms is non-deterministic in the 1.5-5s range. The reasoning_content silencing fix prevents EMPTY responses (the original critical bug) but cannot prevent reasoning latency itself. Mitigation requires a model swap or a Fireworks 'reasoning:{exclude:true}' equivalent if supported; otherwise the <3000ms assertion must be relaxed to match reality."
+}
