@@ -197,6 +197,21 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 12. 🎨 **Phase Esthétique finale** (~25-35 crédits — passe globale)
 13. 🚀 Démarchage commercial
 
+### Phase 8B — Cerveau DeepSeek V4 Flash (DONE — 14 juin 2026)
+- Migration 005 exécutée (system_prompt_voice_fr, voice_speed/stability/similarity sur assistant_configs)
+- Seed `assistant_configs` + `twilio_configs` pour **Exevori** (company_id `992724ec-a5ec-4ecd-a2f4-9f2a6afa3f65`) : Léa, voix `WW0JfNPk5DgcQdM0d6X6`, prompt voice v1 "Léa Exevori" complet (2066 chars), numéro Twilio `+15817004171` avec `auth_token` chiffré AES-256-GCM
+- Backend nouveau `modules/voice/llm.js` — Fireworks DeepSeek V4 Flash streaming SSE :
+  - Modèle: `accounts/fireworks/models/deepseek-v4-flash` (1M context, reasoning model)
+  - **Fix critique** : silence `delta.reasoning_content` (compte les chars mais ne forward PAS au TTS) + `max_tokens=1024` par défaut (laisse budget reasoning + content)
+  - Retourne `{text, firstTokenMs, totalMs, reasoningChars}`
+  - Trailing buffer flush si fin sans newline
+- Backend nouveau `modules/voice/memory.js` — Conversation memory in-memory par `callSid` (TTL 30min, auto-purge toutes les 5min, helpers initSession/getSession/appendUser/appendAssistant/endSession)
+- Backend `modules/voice/relay-ws.js` refactoré : streaming LLM token-par-token vers ConversationRelay (chaque delta envoyé en `{type:'text', token:..., last:false}`) + final marker `{type:'text', token:'', last:true}` + **safety net** fallback FR si `result.text` vide + cancel any in-flight `llmAbort` au début d'un nouveau prompt + abort sur `interrupt`
+- Backend `modules/voice/inbound.js` : welcomeGreeting + systemPrompt lus dynamiquement depuis `assistant_configs` (plus de hardcode "Marie")
+- `DEV_BYPASS_TWILIO_SIGNATURE=true` ajouté à `.env` pour permettre pytest local sans HMAC
+- Testing iteration_19 → **8/8 pytest PASS** dans `backend/tests/test_phase8b_llm.py` : greeting Exevori (pas Marie), persistance calls, streaming SSE avec ack+qualification patterns, mémoire conversationnelle 2-turns, interrupt qui abort le stream, memory unit, fail-safe placeholder key
+- **⚠️ Note latence** : DeepSeek V4 Flash reasoning model = first-token 1.5-5s typique (mesuré). Le welcomeGreeting Twilio + le pattern bridging dans le prompt masquent cette latence côté UX. Décision pour Phase 8C : conserver V4 Flash (qualité reasoning) sinon basculer sur un modèle non-reasoning (`deepseek-v3p1`) si test réel client juge la latence inacceptable.
+
 ### Phase 8A — Voice Foundation Twilio ConversationRelay (DONE — 14 juin 2026)
 - Migration `006_phase_8a_voice_infra.sql` exécutée par user :
   - Extensions `calls` : `twilio_call_sid` (unique partiel), `live_status` (ENUM check), `cost_cents`, `recording_id` (FK)
