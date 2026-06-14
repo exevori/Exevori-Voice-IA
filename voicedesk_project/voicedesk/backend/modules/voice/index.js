@@ -5,3 +5,4 @@
 
 export { default as voiceWebhookRouter } from "./inbound.js";
 export { attachVoiceRelayWS } from "./relay-ws.js";
+export { attachMediaStreamWS } from "./media-stream-ws.js";

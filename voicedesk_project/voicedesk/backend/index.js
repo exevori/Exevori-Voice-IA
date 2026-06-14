@@ -32,7 +32,7 @@ import companyRouter from "./modules/company/index.js";
 import teamRouter from "./modules/team/index.js";
 import emailAccountsRouter from "./modules/email-accounts/index.js";
 import twilioConfigRouter from "./modules/twilio-config/index.js";
-import { voiceWebhookRouter, attachVoiceRelayWS } from "./modules/voice/index.js";
+import { voiceWebhookRouter, attachVoiceRelayWS, attachMediaStreamWS } from "./modules/voice/index.js";
 import learningRouter from "./modules/learning/index.js";
 import knowledgeRouter from "./modules/knowledge/index.js";
 import billingRouter from "./modules/billing/index.js";
@@ -155,17 +155,25 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ── HTTP server + WebSocket pour ConversationRelay ──
+// ── HTTP server + WebSocket pour ConversationRelay + Media Streams ──
 const server = http.createServer(app);
 const voiceWss = new WebSocketServer({ noServer: true });
 attachVoiceRelayWS(voiceWss);
+const mediaStreamWss = new WebSocketServer({ noServer: true });
+attachMediaStreamWS(mediaStreamWss);
 
 server.on("upgrade", (req, socket, head) => {
   const url = req.url || "";
-  // Accept both /api/voice/relay/ws (prod via Emergent proxy) and /webhooks/voice/relay/ws (local tests)
+  // ConversationRelay (Phase 8B/8C)
   if (url.startsWith("/api/voice/relay/ws") || url.startsWith("/webhooks/voice/relay/ws")) {
     voiceWss.handleUpgrade(req, socket, head, (ws) => {
       voiceWss.emit("connection", ws, req);
+    });
+  }
+  // Twilio Media Streams custom (Phase 8D)
+  else if (url.startsWith("/api/voice/media-stream") || url.startsWith("/webhooks/voice/media-stream")) {
+    mediaStreamWss.handleUpgrade(req, socket, head, (ws) => {
+      mediaStreamWss.emit("connection", ws, req);
     });
   } else {
     socket.destroy();

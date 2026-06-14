@@ -116,13 +116,14 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
     // Snapshot de la config assistant pour la WS (évite un round-trip DB)
     assistantName: assistantConfig?.assistant_name || "Léa",
     systemPrompt: assistantConfig?.system_prompt_voice_fr || assistantConfig?.system_prompt_fr || "",
+    voiceId: assistantConfig?.voice_id || process.env.ELEVENLABS_VOICE_ID || "WW0JfNPk5DgcQdM0d6X6",
+    greeting: assistantConfig?.greeting_inbound_fr || `Bonjour, ici ${assistantConfig?.assistant_name || "Léa"}. Comment puis-je vous aider ?`,
     prerollEnabled: assistantConfig?.voice_preroll_enabled ?? (process.env.VOICE_PREROLL_ENABLED === "true"),
     expiresAt: Date.now() + 60_000, // 60s pour que Twilio se connecte
   });
 
   // Construction de l'URL WSS publique
   // En prod Emergent: /api/voice/relay/ws (le proxy route /api/* vers backend)
-  // En local: /webhooks/voice/relay/ws fonctionne aussi via alias
   const proto = req.header("X-Forwarded-Proto") || "https";
   const host  = req.header("X-Forwarded-Host")  || req.header("host");
   const wsUrl = `wss://${host}/api/voice/relay/ws`;
@@ -131,7 +132,13 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
   const welcomeGreeting = assistantConfig?.greeting_inbound_fr
     || `Bonjour, ici ${assistantConfig?.assistant_name || "Léa"}. Comment puis-je vous aider ?`;
 
-  // TwiML <Connect><ConversationRelay>
+  const voiceId = assistantConfig?.voice_id
+    || process.env.ELEVENLABS_VOICE_ID
+    || "WW0JfNPk5DgcQdM0d6X6";
+
+  // TwiML <Connect><ConversationRelay ttsProvider="ElevenLabs"/>
+  // Twilio gère le routage vers ElevenLabs en interne (compte Pay-as-you-go requis,
+  // clé ElevenLabs liée via Twilio Console > Voice > Manage > TTS API Keys).
   const connect = vr.connect({
     action: `${proto}://${host}/api/voice/relay-action`,
   });
@@ -143,10 +150,8 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
     language: "fr-FR",
     transcriptionProvider: "Deepgram",
     speechModel: "nova-2-general",
-    // Phase 8C-2 : ElevenLabs natif via Twilio TTS API Keys (compte upgradé Pay-as-you-go).
-    // Format Twilio ConversationRelay : voice="<voice_id>-<model>"
     ttsProvider: "ElevenLabs",
-    voice: `${assistantConfig?.voice_id || "WW0JfNPk5DgcQdM0d6X6"}-eleven_flash_v2_5`,
+    voice: `${voiceId}-eleven_flash_v2_5`,
   };
 
   connect.conversationRelay(relayAttrs)
