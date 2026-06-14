@@ -101,6 +101,9 @@ app.get("/", (req, res) => {
 
 // ── WEBHOOKS EXTERNES (Gmail, Twilio, Resend, Calendly) - pas d'auth ──
 app.use("/webhooks", webhooksRouter);
+// Voice ConversationRelay : doit être sous /api/* pour passer le proxy Emergent
+app.use("/api/voice", voiceWebhookRouter);
+// Alias historique pour compatibilité tests locaux
 app.use("/webhooks/voice", voiceWebhookRouter);
 
 // ── ROUTES PUBLIQUES (login, signup, reset) ──
@@ -155,7 +158,8 @@ attachVoiceRelayWS(voiceWss);
 
 server.on("upgrade", (req, socket, head) => {
   const url = req.url || "";
-  if (url.startsWith("/webhooks/voice/relay/ws")) {
+  // Accept both /api/voice/relay/ws (prod via Emergent proxy) and /webhooks/voice/relay/ws (local tests)
+  if (url.startsWith("/api/voice/relay/ws") || url.startsWith("/webhooks/voice/relay/ws")) {
     voiceWss.handleUpgrade(req, socket, head, (ws) => {
       voiceWss.emit("connection", ws, req);
     });

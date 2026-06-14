@@ -121,19 +121,19 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
   });
 
   // Construction de l'URL WSS publique
+  // En prod Emergent: /api/voice/relay/ws (le proxy route /api/* vers backend)
+  // En local: /webhooks/voice/relay/ws fonctionne aussi via alias
   const proto = req.header("X-Forwarded-Proto") || "https";
   const host  = req.header("X-Forwarded-Host")  || req.header("host");
-  const wsUrl = `wss://${host}/webhooks/voice/relay/ws`;
+  const wsUrl = `wss://${host}/api/voice/relay/ws`;
 
   // Greeting depuis assistant_configs (sinon fallback générique)
   const welcomeGreeting = assistantConfig?.greeting_inbound_fr
     || `Bonjour, ici ${assistantConfig?.assistant_name || "Léa"}. Comment puis-je vous aider ?`;
 
-  // ──────────────────────────────────────────────────────────
-  // TwiML <Connect><ConversationRelay> avec voix ElevenLabs
-  // ──────────────────────────────────────────────────────────
+  // TwiML <Connect><ConversationRelay>
   const connect = vr.connect({
-    action: `${proto}://${host}/webhooks/voice/relay-action`,
+    action: `${proto}://${host}/api/voice/relay-action`,
   });
 
   const relayAttrs = {
