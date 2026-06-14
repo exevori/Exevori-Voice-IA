@@ -1,0 +1,46 @@
+{
+  "summary": "Phase 6B Email IMAP multi-comptes — Backend 14/14 PASS (pytest), Frontend wizard + list + delete OK. UN bug d'affichage frontend détecté : la ligne mono 'imap_host:port · smtp_host:port' n'apparaît PAS dans la liste car le GET /email-accounts retourne imap_configs comme OBJECT (relation 1:1 via FK unique) alors que le composant AccountRow lit acc.imap_configs?.[0] (indexation tableau) → undefined → ligne masquée. Tout le reste fonctionne.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "EmailAccountsTab → AccountRow",
+        "issue": "La ligne 'imap_host:port · smtp_host:port' (mono, text-tertiary) ne s'affiche jamais. Le backend retourne imap_configs comme un OBJET (Supabase résout la relation 1:1 quand la FK email_account_id a un unique constraint), mais le composant fait `const imap = acc.imap_configs?.[0];` qui retourne undefined sur un objet. Confirmé en UI : row text='ZOqa-uitest-…@example.testActifQA UI Test · Brouillons seulement (recommandé)' — pas de 'imap.example.test' visible.",
+        "selector": "[data-testid=\"email-account-{id}\"]",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_email_accounts_phase_6b.py",
+    "/app/test_reports/pytest/iteration_13.xml"
+  ],
+  "action_items": [
+    "FIX UI (EmailAccountsTab.jsx ligne 148): remplacer `const imap = acc.imap_configs?.[0];` par `const imap = Array.isArray(acc.imap_configs) ? acc.imap_configs[0] : acc.imap_configs;` — OU côté backend, normaliser la réponse GET / pour toujours retourner un array (ex: `imap_configs: data.map(a => ({...a, imap_configs: [].concat(a.imap_configs || [])}))`).",
+    "Optionnel: aligner aussi la réponse de POST / (qui retourne `account.imap` en objet) — actuellement incohérent avec GET / (qui retourne `imap_configs`)."
+  ],
+  "critical_code_review_comments": [
+    "crypto.js : AES-256-GCM correct (IV 12B random, tag 16B vérifié) + selfTestCrypto OK. Tampering du tag → throw confirmé (authenticated encryption fonctionne).",
+    "POST /email-accounts : rollback manuel email_accounts si chiffrement ou insert imap_configs échoue — bon. Mais pas de transaction atomique côté Supabase (deux INSERT séparés) — risque résiduel si DELETE rollback échoue. Acceptable pour V1.",
+    "GET / : la sélection nested Supabase `imap_configs (id, imap_host, …)` retourne un OBJET si la FK est unique côté DB, et un ARRAY sinon. Inconsistance avec le frontend qui assume toujours un array. À normaliser.",
+    "is_primary partial unique : géré côté code (UPDATE…is_primary=false avant INSERT). Pattern correct, mais non-atomique → race possible si 2 requêtes concurrentes ; OK pour PME mono-utilisateur.",
+    "DELETE /:id : cascade via FK ON DELETE CASCADE — vérifié, imap_configs supprimé en re-GET. Pas de vérification de tenant (company_id) côté backend → si l'ID est connu d'un autre tenant, suppression possible. RLS DB-side doit bloquer (à vérifier en Phase 8 si rôles ajoutés). Pour qa-bot=company_admin actuel, OK.",
+    "test-connection : timeout 8s + tlsOptions rejectUnauthorized:false — bon pour PMEs avec certifs auto-signés. Graceful failure confirmé (imap_error et smtp_error retournés sans crash).",
+    "Frontend wizard-next-3 reste bien disabled tant que testResult.success !== true — UX correcte."
+  ],
+  "updated_files": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_email_accounts_phase_6b.py (NEW — 14 pytest cases)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "95%"},
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (company_admin, company_id af5f079f-6fc2-4d70-8c8d-51d83d301906)",
+  "seed_data_creation": "Aucune donnée résiduelle. Tous accounts qa-*@example.test créés pendant le test ont été nettoyés (fixture autouse purge + cleanup final via DELETE API). Vérification finale GET /email-accounts → 0 account.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 6B complète côté backend (crypto AES-256-GCM, CRUD multi-comptes, password chiffré jamais exposé, cascade delete, is_primary unique partial). Frontend wizard 3 étapes 100% fonctionnel + onglet sans badge phase. UN seul bug d'affichage mineur (imap_host:port non rendu — voir action_items). Backend tourne en `node index.js` manuel (PID actuel ok), supervisor stack par défaut peut interférer si redémarrée. Cleanup pattern: DELETE /api/v1/email-accounts/{id} via qa-bot token suffit.",
+  "rca of the issue": "Bug UI imap_host:port non affiché — RCA : Supabase PostgREST renvoie une relation foreign-key comme OBJET (vs array) quand la colonne de la table enfant a un UNIQUE constraint sur la FK. Le schéma imap_configs.email_account_id est unique (relation 1:1), donc `select('imap_configs(...)')` retourne `imap_configs: {...}` et non `imap_configs: [{...}]`. Le frontend assume un array via `acc.imap_configs?.[0]`. Mitigation simple côté frontend (proposée dans action_items) ou normalisation côté backend (map sur la réponse list)."
+}
