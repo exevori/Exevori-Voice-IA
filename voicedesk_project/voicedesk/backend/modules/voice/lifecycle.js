@@ -1,8 +1,15 @@
 // ============================================================
 // EXEVORI VOICE IA — Voice call lifecycle helpers (Phase 8A)
 //
-// Création/mise à jour de la ligne `calls` + logging des events
-// dans `call_events`. Centralise tous les inserts liés aux appels.
+// Schéma `calls` réel:
+//   id, company_id, contact_id, twilio_call_sid, caller_phone,
+//   caller_name, duration_seconds, status, intent, outcome,
+//   language_used, ai_summary, ai_transcript, confidence_score,
+//   cost_usd, ended_at, created_at, live_status, cost_cents,
+//   recording_id
+//
+// Pas de "direction", pas de "callee_number" en V1 (un numéro Twilio
+// par PME → callee implicite via twilio_configs.phone_number).
 // ============================================================
 
 import { createClient } from "@supabase/supabase-js";
@@ -10,14 +17,14 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const supabase = createClient(
+export const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 /**
  * Retrouve la company_id correspondant au numéro Twilio appelé (champ "to").
- * - V1: 1 numéro Twilio par PME via twilio_configs.phone_number.
+ * V1: 1 numéro Twilio par PME via twilio_configs.phone_number (UNIQUE).
  */
 export async function findCompanyByTwilioNumber(to) {
   const { data } = await supabase
@@ -30,12 +37,12 @@ export async function findCompanyByTwilioNumber(to) {
 
 /**
  * Crée (ou récupère si déjà existe) la ligne `calls` pour ce Twilio CallSid.
- * Retourne le call (id, company_id, ...).
+ * Retourne le call (id, company_id, ...) ou throw si insert échoue.
  */
-export async function getOrCreateCall({ twilio_call_sid, company_id, from, to, direction = "inbound" }) {
+export async function getOrCreateCall({ twilio_call_sid, company_id, from }) {
   const { data: existing } = await supabase
     .from("calls")
-    .select("id, company_id, twilio_call_sid, live_status")
+    .select("id, company_id, twilio_call_sid, live_status, status")
     .eq("twilio_call_sid", twilio_call_sid)
     .maybeSingle();
   if (existing) return existing;
@@ -43,26 +50,25 @@ export async function getOrCreateCall({ twilio_call_sid, company_id, from, to, d
   const row = {
     company_id,
     twilio_call_sid,
-    direction,
-    caller_number: from,
-    callee_number: to,
+    caller_phone: from,
     status: "in_progress",
     live_status: "connecting",
-    started_at: new Date().toISOString(),
+    language_used: "fr-CA",
   };
   const { data, error } = await supabase
     .from("calls")
     .insert(row)
-    .select("id, company_id, twilio_call_sid, live_status")
+    .select("id, company_id, twilio_call_sid, live_status, status")
     .single();
-  if (error) throw error;
+  if (error) throw new Error(`calls.insert failed: ${error.message}`);
   return data;
 }
 
 /**
- * Met à jour le live_status de l'appel.
+ * Met à jour le live_status de l'appel (no-op si call_id falsy).
  */
 export async function setLiveStatus(call_id, live_status, extra = {}) {
+  if (!call_id) return;
   await supabase.from("calls").update({ live_status, ...extra }).eq("id", call_id);
 }
 
@@ -70,6 +76,7 @@ export async function setLiveStatus(call_id, live_status, extra = {}) {
  * Marque l'appel comme terminé.
  */
 export async function endCall(call_id, { status = "completed", duration_seconds = null } = {}) {
+  if (!call_id) return;
   const update = {
     live_status: "ended",
     status,
@@ -81,14 +88,15 @@ export async function endCall(call_id, { status = "completed", duration_seconds 
 
 /**
  * Log un event dans call_events (best-effort, jamais throw).
+ * Skip si call_id falsy pour éviter FK violation.
  */
 export async function logEvent({ company_id, call_id, event_type, payload = {}, ts_ms = null }) {
+  if (!call_id || !company_id) return;
   try {
     await supabase.from("call_events").insert({
       company_id, call_id, event_type, payload, ts_ms,
     });
   } catch (err) {
-    // best-effort
     console.error("[voice/lifecycle] logEvent failed:", err.message, event_type);
   }
 }

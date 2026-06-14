@@ -17,6 +17,7 @@ import twilio from "twilio";
 import crypto from "node:crypto";
 import { verifyTwilioSignature } from "./signature.js";
 import {
+  supabase,
   findCompanyByTwilioNumber,
   getOrCreateCall,
   setLiveStatus,
@@ -60,14 +61,13 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
     return res.type("text/xml").send(vr.toString());
   }
 
-  // Créer la ligne calls + log event 'started'
+  // Créer la ligne calls + log event 'started' (fail-fast si DB KO)
   let call;
   try {
     call = await getOrCreateCall({
       twilio_call_sid: CallSid,
       company_id: company.company_id,
       from: From,
-      to: To,
     });
     await logEvent({
       company_id: company.company_id,
@@ -78,6 +78,11 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
     });
   } catch (err) {
     console.error("[voice/inbound] DB error:", err.message);
+    // Fail-fast: pas de ConversationRelay si on n'a pas pu créer la ligne calls
+    vr.say({ language: "fr-CA" },
+      "Désolée, problème technique. Veuillez rappeler dans quelques instants.");
+    vr.hangup();
+    return res.type("text/xml").send(vr.toString());
   }
 
   // Génère un token éphémère qui authentifie la WS associée à CET appel
@@ -121,10 +126,9 @@ router.post("/status", verifyTwilioSignature, async (req, res) => {
   const { CallSid, CallStatus, CallDuration, From, To } = req.body || {};
 
   try {
-    // Lookup call par CallSid
-    const { data: call } = await (await import("@supabase/supabase-js")).createClient(
-      process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY
-    ).from("calls").select("id, company_id").eq("twilio_call_sid", CallSid).maybeSingle();
+    // Lookup call par CallSid via le client partagé
+    const { data: call } = await supabase
+      .from("calls").select("id, company_id").eq("twilio_call_sid", CallSid).maybeSingle();
 
     if (call) {
       if (CallStatus === "completed") {
@@ -134,11 +138,12 @@ router.post("/status", verifyTwilioSignature, async (req, res) => {
           event_type: "ended",
           payload: { call_status: CallStatus, duration: CallDuration },
         });
-      } else if (CallStatus === "ringing" || CallStatus === "in-progress" || CallStatus === "answered") {
-        const map = { ringing: "ringing", "in-progress": "ai_speaking", answered: "ai_speaking" };
-        await setLiveStatus(call.id, map[CallStatus] || "connecting");
+      } else if (CallStatus === "ringing") {
+        await setLiveStatus(call.id, "ringing");
+      } else if (CallStatus === "in-progress" || CallStatus === "answered") {
+        await setLiveStatus(call.id, "connecting");
       } else if (CallStatus === "failed" || CallStatus === "busy" || CallStatus === "no-answer") {
-        await endCall(call.id, { status: CallStatus });
+        await endCall(call.id, { status: "abandoned" });
         await logEvent({
           company_id: call.company_id, call_id: call.id,
           event_type: "error",

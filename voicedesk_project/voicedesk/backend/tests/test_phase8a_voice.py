@@ -131,11 +131,11 @@ class TestInboundWebhook:
         )
         assert r.status_code == 200
         time.sleep(0.6)
-        rows = sb_get("calls", {"twilio_call_sid": f"eq.{sid}", "select": "id,company_id,direction,live_status,status"}).json()
+        rows = sb_get("calls", {"twilio_call_sid": f"eq.{sid}", "select": "id,company_id,caller_phone,live_status,status"}).json()
         assert len(rows) == 1, f"call row not created: {rows}"
         call = rows[0]
         assert call["company_id"] == COMPANY_ID
-        assert call["direction"] == "inbound"
+        assert call["caller_phone"] == "+15145557777"
         assert call["live_status"] == "connecting"
         assert call["status"] == "in_progress"
         events = sb_get("call_events", {"call_id": f"eq.{call['id']}", "event_type": "eq.started", "select": "event_type,payload"}).json()
@@ -191,7 +191,7 @@ class TestStatusWebhook:
         assert r.status_code == 200
         time.sleep(0.5)
         call = sb_get("calls", {"twilio_call_sid": f"eq.{sid}", "select": "id,status,live_status"}).json()[0]
-        assert call["status"] == "failed"
+        assert call["status"] == "abandoned"
         events = sb_get("call_events", {"call_id": f"eq.{call['id']}", "event_type": "eq.error", "select": "event_type"}).json()
         assert len(events) >= 1
 

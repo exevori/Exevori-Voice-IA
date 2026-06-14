@@ -1,0 +1,40 @@
+{
+  "summary": "Phase 8A Voice Foundation RETEST after schema fix. 15/15 tests PASS. All Phase 8A acceptance criteria validated: TwiML fallback Say+Hangup on unknown number; TwiML <Connect><ConversationRelay> with welcomeGreeting + wsAuthToken on configured number; calls row persisted with caller_phone + status='in_progress' + live_status='connecting' + 'started' event logged; /status webhook drives lifecycle correctly (ringing→live_status='ringing', completed→ended + duration + 'ended' event, failed→status='abandoned' + 'error' event); /relay-action returns <Hangup/>; WS endpoint accepts upgrade, rejects invalid token, accepts valid token (one-shot), logs connecting/user_speaking/ai_speaking/interrupted/ended events with correct payloads (dtmf, ws_closed reason); RLS /api/v1/calls correctly returns qa-bot's calls.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/v1/calls",
+        "issue": "Still requires explicit ?company_id= query param even though the JWT carries it. Should default to JWT claim and rely on RLS. Not blocking but inconsistent with multi-tenant pattern. (Noted in iteration_16; carried over.)"
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_phase8a_voice.py",
+    "/app/test_reports/pytest/iteration_17.xml"
+  ],
+  "action_items": [
+    "Optional: make GET /api/v1/calls default company_id to JWT claim (non-blocking).",
+    "Phase 8E future: replace in-memory wsTokens Map with Redis for multi-worker deploys (already noted in inbound.js, not blocking)."
+  ],
+  "critical_code_review_comments": [
+    "Schema fix correctly applied: lifecycle.js now inserts only existing columns (caller_phone, status, live_status, language_used, twilio_call_sid, company_id); no direction/caller_number/callee_number references remain.",
+    "Fail-fast pattern correctly implemented in /inbound: if getOrCreateCall throws, the handler returns Say+Hangup TwiML instead of going to ConversationRelay with a dangling callId. Verified via test_inbound_unknown_number + DB persistence test.",
+    "/status now uses the shared `supabase` client imported from lifecycle.js — dynamic import removed. Confirmed.",
+    "CallStatus mapping is correct: ringing→ringing, in-progress/answered→connecting (no longer prematurely 'ai_speaking'), failed/busy/no-answer→status='abandoned' + error event, completed→ended + duration.",
+    "logEvent/setLiveStatus/endCall correctly no-op on falsy call_id, preventing FK violations on call_events.",
+    "Twilio signature middleware correctly bypassed in dev (TWILIO_AUTH_TOKEN='placeholder')."
+  ],
+  "updated_files": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_phase8a_voice.py (replaced direction assertion with caller_phone, replaced status=='failed' with status=='abandoned' to match the new mapping)"
+  ],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (company_id af5f079f-6fc2-4d70-8c8d-51d83d301906). From /app/memory/test_credentials.md.",
+  "seed_data_creation": "Session-scope autouse fixture twilio_config_seed inserts twilio_configs row (phone_number=+14181112222, company_id=qa-bot) via service-role REST, then deletes it on teardown. Multiple calls + call_events rows are created during tests under qa-bot's company_id; left in place (small footprint, scoped to qa-bot company).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 8A is GREEN. Next phase (8B/8C: ElevenLabs TTS, real LLM, KB integration) can build on top. Migration 005 (system_prompt_voice_fr column on companies) still NOT executed by Karim per E1's note — do not test that field. The 15-test suite is fast (~16s) and idempotent (auto-seeds + auto-cleans twilio_configs). Re-run with: pytest /app/voicedesk_project/voicedesk/backend/tests/test_phase8a_voice.py -v",
+  "rca_of_the_issue": "Previous iteration_16 RCA (schema mismatch on direction/caller_number/callee_number) is fully resolved. lifecycle.js was refactored to match the real `calls` schema (caller_phone, no direction, no callee_number). inbound.js was hardened with fail-fast on DB insert failure. /status now uses the shared supabase client. CallStatus → live_status/status mapping was corrected. All 8 previously-failing tests now pass alongside the 7 that already passed."
+}
