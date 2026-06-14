@@ -132,18 +132,19 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
   const welcomeGreeting = assistantConfig?.greeting_inbound_fr
     || `Bonjour, ici ${assistantConfig?.assistant_name || "Léa"}. Comment puis-je vous aider ?`;
 
-  // IMPORTANT — Twilio ConversationRelay n'accepte QUE des voice IDs ElevenLabs
-  // pré-approuvées dans son catalogue interne (préfixe block_elevenlabs/<lang>/<voice>).
-  // On force la voix par défaut Twilio fr-CA (féminine) pour Phase 8C-2.
-  // TODO Phase suivante : permettre de sélectionner parmi la LISTE Twilio approved,
-  // pas depuis l'ElevenLabs perso du client.
-  const TWILIO_APPROVED_FR_CA_VOICE = "IPgYtHTNLjC7Bq7IPHrm";
-  const voiceId = TWILIO_APPROVED_FR_CA_VOICE;
+  // Phase 8C-2 : voix ElevenLabs perso du compte client (Twilio expose toute la
+  // bibliothèque EL via son voice picker). Le format Twilio supporte le tuning
+  // direct dans le TwiML : "<voice_id>-<model>-<speed>_<stability>_<similarity>".
+  // Modèle "flash_v2_5" (PAS "eleven_flash_v2_5" qui était la cause du 64101).
+  const voiceIdRaw = assistantConfig?.voice_id
+    || process.env.ELEVENLABS_VOICE_ID
+    || "WW0JfNPk5DgcQdM0d6X6"; // Léa féminine FR-CA (default Exevori)
+  const voiceSpeed = (assistantConfig?.voice_speed ?? 1.10).toFixed(2);
+  const voiceStab  = (assistantConfig?.voice_stability ?? 0.50).toFixed(2);
+  const voiceSim   = (assistantConfig?.voice_similarity ?? 0.75).toFixed(2);
+  const voiceAttr  = `${voiceIdRaw}-flash_v2_5-${voiceSpeed}_${voiceStab}_${voiceSim}`;
 
   // TwiML <Connect><ConversationRelay ttsProvider="ElevenLabs"/>
-  // IMPORTANT : Twilio ConversationRelay n'accepte QUE les voices ElevenLabs
-  // pré-approuvées dans son catalogue interne (block_elevenlabs/<lang>/<voice>).
-  // Liste : https://www.twilio.com/docs/voice/conversationrelay/voice-configuration
   const connect = vr.connect({
     action: `${proto}://${host}/api/voice/relay-action`,
   });
@@ -151,13 +152,13 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
   const relayAttrs = {
     url: wsUrl,
     welcomeGreeting,
-    welcomeGreetingInterruptible: false,
+    welcomeGreetingInterruptible: true,  // Karim peut couper la parole pendant le greeting
     language: "fr-CA",
     ttsLanguage: "fr-CA",
     transcriptionProvider: "Deepgram",
     speechModel: "nova-2-general",
     ttsProvider: "ElevenLabs",
-    voice: voiceId,
+    voice: voiceAttr,
   };
 
   connect.conversationRelay(relayAttrs)
