@@ -4,6 +4,8 @@
 // ============================================================
 
 import express from "express";
+import http from "node:http";
+import { WebSocketServer } from "ws";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -26,6 +28,7 @@ import companyRouter from "./modules/company/index.js";
 import teamRouter from "./modules/team/index.js";
 import emailAccountsRouter from "./modules/email-accounts/index.js";
 import twilioConfigRouter from "./modules/twilio-config/index.js";
+import { voiceWebhookRouter, attachVoiceRelayWS } from "./modules/voice/index.js";
 import learningRouter from "./modules/learning/index.js";
 import knowledgeRouter from "./modules/knowledge/index.js";
 import billingRouter from "./modules/billing/index.js";
@@ -98,6 +101,7 @@ app.get("/", (req, res) => {
 
 // ── WEBHOOKS EXTERNES (Gmail, Twilio, Resend, Calendly) - pas d'auth ──
 app.use("/webhooks", webhooksRouter);
+app.use("/webhooks/voice", voiceWebhookRouter);
 
 // ── ROUTES PUBLIQUES (login, signup, reset) ──
 app.use("/api/v1/auth", authRouter);
@@ -144,11 +148,28 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
+// ── HTTP server + WebSocket pour ConversationRelay ──
+const server = http.createServer(app);
+const voiceWss = new WebSocketServer({ noServer: true });
+attachVoiceRelayWS(voiceWss);
+
+server.on("upgrade", (req, socket, head) => {
+  const url = req.url || "";
+  if (url.startsWith("/webhooks/voice/relay/ws")) {
+    voiceWss.handleUpgrade(req, socket, head, (ws) => {
+      voiceWss.emit("connection", ws, req);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+server.listen(PORT, () => {
   logger.info("VoiceDesk backend started", {
     port: PORT,
     env: NODE_ENV,
-    modules: 15,
+    modules: 16,
+    websocket: "/webhooks/voice/relay/ws",
   });
 });
 

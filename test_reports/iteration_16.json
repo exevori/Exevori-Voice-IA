@@ -1,0 +1,60 @@
+{
+  "summary": "Phase 8A Voice Foundation backend tests. 7/15 pass. TwiML rendering (fallback + ConversationRelay), WebSocket upgrade, invalid-token close, one-shot token consumption, relay-action hangup, /api/v1/calls listing all WORK. CRITICAL BLOCKER: lifecycle.js inserts columns (direction, caller_number, callee_number) that do NOT exist on the calls table — migration 006 only added (twilio_call_sid, live_status, cost_cents, recording_id). Result: every /webhooks/voice/inbound returns 200 OK + correct TwiML but the DB insert fails silently (catch+log only), no row in calls is persisted, and the entire status/WS event lifecycle is dead.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /webhooks/voice/inbound (DB persistence path)",
+        "issue": "Postgres error: column calls.direction does not exist. lifecycle.js getOrCreateCall() also references calls.caller_number and calls.callee_number which do not exist on the calls table. Migration 006_phase_8a_voice_infra.sql only adds twilio_call_sid, live_status, cost_cents, recording_id. The actual seed table uses caller_phone (not caller_number/callee_number) and has no direction column. Webhook still returns 200 + valid TwiML because the DB error is swallowed by a try/catch in inbound.js, but NO calls row is ever persisted — confirmed via Supabase select on twilio_call_sid for every CallSid we sent.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "POST /webhooks/voice/status",
+        "issue": "Cascading failure of the schema bug above. Because /inbound never persists a call row, /status cannot find any call by twilio_call_sid → endCall/setLiveStatus/logEvent are no-ops. Status webhook itself returns 200 but DB lifecycle (live_status=ringing/ended, status=completed/failed, duration_seconds, ended event, error event) is never applied.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "WS /webhooks/voice/relay/ws (event logging)",
+        "issue": "Cascading: wsTokens stores callId=undefined (because getOrCreateCall threw). WS setup auth itself passes (callSid matches), but every logEvent call afterwards has call_id=undefined → FK violation on call_events.call_id → no events (connecting, user_speaking, ai_speaking, interrupted, ended) are persisted. setLiveStatus(undefined,…) silently no-ops. Only the in-memory message round-trip (text + end on prompt last=true) works.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/v1/calls",
+        "issue": "Requires company_id query param (returns 400 'company_id requis' otherwise). For a multi-tenant RLS-enforced JWT-authenticated endpoint this should default to the JWT's company_id; current behavior forces clients to know/echo their own company_id. Not a blocker for Phase 8A but inconsistent with RLS pattern."
+      },
+      {
+        "endpoint": "POST /webhooks/voice/status",
+        "issue": "Mapping for CallStatus='in-progress' and 'answered' sets live_status='ai_speaking' before the AI has actually spoken; should be 'connecting' or 'user_speaking' depending on phase. Minor semantic mismatch (also irrelevant until the schema bug above is fixed)."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_phase8a_voice.py",
+    "/app/test_reports/pytest/iteration_16.xml"
+  ],
+  "action_items": [
+    "FIX MIGRATION/CODE MISMATCH (BLOCKER): Either (A) extend calls schema with columns direction TEXT, caller_number TEXT, callee_number TEXT in a new migration 007 — or (B) update lifecycle.js getOrCreateCall() to map to existing columns: drop direction, use caller_phone instead of caller_number, and drop callee_number (or add it). Recommend (A) since 'direction' (inbound/outbound) is needed for Phase 8 outbound calls and 'callee_number' is semantically distinct from caller_phone.",
+    "Add a not-null/throw guard at the end of /webhooks/voice/inbound: if call row insert fails, do NOT issue the TwiML <Connect> (the WS auth token references a callId=undefined which makes every downstream event-log fail). Better to render a 'Désolée, problème technique' Say+Hangup so failures are visible immediately instead of going to a half-functional ConversationRelay.",
+    "GET /api/v1/calls should default company_id to JWT claim when not provided (or accept absence and rely on RLS).",
+    "Consider also persisting wsAuthToken → callId mapping in Redis/DB so a worker restart doesn't drop the in-memory wsTokens Map mid-call (Phase 8E noted in inbound.js — fine for Phase 8A but worth tracking)."
+  ],
+  "critical_code_review_comments": [
+    "lifecycle.js getOrCreateCall() inserts columns that do not exist on the calls table — confirmed via Supabase REST: error 'PGRST204 Could not find the callee_number column' and 'column calls.direction does not exist'. This is the single root cause of 8/15 test failures.",
+    "inbound.js swallows the DB error with console.error then proceeds to generate a wsAuthToken + TwiML <Connect> regardless. The call ends up half-alive: TwiML renders fine, WS connects, but no DB state exists. This violates fail-fast — should at minimum short-circuit to a Say+Hangup fallback if the call row can't be persisted.",
+    "inbound.js imports @supabase/supabase-js dynamically inside /status handler (await import(...)). This is wasteful (re-imports + re-creates client on every status webhook call). Use the shared client from lifecycle.js instead.",
+    "Twilio signature middleware is correctly bypassed when TWILIO_AUTH_TOKEN='placeholder' in dev — verified."
+  ],
+  "updated_files": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_phase8a_voice.py"
+  ],
+  "success_rate": {"backend": "47% (7/15)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (company_id af5f079f-6fc2-4d70-8c8d-51d83d301906). Read from /app/memory/test_credentials.md.",
+  "seed_data_creation": "Inserted then deleted twilio_configs row (phone_number=+14181112222) for Garage Tremblay via Supabase service-role REST in a session-scope autouse fixture. Also created multiple calls/call_events rows under qa-bot company via /webhooks/voice/inbound (those that DID succeed are isolated to qa-bot; failed inserts left no orphans).",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "After E1 ships the schema fix (new migration or lifecycle.js column rename), re-run: pytest /app/voicedesk_project/voicedesk/backend/tests/test_phase8a_voice.py -v. All 15 tests should pass. The 7 currently-passing tests cover the TwiML + WS upgrade plumbing and don't depend on DB persistence. The 8 currently-failing tests all hinge on the calls insert succeeding. The session-scope twilio_config_seed fixture auto-creates/deletes the qa-bot twilio_configs entry — no manual setup needed.",
+  "rca_of_the_issue": "ROOT CAUSE: lifecycle.js:43 (getOrCreateCall) inserts a row with keys {direction, caller_number, callee_number} into the calls table. Migration 006_phase_8a_voice_infra.sql only ALTERs calls to add (twilio_call_sid, live_status, cost_cents, recording_id) — it never adds direction/caller_number/callee_number. The pre-existing calls table (from seed) uses caller_phone (not caller_number) and has no direction or callee_number columns. REPRODUCTION: curl -X POST http://localhost:8001/webhooks/voice/inbound -d 'CallSid=CAtest1&From=%2B15145551234&To=%2B14181112222&AccountSid=ACtest' → returns 200 + ConversationRelay TwiML, but backend log shows '[voice/inbound] DB error: Could not find the callee_number column of calls in the schema cache' and Supabase select on twilio_call_sid=CAtest1 returns []. MITIGATION: ship migration 007 adding the three columns (direction TEXT CHECK IN ('inbound','outbound'), caller_number TEXT, callee_number TEXT) OR refactor lifecycle.js to use existing schema. Either fix unblocks every cascading test."
+}
