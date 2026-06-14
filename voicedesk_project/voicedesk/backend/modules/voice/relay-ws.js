@@ -1,36 +1,30 @@
 // ============================================================
-// EXEVORI VOICE IA — ConversationRelay WebSocket handler (Phase 8A)
+// EXEVORI VOICE IA — ConversationRelay WebSocket handler (Phase 8B)
 //
-// Twilio ConversationRelay ouvre une WebSocket vers nous quand
-// la TwiML <ConversationRelay url="wss://..."> est rendue.
+// 8A: hardcoded text response after every user turn.
+// 8B: DeepSeek V4 Flash streaming via Fireworks → text tokens
+//     sent live to ConversationRelay as we receive them.
 //
 // Message types reçus (inbound from Twilio):
-//   - setup        : metadata d'appel (callSid, from, to, customParameters)
-//   - prompt       : voicePrompt (texte STT), last (boolean = phrase finale)
-//   - dtmf         : digit (touche du clavier)
-//   - interrupt    : barge-in (utilisateur a coupé Léa)
-//   - error        : erreur Twilio
+//   setup, prompt, interrupt, dtmf, error
 //
 // Message types envoyés (outbound to Twilio):
-//   - text         : {token: "...", last: true|false, interruptible: true}
-//   - end          : raccrocher
-//   - language     : changer langue (ex: switch fr → en)
-//   - play         : jouer un fichier audio (URL .mp3)
-//
-// Phase 8A : on répond avec un texte hardcodé puis on raccroche.
-//            Pas d'AI encore. Phase 8B branchera DeepSeek streaming.
+//   text: {token, last, interruptible, preemptible}
+//   end:  raccrocher
 // ============================================================
 
 import { consumeWsToken } from "./inbound.js";
 import { logEvent, setLiveStatus, endCall } from "./lifecycle.js";
+import { streamChat } from "./llm.js";
+import { initSession, getSession, appendUser, appendAssistant, endSession } from "./memory.js";
 
 export function attachVoiceRelayWS(wss) {
   wss.on("connection", (ws, req) => {
-    const url = req.url || "";
-    console.log("[voice/relay-ws] connection opened:", url);
+    console.log("[voice/relay-ws] connection opened:", req.url);
 
-    let session = null;        // { callSid, callId, companyId, accountSid, startedAtMs }
-    let promptBuffer = "";     // STT partial transcripts accumulés
+    let session = null;        // { callSid, callId, companyId, startedAtMs, systemPrompt, assistantName }
+    let promptBuffer = "";     // accumulates partial STT until last=true
+    let llmAbort = null;       // AbortController pour interrompre un stream LLM en cours
 
     ws.on("message", async (raw) => {
       let msg;
@@ -41,27 +35,17 @@ export function attachVoiceRelayWS(wss) {
       }
 
       switch (msg.type) {
-        case "setup":
-          await handleSetup(ws, msg);
-          break;
-        case "prompt":
-          await handlePrompt(ws, msg);
-          break;
-        case "interrupt":
-          await handleInterrupt(ws, msg);
-          break;
-        case "dtmf":
-          await handleDtmf(ws, msg);
-          break;
+        case "setup":     await handleSetup(msg); break;
+        case "prompt":    await handlePrompt(msg); break;
+        case "interrupt": await handleInterrupt(msg); break;
+        case "dtmf":      await handleDtmf(msg); break;
         case "error":
           console.error("[voice/relay-ws] Twilio error:", msg);
-          if (session) {
-            await logEvent({
-              company_id: session.companyId, call_id: session.callId,
-              event_type: "error", payload: msg,
-              ts_ms: Date.now() - session.startedAtMs,
-            });
-          }
+          if (session) await logEvent({
+            company_id: session.companyId, call_id: session.callId,
+            event_type: "error", payload: msg,
+            ts_ms: Date.now() - session.startedAtMs,
+          });
           break;
         default:
           console.log("[voice/relay-ws] unknown type:", msg.type);
@@ -70,6 +54,7 @@ export function attachVoiceRelayWS(wss) {
 
     ws.on("close", async () => {
       console.log("[voice/relay-ws] connection closed", session?.callSid);
+      if (llmAbort) llmAbort.abort();
       if (session) {
         await logEvent({
           company_id: session.companyId, call_id: session.callId,
@@ -77,17 +62,14 @@ export function attachVoiceRelayWS(wss) {
           ts_ms: Date.now() - session.startedAtMs,
         });
         await endCall(session.callId).catch(() => {});
+        endSession(session.callSid);
       }
     });
 
     ws.on("error", (e) => console.error("[voice/relay-ws] socket error:", e.message));
 
     // ─────────────────────────────────────────────────────────
-    // Handlers
-    // ─────────────────────────────────────────────────────────
-
-    async function handleSetup(ws, msg) {
-      // Auth : vérifier le wsAuthToken passé via <Parameter>
+    async function handleSetup(msg) {
       const tokenFromTwilio = msg.customParameters?.wsAuthToken;
       const entry = tokenFromTwilio ? consumeWsToken(tokenFromTwilio) : null;
 
@@ -100,80 +82,127 @@ export function attachVoiceRelayWS(wss) {
       }
 
       session = {
-        callSid: msg.callSid,
-        callId: entry.callId,
-        companyId: entry.companyId,
-        accountSid: entry.accountSid,
-        startedAtMs: Date.now(),
+        callSid:      msg.callSid,
+        callId:       entry.callId,
+        companyId:    entry.companyId,
+        accountSid:   entry.accountSid,
+        startedAtMs:  Date.now(),
+        systemPrompt: entry.systemPrompt || "",
+        assistantName: entry.assistantName || "Léa",
       };
+
+      initSession(session.callSid, session.systemPrompt);
 
       await logEvent({
         company_id: session.companyId, call_id: session.callId,
-        event_type: "connecting", payload: { setup: msg }, ts_ms: 0,
+        event_type: "connecting", payload: { setup: { from: msg.from, to: msg.to } }, ts_ms: 0,
       });
       await setLiveStatus(session.callId, "ai_speaking");
-
-      // Phase 8A : message d'accueil minimal après le welcomeGreeting.
-      // Le welcomeGreeting est déjà joué par ConversationRelay au moment
-      // du Connect (cf. inbound.js). On laisse l'utilisateur parler.
-      // (Phase 8B branchera l'LLM ici.)
     }
 
-    async function handlePrompt(ws, msg) {
+    async function handlePrompt(msg) {
       if (!session) return;
-
       const piece = msg.voicePrompt || "";
       promptBuffer += piece;
 
-      // Log partial transcript (best-effort, on log que le 'last')
-      if (msg.last) {
-        const tsMs = Date.now() - session.startedAtMs;
+      if (!msg.last) return;
+
+      // L'utilisateur a fini de parler. Log + génère réponse LLM streaming.
+      const userText = promptBuffer.trim();
+      promptBuffer = "";
+
+      await logEvent({
+        company_id: session.companyId, call_id: session.callId,
+        event_type: "user_speaking",
+        payload: { transcript: userText, lang: msg.lang },
+        ts_ms: Date.now() - session.startedAtMs,
+      });
+      await setLiveStatus(session.callId, "user_speaking");
+
+      appendUser(session.callSid, userText);
+      const conv = getSession(session.callSid);
+      if (!conv) return;
+
+      // Lance le stream LLM → envoie chaque token au ConversationRelay
+      llmAbort = new AbortController();
+      let firstTokenLogged = false;
+      let assistantText = "";
+
+      try {
+        await setLiveStatus(session.callId, "ai_speaking");
+        const result = await streamChat(
+          conv.messages,
+          (delta) => {
+            assistantText += delta;
+            if (!firstTokenLogged) {
+              firstTokenLogged = true;
+              logEvent({
+                company_id: session.companyId, call_id: session.callId,
+                event_type: "ai_first_token", payload: {},
+                ts_ms: Date.now() - session.startedAtMs,
+              });
+            }
+            // Envoie chaque delta à ConversationRelay (streaming TTS)
+            try {
+              ws.send(JSON.stringify({
+                type: "text", token: delta, last: false, interruptible: true, preemptible: true,
+              }));
+            } catch (_) {}
+          },
+          { signal: llmAbort.signal, temperature: 0.6, max_tokens: 220 }
+        );
+
+        // Marquer la fin du tour (last=true sans token additionnel)
+        try { ws.send(JSON.stringify({ type: "text", token: "", last: true, interruptible: true })); } catch (_) {}
+
+        appendAssistant(session.callSid, result.text);
+
         await logEvent({
           company_id: session.companyId, call_id: session.callId,
-          event_type: "user_speaking",
-          payload: { transcript: promptBuffer, lang: msg.lang },
-          ts_ms: tsMs,
-        });
-
-        // Phase 8A : réponse hardcodée pour valider la plomberie.
-        // Cette réponse simule ce que Phase 8B fera avec DeepSeek streaming.
-        const reply =
-          "Parfait ! Je vous remercie pour votre appel. Notre équipe vous rappellera très bientôt. Au revoir.";
-        // Envoi en 1 seul token (Phase 8B streamera token par token).
-        ws.send(JSON.stringify({
-          type: "text",
-          token: reply,
-          last: true,
-          interruptible: true,
-        }));
-
-        await logEvent({
-          company_id: session.companyId, call_id: session.callId,
-          event_type: "ai_speaking", payload: { reply },
+          event_type: "ai_speaking",
+          payload: { text: result.text, first_token_ms: result.firstTokenMs, total_ms: result.totalMs },
           ts_ms: Date.now() - session.startedAtMs,
         });
-
-        // Raccroche après la réponse
-        ws.send(JSON.stringify({ type: "end", handoffData: JSON.stringify({ reason: "phase_8a_demo_end" }) }));
-        promptBuffer = "";
+      } catch (err) {
+        if (err.name !== "AbortError") {
+          console.error("[voice/relay-ws] LLM error:", err.message);
+          await logEvent({
+            company_id: session.companyId, call_id: session.callId,
+            event_type: "error", payload: { llm_error: err.message },
+            ts_ms: Date.now() - session.startedAtMs,
+          });
+          // Fallback message + raccroche
+          try {
+            ws.send(JSON.stringify({
+              type: "text",
+              token: "Désolée, problème technique. Je vous transfère à notre équipe. Au revoir.",
+              last: true,
+            }));
+            ws.send(JSON.stringify({ type: "end" }));
+          } catch (_) {}
+        }
+      } finally {
+        llmAbort = null;
       }
     }
 
-    async function handleInterrupt(ws, msg) {
+    async function handleInterrupt(msg) {
       if (!session) return;
-      const tsMs = Date.now() - session.startedAtMs;
+      if (llmAbort) { try { llmAbort.abort(); } catch (_) {} }
       await logEvent({
         company_id: session.companyId, call_id: session.callId,
-        event_type: "interrupted", payload: msg, ts_ms: tsMs,
+        event_type: "interrupted", payload: msg,
+        ts_ms: Date.now() - session.startedAtMs,
       });
     }
 
-    async function handleDtmf(ws, msg) {
+    async function handleDtmf(msg) {
       if (!session) return;
-      const tsMs = Date.now() - session.startedAtMs;
       await logEvent({
         company_id: session.companyId, call_id: session.callId,
-        event_type: "user_speaking", payload: { dtmf: msg.digit }, ts_ms: tsMs,
+        event_type: "user_speaking",
+        payload: { dtmf: msg.digit },
+        ts_ms: Date.now() - session.startedAtMs,
       });
     }
   });

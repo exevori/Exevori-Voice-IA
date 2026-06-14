@@ -1,0 +1,56 @@
+{
+  "summary": "Phase 8B (Cerveau DeepSeek) backend tests: 7/8 PASS, 1 FAIL with critical root-caused integration bug. Created /app/voicedesk_project/voicedesk/backend/tests/test_phase8b_llm.py covering inbound greeting (Exevori Léa, not Marie/Garage Tremblay), call row persistence for company_id Exevori, WebSocket streaming + ack/qualification + call_events (ai_first_token, ai_speaking with first_token_ms/total_ms), conversation memory across 2 turns, interrupt aborting in-flight stream, ws close → ended event, memory.js unit (initSession/getSession/endSession), and llm.js fail-safe on placeholder FIREWORKS_API_KEY. Used 3 real Fireworks LLM calls (memory test #1, #2, streaming test) + several short probes for RCA, well under the 5-call budget.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "WS /webhooks/voice/relay/ws (modules/voice/llm.js streamChat)",
+        "issue": "DeepSeek V4 Flash is a REASONING model on Fireworks — it emits delta.reasoning_content chunks BEFORE any delta.content. llm.js currently only forwards delta.content, so when the reasoning trace consumes the entire max_tokens budget (220) the model emits ZERO delta.content tokens and Léa returns an EMPTY response. Reproduced directly against Fireworks: 'try 0 lines=84 content_chunks=0', 'try 1 lines=63 content_chunks=20', 'try 2 lines=84 content_chunks=0'. End-user impact: ~30-50% of user turns Léa stays silent — the WS sends only the final {token:'',last:true} marker and the AI never speaks. The first SSE delta is literally {\"reasoning_content\":\"H\"},{\"reasoning_content\":\"mm\"},... — never {content:...}. Fix options: (a) switch FIREWORKS_MODEL to a non-reasoning variant like deepseek-v3p1 / llama-v3p1, (b) significantly raise max_tokens (e.g. 1024+) so content has budget after reasoning, (c) in llm.js stream BOTH delta.content AND drop reasoning_content silently while requesting a higher max_tokens, or (d) add reasoning:{exclude:true} / reasoning_effort param if Fireworks supports it. The smoke test cited in the agent-to-agent note (844ms first token, full ack+bridge reply) was a lucky case where reasoning happened to fit; behavior is non-deterministic.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "WS /webhooks/voice/relay/ws (modules/voice/relay-ws.js handleSetup)",
+        "issue": "When LLM error path fires, server sends {type:'text', token:'<fallback msg>', last:true} then {type:'end'}. Twilio ConversationRelay clients expect 'last' marker to come AFTER one or more streamed tokens; sending the fallback text as a single last=true frame is OK but the subsequent {type:'end'} arrives after the closing marker — minor protocol cleanliness, not blocking."
+      },
+      {
+        "endpoint": "modules/voice/llm.js SSE parser",
+        "issue": "Loop terminates on reader.done without flushing the trailing buffer line. If Fireworks ever omits the final newline before [DONE], the last content delta is silently dropped. Low-probability edge case."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_phase8b_llm.py",
+    "/app/test_reports/pytest/iteration_18.xml"
+  ],
+  "action_items": [
+    "FIX llm.js — handle DeepSeek V4 Flash reasoning_content. Recommended: in the SSE parser, ALSO accept delta.reasoning_content (drop it silently — do NOT forward to TTS), then guarantee a non-empty delta.content stream by either raising max_tokens to >=1024 or switching FIREWORKS_MODEL to a non-reasoning sibling. After the fix, every prompt must produce >=1 onToken call.",
+    "Add a safety net in relay-ws.js handlePrompt: if streamChat returns result.text === '' (no content emitted), log event_type='error' with payload={empty_llm_response:true} and send a fallback French message to user instead of an empty last:true frame, so customers never get dead air.",
+    "Once llm.js is fixed, re-enable + re-run tests/test_phase8b_llm.py::TestWebSocketLLM::test_ws_streaming_response_and_events — the assertions on ack + qualification + ai_first_token<3000ms + ai_speaking payload are already correct."
+  ],
+  "critical_code_review_comments": [
+    "llm.js silently swallows reasoning_content — must explicitly handle reasoning models (Fireworks DeepSeek emits delta.reasoning_content). Currently this is a silent class of empty-response bugs.",
+    "memory.js TTL purge interval (5min) + TTL (30min) is fine but there's no upper bound on messages[] — for a long call (many turns) the system prompt + history could exceed model context window. Add a soft cap (e.g. last 20 turns) before next milestone.",
+    "relay-ws.js handlePrompt — llmAbort.abort() on interrupt works but if multiple prompts overlap (rare with last=true semantics), the previous llmAbort is overwritten without abort. Consider explicit cancel of any in-flight controller at start of handlePrompt.",
+    "inbound.js wsTokens Map has no max size limit — could grow unbounded under bursts. TTL is 60s so practical risk is small but worth a Map.size guard or LRU.",
+    "lifecycle.js / inbound.js — system_prompt_voice_fr falls back to system_prompt_fr then ''. If both are empty, initSession seeds a system message with content:'' — DeepSeek will hallucinate persona. Add a hard-coded safety prompt fallback."
+  ],
+  "updated_files": [
+    "/app/voicedesk_project/voicedesk/backend/tests/test_phase8b_llm.py (created)"
+  ],
+  "success_rate": {
+    "backend": "87.5% (7/8 pytest), 100% of non-LLM-stream assertions; the failure is a confirmed product bug, not a test issue",
+    "frontend": "skipped (testing_type=backend only)"
+  },
+  "test_credentials": "qa-bot@garage-tremblay.test / QaBot_Test_2026! (unused — Phase 8B tests hit /webhooks/voice/* directly under DEV_BYPASS_TWILIO_SIGNATURE=true). Service-role key used to read calls/call_events for assertions.",
+  "seed_data_creation": "No seed needed — Exevori company_id 992724ec-a5ec-4ecd-a2f4-9f2a6afa3f65 already had assistant_configs (system_prompt_voice_fr=2066 chars, greeting='Bonjour, ici Léa d\\'Exevori. Comment puis-je vous aider ?') + twilio_configs (+15817004171) seeded. Cleaned all calls.twilio_call_sid LIKE 'CAtest%' at end (HTTP 204).",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Existing pytest at /app/voicedesk_project/voicedesk/backend/tests/test_phase8b_llm.py is ready to re-run after llm.js fix. The single failing test (TestWebSocketLLM::test_ws_streaming_response_and_events) asserts deltas>=2 + ack word in first 60 chars + '?' present + ai_first_token<3000ms + ai_speaking payload — all match the Phase 8B spec, so DO NOT relax it. Backend is started via `node backend/index.js` (NOT supervisor — supervisor 'backend' is STOPPED by design here; pid 2400 was running). FIREWORKS_API_KEY is real; budget ~5 calls per run. DEV_BYPASS_TWILIO_SIGNATURE=true is already set in backend/.env. RCA proof commands available in iteration 18 thoughts: probe Fireworks SSE → confirms first deltas are {reasoning_content:...} with delta.content arriving (if at all) only after reasoning trace ends.",
+  "rca of the issue": "RCA — Streaming test failure (deltas=0): Direct probe of Fireworks chat-completions endpoint with model=accounts/fireworks/models/deepseek-v4-flash returned SSE frames whose first deltas are {role:'assistant'} then {reasoning_content:'H'},{reasoning_content:'mm'},{reasoning_content:','},{reasoning_content:\" l\"},{reasoning_content:\"'\"}... NEVER {content:'...'} until/unless the reasoning trace finishes within max_tokens. With max_tokens=220 and reasoning often consuming 200+ tokens, ~half of runs produce 0 content_chunks. Reproduction over 3 calls: try0 lines=84 content=0, try1 lines=63 content=20 (\"Je ne peux pas voir...\"), try2 lines=84 content=0. llm.js#L78-L84 only reads json.choices[0].delta.content, so reasoning_content is silently dropped and fullText stays ''. The relay-ws then sends {type:'text', token:'', last:true} → ConversationRelay TTS speaks nothing. Mitigation: (1) accept reasoning_content in parser but DO NOT forward to onToken — still increment a counter, (2) raise max_tokens to 1024 (or split: max_reasoning_tokens=512, max_completion_tokens=256 if Fireworks supports it), OR (3) swap to non-reasoning model. Verification after fix: rerun pytest tests/test_phase8b_llm.py — TestWebSocketLLM::test_ws_streaming_response_and_events must show deltas>=2 with ack-style opener."
+}

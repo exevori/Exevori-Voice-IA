@@ -49,9 +49,20 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
 
   const vr = new twilio.twiml.VoiceResponse();
 
-  // Trouver la PME associée à ce numéro Twilio
+  // Trouver la PME associée à ce numéro Twilio + sa config assistant
   let company = null;
-  try { company = await findCompanyByTwilioNumber(To); } catch (_) {}
+  let assistantConfig = null;
+  try {
+    company = await findCompanyByTwilioNumber(To);
+    if (company) {
+      const { data } = await supabase
+        .from("assistant_configs")
+        .select("assistant_name, voice_id, voice_speed, voice_stability, voice_similarity, greeting_inbound_fr, system_prompt_voice_fr, system_prompt_fr")
+        .eq("company_id", company.company_id)
+        .maybeSingle();
+      assistantConfig = data || null;
+    }
+  } catch (_) {}
 
   if (!company) {
     // Numéro non reconnu : fallback voicemail simple
@@ -92,6 +103,9 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
     callId: call?.id,
     companyId: company.company_id,
     accountSid: AccountSid,
+    // Snapshot de la config assistant pour la WS (évite un round-trip DB)
+    assistantName: assistantConfig?.assistant_name || "Léa",
+    systemPrompt: assistantConfig?.system_prompt_voice_fr || assistantConfig?.system_prompt_fr || "",
     expiresAt: Date.now() + 60_000, // 60s pour que Twilio se connecte
   });
 
@@ -100,15 +114,18 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
   const host  = req.header("X-Forwarded-Host")  || req.header("host");
   const wsUrl = `wss://${host}/webhooks/voice/relay/ws`;
 
+  // Greeting depuis assistant_configs (sinon fallback générique)
+  const welcomeGreeting = assistantConfig?.greeting_inbound_fr
+    || `Bonjour, ici ${assistantConfig?.assistant_name || "Léa"}. Comment puis-je vous aider ?`;
+
   // TwiML <Connect><ConversationRelay>
-  // Note: la voix par défaut est gérée par Twilio (Google TTS). Phase 8C
-  // configurera ElevenLabs via ttsProvider="elevenlabs" + voice="<id>".
+  // Phase 8C wired ttsProvider="elevenlabs" + voice + ttsApiKey.
   const connect = vr.connect({
     action: `${proto}://${host}/webhooks/voice/relay-action`,
   });
   connect.conversationRelay({
     url: wsUrl,
-    welcomeGreeting: "Bonjour, ici Marie de Garage Tremblay. Un instant s'il vous plaît.",
+    welcomeGreeting,
     welcomeGreetingInterruptible: false,
     language: "fr-FR",
     transcriptionProvider: "Deepgram",

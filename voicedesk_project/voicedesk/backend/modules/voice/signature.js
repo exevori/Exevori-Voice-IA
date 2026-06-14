@@ -19,9 +19,10 @@ export function verifyTwilioSignature(req, res, next) {
   const token = process.env.TWILIO_AUTH_TOKEN;
   const isDev = process.env.NODE_ENV !== "production";
   const isPlaceholder = !token || token === "placeholder" || token.startsWith("placeholder");
+  const explicitBypass = process.env.DEV_BYPASS_TWILIO_SIGNATURE === "true";
 
-  // Bypass en dev si pas de vraie clé (Phase 8A boot sans creds Twilio réels)
-  if (isDev && isPlaceholder) {
+  // Bypass en dev si pas de vraie clé OU si flag explicite (pour pytest local)
+  if (isDev && (isPlaceholder || explicitBypass)) {
     req.twilioSignatureBypassed = true;
     return next();
   }
