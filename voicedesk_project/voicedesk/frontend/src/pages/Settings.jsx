@@ -24,6 +24,7 @@ import { Badge } from "../components/ui/badge.jsx";
 import { Button } from "../components/ui/button.jsx";
 import { Input } from "../components/ui/input.jsx";
 import EmailAccountsTab from "../components/settings/EmailAccountsTab.jsx";
+import TelephonyTab from "../components/settings/TelephonyTab.jsx";
 import { cn } from "../lib/utils.js";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -34,7 +35,7 @@ const TABS = [
   { key: "team",       icon: Users,    labelKey: "settings.tabs.team",       fallback: "Équipe",        phase: null },
   { key: "email-accounts", icon: Mail,     labelKey: "settings.tabs.emails",  fallback: "Comptes courriel", phase: null },
   { key: "calendar",   icon: Calendar, labelKey: "settings.tabs.calendar",   fallback: "Calendrier",    phase: "6C" },
-  { key: "telephony",  icon: Phone,    labelKey: "settings.tabs.telephony",  fallback: "Téléphonie",    phase: "6D" },
+  { key: "telephony",  icon: Phone,    labelKey: "settings.tabs.telephony",  fallback: "Téléphonie",    phase: null },
   { key: "notifications", icon: Bell,  labelKey: "settings.tabs.notifications", fallback: "Notifications", phase: "6E" },
 ];
 
@@ -102,7 +103,7 @@ export default function Settings() {
           {active === "team"             && <TeamTab />}
           {active === "email-accounts"   && <EmailAccountsTab />}
           {active === "calendar"         && <ComingSoonTab phase="6C" labelKey="settings.tabs.calendar" fallback="Calendrier" desc="Liez Google Calendar ou Outlook Calendar pour permettre à Léa de prendre des RDV." />}
-          {active === "telephony"        && <ComingSoonTab phase="6D" labelKey="settings.tabs.telephony" fallback="Téléphonie" desc="Configurez votre numéro Twilio et le transfert d'appels." />}
+          {active === "telephony"        && <TelephonyTab />}
           {active === "notifications"    && <ComingSoonTab phase="6E" labelKey="settings.tabs.notifications" fallback="Notifications" desc="Choisissez vos canaux d'alerte (courriel, SMS, push)." />}
         </div>
       </div>
