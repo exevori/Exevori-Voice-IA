@@ -197,10 +197,25 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 12. 🎨 **Phase Esthétique finale** (~25-35 crédits — passe globale)
 13. 🚀 Démarchage commercial
 
+### Phase 6D — Téléphonie / Config Twilio (DONE — 14 juin 2026)
+- Migration `004_phase_6d_twilio.sql` exécutée par user dans Supabase (table `twilio_configs` + ENUM `twilio_config_status` + RLS isolation `company_id = current_company_id()`)
+- Backend `modules/twilio-config/index.js` :
+  - `GET /api/v1/twilio-config?company_id=...` — config courante sans auth_token
+  - `POST /api/v1/twilio-config/test` — vérifie credentials live contre `https://api.twilio.com/2010-04-01/Accounts/{sid}.json` (Basic Auth, timeout 8s)
+  - `PUT /api/v1/twilio-config` — upsert sur UNIQUE company_id, chiffre `auth_token` via AES-256-GCM (`lib/crypto.js`)
+  - `DELETE /api/v1/twilio-config` — supprime
+  - Validation regex : `SID_REGEX = /^AC[a-fA-F0-9]{32}$/` et `E164_REGEX = /^\+[1-9]\d{7,14}$/`
+- Frontend `components/settings/TelephonyTab.jsx` : form 4 champs (Account SID, Auth Token password, Phone E.164, Forwarding optional) + bouton "Tester la connexion" (validation live sans save) + bouton "Enregistrer" + status banner avec badge (active/error/disabled) + bouton supprimer
+- Sidebar Settings : badge "6D" retiré, tab Téléphonie active
+- Testing iteration_14 : **Backend 100% PASS** (10 pytest cases dans `backend/tests/test_twilio_config_phase_6d.py`) + **Frontend 100% PASS** (e2e qa-bot login → form → test → save → banner → delete). Auth_token jamais retourné dans les responses.
+
 ### P1
-- **Phase 8 — Hardening sécurité** : ajouter middleware `enforceTenantOwnership` qui valide `JWT.user → profile.company_id` vs `req.body/query.company_id` sur tous les endpoints KB (et progressivement CRM/Calls/Emails). High priority avant prod.
+- **Phase 6E — Notifications + Resend** : intégration Resend pour envoi emails transactionnels (invitations équipe, alertes appels manqués, drafts à valider)
+- **Phase 8 — Hardening sécurité** : ajouter middleware `enforceTenantOwnership` qui valide `JWT.user → profile.company_id` vs `req.body/query.company_id` sur tous les endpoints (KB, twilio-config, email-accounts, CRM, Calls, Emails). Note iteration_14: actuellement, le service_role_key bypass RLS — un user authentifié pourrait techniquement lire/écrire la config d'une autre PME en passant le bon company_id. À durcir Phase 8.
+- **Phase 8 — Voix réelle** : Twilio (voice webhook → `calls`), ElevenLabs (TTS), DeepSeek (Emergent LLM Key) pour conversation Léa
+- **Tests Léa COMPLET** par Karim (E2E manuel après Phase 8)
+- **Phase Esthétique finale** (~30 crédits) — UI polish + fix scraper SPA (Playwright/Puppeteer) — AVANT déploiement
 - **Phase 9** — Déploiement Vercel (frontend) + Fly.io (backend) + `.nvmrc` pour fixer Node v22
-- **Phase 8 (suite)** — Branchement intégrations réelles : Twilio (voice webhook → `calls`), ElevenLabs (TTS), Resend (real `RESEND_API_KEY`)
 - **Refactor**: Découper `Contacts.jsx` (660 lignes) → `/components/contacts/{DetailSheet,InfoTab,HistoryTab,NotesTab}.jsx`
 - **Refactor**: Extraire les `fetch()` éparpillés vers `lib/contactsApi.js`
 - **A11y mineur** : `SourceDetailSheet` → ajouter `SheetDescription` pour silence Radix warning
