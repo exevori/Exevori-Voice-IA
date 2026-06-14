@@ -197,6 +197,23 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 12. 🎨 **Phase Esthétique finale** (~25-35 crédits — passe globale)
 13. 🚀 Démarchage commercial
 
+### Phase 8A — Voice Foundation Twilio ConversationRelay (DONE — 14 juin 2026)
+- Migration `006_phase_8a_voice_infra.sql` exécutée par user :
+  - Extensions `calls` : `twilio_call_sid` (unique partiel), `live_status` (ENUM check), `cost_cents`, `recording_id` (FK)
+  - Nouvelle table `call_recordings` (audio URL + transcript JSONB) avec RLS
+  - Nouvelle table `call_events` (event_type CHECK 13 valeurs + payload JSONB + ts_ms) avec RLS
+- Backend nouveau module `modules/voice/` (5 fichiers) :
+  - `signature.js` — middleware HMAC X-Twilio-Signature via `twilio.validateRequest()` + bypass dev si `TWILIO_AUTH_TOKEN='placeholder'`
+  - `lifecycle.js` — helpers DB (`findCompanyByTwilioNumber`, `getOrCreateCall`, `setLiveStatus`, `endCall`, `logEvent`) + client supabase partagé. Mappé sur le vrai schéma `calls` (`caller_phone`, pas de `direction`/`callee_number`)
+  - `inbound.js` — `POST /webhooks/voice/inbound` (TwiML `<Connect><ConversationRelay url="wss://..." welcomeGreeting="..." language="fr-FR" transcriptionProvider="Deepgram" speechModel="nova-2-general">` + `<Parameter wsAuthToken>` one-shot 60s) · `POST /status` (lifecycle: ringing/completed/failed/answered) · `POST /relay-action` (hangup TwiML) · fail-fast Say+Hangup si insert calls KO
+  - `relay-ws.js` — WebSocket handler ConversationRelay : message types `setup` (auth via wsAuthToken), `prompt` (last=true → text+end Phase 8A hardcoded), `interrupt`, `dtmf`, `error` + lifecycle events loggés dans `call_events` + endCall sur close
+  - `index.js` — exports
+- Backend `index.js` refactoré : `http.createServer(app)` + `WebSocketServer({noServer:true})` attaché sur upgrade path `/webhooks/voice/relay/ws`. Routes mountées sur `/webhooks/voice`
+- Pré-fill prompt **"Marie Garage"** prêt à seed dans `assistant_configs.system_prompt_voice_fr` (en attente migration 005 par user)
+- Testing iteration_17 : **Backend 100% PASS (15/15 pytest)** dans `backend/tests/test_phase8a_voice.py` — TwiML rendering, WebSocket upgrade, auth one-shot token, lifecycle DB (started/ended/error events), CallStatus mapping (ringing/connecting/completed/abandoned), RLS isolation
+- Architecture : pas besoin de ngrok, l'URL preview Emergent HTTPS est utilisée directement comme webhook Twilio
+- **Aucune AI/LLM/TTS encore** — Phase 8A est juste la plomberie. Phase 8B branchera DeepSeek streaming. Phase 8C branchera ElevenLabs TTS via attribut `ttsProvider="elevenlabs"`
+
 ### Phase 6E — Notifications + Resend (DONE — 14 juin 2026)
 - Backend `modules/notifications/index.js` (existait déjà — étendu) :
   - **NEW** `POST /api/v1/notifications/send-test` — envoie un email transactionnel via Resend à l'email du user courant (HTML inline avec gradient brand). Propage proprement l'erreur Resend 403 sandbox.
