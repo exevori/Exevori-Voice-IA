@@ -197,6 +197,21 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 12. 🎨 **Phase Esthétique finale** (~25-35 crédits — passe globale)
 13. 🚀 Démarchage commercial
 
+### Phase 6E — Notifications + Resend (DONE — 14 juin 2026)
+- Backend `modules/notifications/index.js` (existait déjà — étendu) :
+  - **NEW** `POST /api/v1/notifications/send-test` — envoie un email transactionnel via Resend à l'email du user courant (HTML inline avec gradient brand). Propage proprement l'erreur Resend 403 sandbox.
+  - Reste : `GET /api/v1/notifications`, `/unread-count`, `POST /:id/read`, `/mark-all-read`, `DELETE /:id`, `GET|PATCH /preferences`
+  - Helpers exportés : `notify()`, `notifyCompany()`, `notifyAdmins()` (in-app + email selon préférences)
+- Backend `modules/team/index.js` étendu : `POST /team/invitations` envoie maintenant un email Resend best-effort (template HTML avec bouton CTA + expiration 7j) — n'échoue pas si Resend down (retourne `email_sent` + `email_error`)
+- Frontend `components/settings/NotificationsTab.jsx` **NEW** :
+  - 5 toggles (ticket, billing, draft, learning, system) avec icônes Lucide + descriptions FR
+  - Bouton "Envoyer un courriel test" → POST /send-test → feedback success/error
+  - Sticky save bar avec feedback auto-dismiss (5s save, 8s test)
+- Settings.jsx : badge "6E" retiré, tab Notifications actif
+- Config `.env` : `RESEND_API_KEY` injectée (sandbox mode), `EMAIL_FROM=Exevori Voice IA <onboarding@resend.dev>`
+- Testing iteration_15 : **Backend 100% PASS** (7 pytest cases dans `backend/tests/test_notifications_phase_6e.py`) + **Frontend 100% PASS** (login qa-bot → toggle → save → test 403 sandbox propagé)
+- ⚠️ **Sandbox limitation actuelle** : Resend n'enverra qu'à `exevori@gmail.com` (email du compte Resend de Karim) tant que le domaine `exevori.com` n'est pas vérifié (3 DNS records SPF/DKIM/DMARC à ajouter sur OVH/registrar). Bascule vers `hello@exevori.com` = 1 ligne d'env quand vérifié.
+
 ### Phase 6D — Téléphonie / Config Twilio (DONE — 14 juin 2026)
 - Migration `004_phase_6d_twilio.sql` exécutée par user dans Supabase (table `twilio_configs` + ENUM `twilio_config_status` + RLS isolation `company_id = current_company_id()`)
 - Backend `modules/twilio-config/index.js` :
@@ -210,7 +225,7 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 - Testing iteration_14 : **Backend 100% PASS** (10 pytest cases dans `backend/tests/test_twilio_config_phase_6d.py`) + **Frontend 100% PASS** (e2e qa-bot login → form → test → save → banner → delete). Auth_token jamais retourné dans les responses.
 
 ### P1
-- **Phase 6E — Notifications + Resend** : intégration Resend pour envoi emails transactionnels (invitations équipe, alertes appels manqués, drafts à valider)
+- **Phase 6E — Notifications + Resend** ✅ LIVRÉE (14 juin 2026 — voir section dédiée)
 - **Phase 8 — Hardening sécurité** : ajouter middleware `enforceTenantOwnership` qui valide `JWT.user → profile.company_id` vs `req.body/query.company_id` sur tous les endpoints (KB, twilio-config, email-accounts, CRM, Calls, Emails). Note iteration_14: actuellement, le service_role_key bypass RLS — un user authentifié pourrait techniquement lire/écrire la config d'une autre PME en passant le bon company_id. À durcir Phase 8.
 - **Phase 8 — Voix réelle** : Twilio (voice webhook → `calls`), ElevenLabs (TTS), DeepSeek (Emergent LLM Key) pour conversation Léa
 - **Tests Léa COMPLET** par Karim (E2E manuel après Phase 8)
