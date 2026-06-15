@@ -38,66 +38,64 @@ router.get("/stats", async (req, res) => {
 
     const periodStartISO = periodStart.toISOString();
 
-    const [
-      calls, outboundCalls, emails, drafts, appointments,
-      pendingSuggestions, hotLeads, kbCount,
-    ] = await Promise.all([
-      supabase.from("calls").select("id, duration_seconds, outcome", { count: "exact" })
-        .eq("company_id", company_id).gte("created_at", periodStartISO),
-      supabase.from("outbound_calls").select("id, outcome, appointment_booked", { count: "exact" })
-        .eq("company_id", company_id).gte("created_at", periodStartISO),
-      supabase.from("emails").select("id, status", { count: "exact" })
-        .eq("company_id", company_id).gte("received_at", periodStartISO),
-      supabase.from("email_drafts").select("id", { count: "exact" })
-        .eq("company_id", company_id).eq("status", "pending_validation"),
-      supabase.from("appointments").select("id, date", { count: "exact" })
-        .eq("company_id", company_id).gte("date", todayStart.toISOString().split("T")[0]),
-      supabase.from("learning_suggestions").select("id", { count: "exact" })
-        .eq("company_id", company_id).eq("status", "pending"),
-      supabase.from("contacts").select("id", { count: "exact" })
-        .eq("company_id", company_id).in("status", ["hot", "hot_lead"]),
-      supabase.from("knowledge_base").select("id", { count: "exact" })
-        .eq("company_id", company_id).eq("status", "active"),
+    const [calls, emails, appointments, contacts, kbSources, qaCount] = await Promise.all([
+
+      supabase.from("calls")
+        .select("id, duration_seconds, outcome", { count: "exact" })
+        .eq("company_id", company_id)
+        .gte("created_at", periodStartISO),
+
+      supabase.from("emails")
+        .select("id, status", { count: "exact" })
+        .eq("company_id", company_id)
+        .gte("received_at", periodStartISO),
+
+      supabase.from("appointments")
+        .select("id", { count: "exact" })
+        .eq("company_id", company_id)
+        .gte("created_at", todayStart.toISOString()),
+
+      supabase.from("contacts")
+        .select("id", { count: "exact" })
+        .eq("company_id", company_id),
+
+      supabase.from("knowledge_sources")
+        .select("id", { count: "exact" })
+        .eq("company_id", company_id)
+        .eq("status", "ready"),
+
+      supabase.from("knowledge_sources")
+        .select("id", { count: "exact" })
+        .eq("company_id", company_id)
+        .eq("type", "qa"),
     ]);
 
-    // Calculer durée totale appels (en minutes)
     const totalCallMinutes = (calls.data || []).reduce(
       (sum, c) => sum + (c.duration_seconds || 0), 0
     ) / 60;
 
-    // Compter outcomes
     const successfulCalls = (calls.data || []).filter(c =>
       ["resolved", "appointment_booked", "transferred"].includes(c.outcome)
-    ).length;
-
-    const outboundSuccess = (outboundCalls.data || []).filter(c =>
-      c.appointment_booked || c.outcome === "interested" || c.outcome === "appointment_booked"
     ).length;
 
     return res.json({
       period,
       period_start: periodStartISO,
       kpis: {
-        // Appels
         inbound_calls: calls.count || 0,
-        outbound_calls: outboundCalls.count || 0,
+        outbound_calls: 0,
         total_minutes: Math.round(totalCallMinutes),
         successful_inbound: successfulCalls,
-        successful_outbound: outboundSuccess,
-
-        // Courriels
         emails_received: emails.count || 0,
-        drafts_pending: drafts.count || 0,
-
-        // RDV
+        drafts_pending: 0,
         appointments_upcoming: appointments.count || 0,
-
-        // Apprentissage
-        learning_suggestions_pending: pendingSuggestions.count || 0,
-        knowledge_base_size: kbCount.count || 0,
-
-        // Leads
-        hot_leads: hotLeads.count || 0,
+        learning_suggestions_pending: 0,
+        knowledge_base_size: kbSources.count || 0,
+        qa_count: qaCount.count || 0,
+        hot_leads: (contacts.data || []).filter(c =>
+          ["hot", "hot_lead"].includes(c.status)
+        ).length,
+        total_contacts: contacts.count || 0,
       },
     });
   } catch (err) {
