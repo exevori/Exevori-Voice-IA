@@ -24,6 +24,11 @@ const PROVIDERS = {
     apiKeyEnv: "GROQ_API_KEY",
     defaultModel: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
   },
+  cerebras: {
+    url: "https://api.cerebras.ai/v1/chat/completions",
+    apiKeyEnv: "CEREBRAS_API_KEY",
+    defaultModel: process.env.CEREBRAS_MODEL || "llama-3.3-70b",
+  },
   fireworks: {
     url: "https://api.fireworks.ai/inference/v1/chat/completions",
     apiKeyEnv: "FIREWORKS_API_KEY",
