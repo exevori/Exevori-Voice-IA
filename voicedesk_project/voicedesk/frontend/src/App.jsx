@@ -21,6 +21,7 @@ import Knowledge from "./pages/Knowledge.jsx";
 import Reports from "./pages/Reports.jsx";
 import Settings from "./pages/Settings.jsx";
 import Admin from "./pages/Admin.jsx";
+import Outbound from "./pages/Outbound.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext.jsx";
 
 import "./styles/global.css";
@@ -63,6 +64,7 @@ function App() {
             <Route path="reports" element={<Reports />} />
             <Route path="settings" element={<Settings />} />
             <Route path="config" element={<Settings />} />
+            <Route path="outbound" element={<Outbound />} />
             {/* Autres pages à construire par Emergent dans frontend/src/pages/ */}
           </Route>
 

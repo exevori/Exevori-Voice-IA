@@ -42,6 +42,7 @@ import voiceLibraryRouter from "./modules/voice-library/index.js";
 import onboardingRouter from "./modules/onboarding/index.js";
 import importRouter from "./modules/import/index.js";
 import notificationsRouter from "./modules/notifications/index.js";
+import outboundRouter from "./modules/outbound/index.js";
 
 // Webhooks externes (Gmail Push, Twilio status, Resend, Calendly)
 import webhooksRouter from "./webhooks/index.js";
@@ -134,6 +135,7 @@ app.use("/api/v1/voice-library",  requireAuth, voiceLibraryRouter);
 app.use("/api/v1/onboarding",     requireAuth, onboardingRouter);
 app.use("/api/v1/import",         requireAuth, importRouter);
 app.use("/api/v1/notifications",  requireAuth, notificationsRouter);
+app.use("/api/v1/outbound",       requireAuth, outboundRouter);
 
 // ── ROUTES ADMIN (super_admin uniquement) ──
 app.use("/api/v1/admin", requireAuth, requireRole("super_admin"), adminRouter);
