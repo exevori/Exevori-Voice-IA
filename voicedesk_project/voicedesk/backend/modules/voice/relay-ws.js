@@ -210,6 +210,7 @@ export function attachVoiceRelayWS(wss) {
       llmAbort = new AbortController();
       let firstTokenLogged = false;
       let assistantText = "";
+      let sentenceBuffer = "";
 
       try {
         await setLiveStatus(session.callId, "ai_speaking");
@@ -225,12 +226,20 @@ export function attachVoiceRelayWS(wss) {
                 ts_ms: Date.now() - session.startedAtMs,
               });
             }
-            // Envoie chaque delta à ConversationRelay (streaming TTS)
-            try {
-              ws.send(JSON.stringify({
-                type: "text", token: delta, last: false, interruptible: true, preemptible: true,
-              }));
-            } catch (_) {}
+            // Buffer par phrase complète avant envoi TTS (latence stable, prosodie naturelle)
+            sentenceBuffer += delta;
+            if (/[.!?]\s*$/.test(sentenceBuffer.trim()) || sentenceBuffer.length > 150) {
+              try {
+                ws.send(JSON.stringify({
+                  type: "text",
+                  token: sentenceBuffer,
+                  last: false,
+                  interruptible: true,
+                  preemptible: true,
+                }));
+              } catch (_) {}
+              sentenceBuffer = "";
+            }
           },
           { signal: llmAbort.signal, temperature: 0.6, max_tokens: 200 }
         );
@@ -248,6 +257,18 @@ export function attachVoiceRelayWS(wss) {
           });
           appendAssistant(session.callSid, fallback);
         } else {
+          // Flush du buffer restant (dernière phrase incomplète)
+          if (sentenceBuffer.trim()) {
+            try {
+              ws.send(JSON.stringify({
+                type: "text",
+                token: sentenceBuffer,
+                last: false,
+                interruptible: true,
+              }));
+            } catch (_) {}
+            sentenceBuffer = "";
+          }
           // Marquer la fin du tour (last=true sans token additionnel)
           try { ws.send(JSON.stringify({ type: "text", token: "", last: true, interruptible: true })); } catch (_) {}
           appendAssistant(session.callSid, result.text);
