@@ -21,17 +21,48 @@ const router = express.Router();
 // Note : la liste complète et configurable est dans voice_library (Supabase)
 // Ce tableau ne sert que de fallback minimal si voice_library n'est pas disponible
 const RECOMMENDED_VOICES = [
-  // FR-CA (Québec) - sélection limitée car difficile à reproduire
-  { id: "ZF6FPAbjXT4488VcRRnw",  name: "Charlotte",   gender: "feminine",  language: "fr-CA", accent: "neutral" },
-  { id: "ErXwobaYiN019PkySvjV",  name: "Antoine",     gender: "masculine", language: "fr-CA", accent: "quebec" },
-
-  // FR-FR (France) - meilleur rendu sur ElevenLabs
-  { id: "XB0fDUnXU5powFXDhCwa",  name: "Charlotte FR", gender: "feminine",  language: "fr-FR", accent: "france" },
-  { id: "pFZP5JQG7iQjIQuC4Bku",  name: "Sophie FR",    gender: "feminine",  language: "fr-FR", accent: "france" },
-  { id: "IKne3meq5aSn9XLyUdCD",  name: "Thomas FR",    gender: "masculine", language: "fr-FR", accent: "france" },
-
-  // Multilingue (s'adapte à toutes langues)
-  { id: "pNInz6obpgDQGcFmaJgB",  name: "Adam",         gender: "masculine", language: "multi", accent: "neutral" },
+  {
+    id: "WW0JfNPk5DgcQdM0d6X6",
+    name: "Léa",
+    gender: "feminine",
+    language: "fr-CA",
+    accent: "québécois"
+  },
+  {
+    id: "UJCi4DDncuo0VJDSIegj",
+    name: "Sophie",
+    gender: "feminine",
+    language: "fr-CA",
+    accent: "québécois"
+  },
+  {
+    id: "4FLkNETtL5THnClfpjpb",
+    name: "Alexandre",
+    gender: "masculine",
+    language: "fr-CA",
+    accent: "québécois"
+  },
+  {
+    id: "RTFg9niKcgGLDwa3RFlz",
+    name: "Marc",
+    gender: "masculine",
+    language: "fr-CA",
+    accent: "québécois"
+  },
+  {
+    id: "uIZsnBL0YK1S5j69bAih",
+    name: "Emma",
+    gender: "feminine",
+    language: "en-CA",
+    accent: "neutral"
+  },
+  {
+    id: "3IwIPyXc0WRkgKBE8KXP",
+    name: "James",
+    gender: "masculine",
+    language: "en-CA",
+    accent: "neutral"
+  },
 ];
 
 // Tones disponibles
