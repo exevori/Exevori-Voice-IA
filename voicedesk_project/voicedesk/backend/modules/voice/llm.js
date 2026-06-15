@@ -51,7 +51,7 @@ function providerConfig(name) {
  * @returns {Promise<{text:string, firstTokenMs:number, totalMs:number, provider:string, reasoningChars:number}>}
  */
 export async function streamChat(messages, onToken, opts = {}) {
-  const primary  = opts.provider || process.env.LLM_PROVIDER || "groq";
+  const primary  = opts.provider || process.env.LLM_PROVIDER || "fireworks";
   const fallback = process.env.LLM_FALLBACK_PROVIDER || (primary === "groq" ? "fireworks" : null);
 
   try {

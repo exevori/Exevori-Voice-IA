@@ -319,7 +319,7 @@ export default function Knowledge() {
               <Input
                 value={scrapeUrl}
                 onChange={(e) => setScrapeUrl(e.target.value)}
-                placeholder="https://exemple-immobilier.ca/a-propos"
+                placeholder={t("kb.url.placeholder", "https://votresite.com")}
                 onKeyDown={(e) => { if (e.key === "Enter" && !busy) handleScrape(); }}
                 data-testid="scrape-url-input"
               />
@@ -330,6 +330,9 @@ export default function Knowledge() {
             </div>
             <p className="text-[11px] text-text-tertiary">
               {t("kb.url.hint", "Le contenu HTML est nettoyé puis découpé en chunks. Les SPAs JS-only (React/Vue/Angular) sont désormais supportées via Playwright (rendu JS côté serveur).")}
+            </p>
+            <p className="text-[11px] text-text-tertiary">
+              Astuce : entrez l'URL <strong>racine</strong> du site (ex&nbsp;: <code>https://exevori.com</code>) plutôt qu'une sous-page peu remplie.
             </p>
           </TabsContent>
 

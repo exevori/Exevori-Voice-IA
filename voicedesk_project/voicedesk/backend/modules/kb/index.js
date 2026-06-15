@@ -333,7 +333,9 @@ router.patch("/chunks/:id", express.json(), async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.get("/sources", async (req, res) => {
   const { company_id, status, limit = 100, offset = 0 } = req.query;
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+  if (!company_id || company_id === "null" || company_id === "undefined" || company_id.length < 10) {
+    return res.status(400).json({ error: "company_id requis et valide" });
+  }
 
   let q = supabase.from("knowledge_sources")
     .select("*", { count: "exact" })

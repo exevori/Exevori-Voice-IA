@@ -16,6 +16,21 @@ SaaS d'assistante vocale IA pour PME au Québec. Stack: Node.js (Express) backen
 
 ## What's been implemented
 
+### Session 2026-06-15 — Corrections audit Claude appliquées
+- ✅ Voice ConversationRelay : voix Léa ElevenLabs fr-CA `WW0JfNPk5DgcQdM0d6X6-flash_v2_5-1.10_0.50_0.75` + `welcomeGreetingInterruptible=true` + `language="fr-CA"`
+- ✅ RAG bug critique RPC `match_kb_chunks` bypassé : nouvelle implémentation cosine côté Node dans `kb/rag.js`. Branché dans `voice/relay-ws.js` AVANT chaque LLM call (chunks injectés en system msg transitoire, log `rag_lookup` dans `call_events`). Threshold 0.25.
+- ✅ Latence : `max_tokens` DeepSeek réduit 1024→200
+- ✅ LLM multi-provider : `voice/llm.js` refactoré `LLM_PROVIDER=fireworks|groq` + `LLM_FALLBACK_PROVIDER`. Default = `fireworks`. Prêt pour Groq Llama 3.3 70B via env switch.
+- ✅ URL scraping SPA : Playwright + chromium headless installé persistent dans `/app/voicedesk_project/.playwright/`. `PLAYWRIGHT_BROWSERS_PATH` passé via supervisor config. Refactor `scrapeUrl()` dans `kb/index.js` avec fallback raw-fetch.
+- ✅ Supervisor durabilité : `/etc/supervisor/conf.d/voicedesk.conf` créé (autorestart Node backend + Vite frontend). Placeholders Emergent (`backend` Python + `frontend` CRA) désactivés via `autostart=false` patché dans `supervisord.conf`.
+- ✅ Page Admin super_admin : `App.jsx` import + AdminRoute + routes. `Admin.jsx` créé (liste tenants + impersonation). Backend `GET /api/v1/admin/companies` enrichi avec counts (calls/kb_sources/members).
+- ✅ Guard `company_id` strict dans `GET /api/v1/kb/sources` (rejette null/undefined/<10 chars)
+- ✅ Knowledge.jsx : placeholder URL `https://votresite.com` + hint "URL racine"
+- ✅ `.env.example` créé
+- ✅ Polyfill `globalThis.WebSocket` (Node v20) via `lib/polyfill-websocket.js` importé en premier dans `index.js`
+- ❌ TÂCHE 1 audit Claude (pdf-parse import) REVERTED — la version installée expose une classe `PDFParse` (new API), `import { PDFParse }` + `new PDFParse({data}).getText()` fonctionne correctement (test isolated PDF OK). Le bug d'upload silencieux d'avant était lié au placeholder Python sur port 8001 (déjà fixé).
+
+
 ### Phase 1 — Login (DONE)
 - `Login.jsx` + `AuthContext` + Supabase signInWithPassword
 - Routes protégées

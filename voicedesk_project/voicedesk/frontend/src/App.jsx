@@ -20,6 +20,7 @@ import Emails from "./pages/Emails.jsx";
 import Knowledge from "./pages/Knowledge.jsx";
 import Reports from "./pages/Reports.jsx";
 import Settings from "./pages/Settings.jsx";
+import Admin from "./pages/Admin.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext.jsx";
 
 import "./styles/global.css";
@@ -28,6 +29,14 @@ function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="loading-screen">Chargement...</div>;
   if (!user) return <Navigate to="/login" replace />;
+  return children;
+}
+
+// Route réservée aux super_admins
+function AdminRoute({ children }) {
+  const { profile, loading } = useAuth();
+  if (loading) return <div className="loading-screen">Chargement...</div>;
+  if (profile?.role !== "super_admin") return <Navigate to="/" replace />;
   return children;
 }
 
@@ -42,8 +51,8 @@ function App() {
           <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />
             <Route path="dashboard" element={<Dashboard />} />
-            <Route path="admin" element={<Dashboard />} />
-            <Route path="admin/clients" element={<Dashboard />} />
+            <Route path="admin" element={<AdminRoute><Admin /></AdminRoute>} />
+            <Route path="admin/clients" element={<AdminRoute><Admin /></AdminRoute>} />
             <Route path="crm" element={<Contacts />} />
             <Route path="contacts" element={<Contacts />} />
             <Route path="calls" element={<Calls />} />

@@ -33,7 +33,23 @@ router.get("/companies", async (req, res) => {
       .select("id, name, city, province, country, plan, status, assistant_name")
       .order("name", { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ companies: data || [] });
+
+    // Enrichir avec counts (calls, kb_sources, members) en parallèle par company
+    const companies = await Promise.all((data || []).map(async (c) => {
+      const [callsRes, kbRes, membersRes] = await Promise.all([
+        supabase.from("calls").select("*", { count: "exact", head: true }).eq("company_id", c.id),
+        supabase.from("knowledge_sources").select("*", { count: "exact", head: true }).eq("company_id", c.id),
+        supabase.from("profiles").select("*", { count: "exact", head: true }).eq("company_id", c.id),
+      ]);
+      return {
+        ...c,
+        calls_count: callsRes.count ?? 0,
+        kb_sources_count: kbRes.count ?? 0,
+        members_count: membersRes.count ?? 0,
+      };
+    }));
+
+    res.json({ companies, total: companies.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
