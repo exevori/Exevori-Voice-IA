@@ -21,10 +21,7 @@ export default defineConfig({
     host: true,
     strictPort: true,
     allowedHosts: true,
-    hmr: {
-      clientPort: 443,
-      protocol: "wss",
-    },
+    hmr: false,
     proxy: {
       "/api": "http://localhost:8001",
       "/webhooks": "http://localhost:8001",
