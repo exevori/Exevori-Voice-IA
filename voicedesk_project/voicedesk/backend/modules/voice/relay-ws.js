@@ -232,7 +232,7 @@ export function attachVoiceRelayWS(wss) {
               }));
             } catch (_) {}
           },
-          { signal: llmAbort.signal, temperature: 0.6, max_tokens: 384 }
+          { signal: llmAbort.signal, temperature: 0.6, max_tokens: 200 }
         );
 
         // Safety net: si le LLM n'a émis aucun token (ex: reasoning a consommé max_tokens),
