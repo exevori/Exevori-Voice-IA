@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import {
   BookOpen, Upload, Link as LinkIcon, FileText, Globe, Trash2,
   Loader2, AlertCircle, CheckCircle2, Sparkles, Pencil, ChevronRight, Brain, RefreshCw,
+  MessageSquare,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { Badge } from "../components/ui/badge.jsx";
@@ -32,6 +33,7 @@ const TYPE_META = {
   upload: { label: "Fichier", icon: FileText },
   url:    { label: "URL",     icon: Globe },
   manual: { label: "Manuel",  icon: Pencil },
+  qa:     { label: "Q&R",     icon: MessageSquare },
 };
 
 export default function Knowledge() {
@@ -46,6 +48,8 @@ export default function Knowledge() {
   const [scrapeUrl, setScrapeUrl] = useState("");
   const [noteTitle, setNoteTitle] = useState("");
   const [noteBody, setNoteBody] = useState("");
+  const [qQuestion, setQQuestion] = useState("");
+  const [qAnswer, setQAnswer] = useState("");
 
   const load = useCallback(async () => {
     if (!token || !effectiveCompanyId) { setLoading(false); return; }
@@ -146,6 +150,38 @@ export default function Knowledge() {
       });
       setNoteTitle("");
       setNoteBody("");
+      load();
+    } catch (e) {
+      setToast({ type: "error", msg: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAddQA = async () => {
+    const q = qQuestion.trim();
+    const a = qAnswer.trim();
+    if (!q || !a) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/kb/sources/qa`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_id: effectiveCompanyId,
+          question: q,
+          answer: a,
+          created_by: profile?.id || null,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      setToast({
+        type: "success",
+        msg: t("kb.toast.qaSaved", "Q&R mémorisée — Léa apprend immédiatement"),
+      });
+      setQQuestion("");
+      setQAnswer("");
       load();
     } catch (e) {
       setToast({ type: "error", msg: e.message });
@@ -305,6 +341,9 @@ export default function Knowledge() {
             <TabsTrigger value="manual" data-testid="tab-manual">
               <Pencil size={12} /> {t("kb.manual.tab", "Note manuelle")}
             </TabsTrigger>
+            <TabsTrigger value="qa" data-testid="tab-qa">
+              <MessageSquare size={12} /> {t("kb.qa.tab", "Training Q&R")}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="upload" className="p-4">
@@ -369,6 +408,47 @@ export default function Knowledge() {
               >
                 {busy ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}
                 {t("kb.manual.action", "Enregistrer la note")}
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="qa" className="p-4 space-y-2">
+            <p className="text-[12px] text-text-secondary mb-2">
+              {t("kb.qa.intro", "Apprenez à Léa une réponse précise à une question fréquente. Idéal pour les FAQ, tarifs spécifiques, procédures.")}
+            </p>
+            <label className="text-[11px] uppercase tracking-wider text-text-secondary">
+              {t("kb.qa.questionLabel", "Question client")}
+            </label>
+            <Input
+              value={qQuestion}
+              onChange={(e) => setQQuestion(e.target.value)}
+              placeholder={t("kb.qa.questionPlaceholder", "Ex: Quel est le prix d'un site web ?")}
+              data-testid="qa-question-input"
+              maxLength={300}
+            />
+            <label className="text-[11px] uppercase tracking-wider text-text-secondary block mt-2">
+              {t("kb.qa.answerLabel", "Réponse de Léa")}
+            </label>
+            <textarea
+              value={qAnswer}
+              onChange={(e) => setQAnswer(e.target.value)}
+              placeholder={t("kb.qa.answerPlaceholder", "Ex: À partir de 800$ selon la complexité du projet.")}
+              data-testid="qa-answer-input"
+              rows={4}
+              maxLength={2000}
+              className="w-full rounded-md border border-border bg-bg-card px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-brand-purple/30 focus:border-brand-purple/50 resize-y"
+            />
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] text-text-tertiary">
+                {qAnswer.length} / 2000 {t("kb.qa.chars", "caractères")}
+              </p>
+              <Button
+                onClick={handleAddQA}
+                disabled={busy || !qQuestion.trim() || !qAnswer.trim()}
+                data-testid="qa-submit-button"
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <MessageSquare size={14} />}
+                {t("kb.qa.action", "Mémoriser")}
               </Button>
             </div>
           </TabsContent>

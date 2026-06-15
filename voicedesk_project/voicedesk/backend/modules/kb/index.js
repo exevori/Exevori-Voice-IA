@@ -278,7 +278,63 @@ router.post("/sources/manual", express.json({ limit: "5mb" }), async (req, res) 
 });
 
 // ─────────────────────────────────────────────────────────────
-// PATCH /chunks/:id  — Édition manuelle d'un chunk (Phase Bonus KB)
+// POST /sources/qa  — Training Q&R (Phase 8C-5)
+//   body: { company_id, question, answer, created_by? }
+//   → crée une source type='qa' avec content "Q: ...\nR: ..." + chunk + embed
+// ─────────────────────────────────────────────────────────────
+router.post("/sources/qa", express.json(), async (req, res) => {
+  const { company_id, question, answer, created_by } = req.body || {};
+  if (!company_id || !question || !answer) {
+    return res.status(400).json({ error: "company_id, question et answer requis" });
+  }
+  const q = String(question).trim();
+  const a = String(answer).trim();
+  if (q.length < 5) return res.status(400).json({ error: "question trop courte (< 5 caractères)" });
+  if (a.length < 3) return res.status(400).json({ error: "réponse trop courte (< 3 caractères)" });
+
+  const content = `Q: ${q}\nR: ${a}`;
+
+  const { data: source, error: sErr } = await supabase
+    .from("knowledge_sources")
+    .insert({
+      company_id,
+      type: "qa",
+      name: q.slice(0, 200),
+      status: "processing",
+      size_bytes: content.length,
+      created_by: created_by || null,
+    })
+    .select()
+    .single();
+  if (sErr) return res.status(500).json({ error: sErr.message });
+
+  const result = await ingestChunks({ company_id, source_id: source.id, text: content });
+  if (result.error) {
+    await supabase.from("knowledge_sources").update({
+      status: "error", error_message: `chunk: ${result.error}`,
+    }).eq("id", source.id);
+    return res.status(500).json({ error: result.error });
+  }
+
+  await supabase.from("knowledge_sources").update({
+    status: "ready", chunks_count: result.chunks_count,
+  }).eq("id", source.id);
+
+  let embeddings_ready_at = null;
+  try {
+    const emb = await embedChunksOfSource({ source_id: source.id, company_id });
+    embeddings_ready_at = emb.embeddings_ready_at;
+  } catch (e) {
+    console.warn(`[KB] embed qa source=${source.id}:`, e.message);
+  }
+
+  return res.json({
+    success: true,
+    source: { ...source, status: "ready", chunks_count: result.chunks_count, embeddings_ready_at },
+    chunks_count: result.chunks_count,
+    embeddings_ready: !!embeddings_ready_at,
+  });
+});
 //   body: { company_id, content }
 //   → met à jour content + re-embed CE chunk uniquement (rapide)
 // ─────────────────────────────────────────────────────────────
