@@ -175,10 +175,10 @@ router.post("/sources/scrape", express.json(), async (req, res) => {
   if (text.length < 100) {
     await supabase.from("knowledge_sources").update({
       status: "error",
-      error_message: "Contenu < 100 caractères (SPA JS-only ?)",
+      error_message: "Contenu < 100 caractères (page 404 ou vide ?)",
     }).eq("id", source.id);
     return res.status(422).json({
-      error: "Contenu trop court (< 100 caractères). Le site est peut-être JS-only (SPA) — non supporté en KB+A.",
+      error: "Contenu trop court (< 100 caractères). Vérifiez que l'URL renvoie une vraie page (essayez la racine du site, ex: https://exevori.com).",
     });
   }
 

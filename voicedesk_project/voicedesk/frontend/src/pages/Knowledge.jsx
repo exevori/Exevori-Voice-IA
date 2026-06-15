@@ -329,7 +329,7 @@ export default function Knowledge() {
               </Button>
             </div>
             <p className="text-[11px] text-text-tertiary">
-              {t("kb.url.hint", "Le contenu HTML est nettoyé puis découpé en chunks. Les SPAs JS-only ne sont pas supportées en V1.")}
+              {t("kb.url.hint", "Le contenu HTML est nettoyé puis découpé en chunks. Les SPAs JS-only (React/Vue/Angular) sont désormais supportées via Playwright (rendu JS côté serveur).")}
             </p>
           </TabsContent>
 

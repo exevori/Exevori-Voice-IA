@@ -86,3 +86,5 @@ android-sdk/
 credentials.json
 *.key
 .credentials
+voicedesk_project/.playwright/chromium_headless_shell-1223/chrome-linux/headless_shell
+voicedesk_project/.playwright/chromium-1223/chrome-linux/chrome
