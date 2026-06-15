@@ -211,6 +211,7 @@ export function attachVoiceRelayWS(wss) {
       let firstTokenLogged = false;
       let assistantText = "";
       let sentenceBuffer = "";
+      let isFirstChunk = true;
 
       try {
         await setLiveStatus(session.callId, "ai_speaking");
@@ -228,7 +229,9 @@ export function attachVoiceRelayWS(wss) {
             }
             // Buffer par phrase complète avant envoi TTS (latence stable, prosodie naturelle)
             sentenceBuffer += delta;
-            if (/[.!?]\s*$/.test(sentenceBuffer.trim()) || sentenceBuffer.length > 150) {
+            if (/[.!?]\s*$/.test(sentenceBuffer.trim()) ||
+                sentenceBuffer.length > 150 ||
+                (isFirstChunk && sentenceBuffer.length > 60)) {
               try {
                 ws.send(JSON.stringify({
                   type: "text",
@@ -239,6 +242,7 @@ export function attachVoiceRelayWS(wss) {
                 }));
               } catch (_) {}
               sentenceBuffer = "";
+              isFirstChunk = false;
             }
           },
           { signal: llmAbort.signal, temperature: 0.6, max_tokens: 200 }
