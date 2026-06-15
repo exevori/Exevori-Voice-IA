@@ -484,7 +484,48 @@ async function extractText(buffer, mime, originalName) {
 }
 
 async function scrapeUrl(url) {
-  // Timeout 15s + UA léger pour ne pas se faire blacklister
+  // Phase 8C-4 : Playwright headless pour gérer les SPAs (React/Vue/Angular).
+  // Fallback : raw fetch si Playwright échoue (réseau ou timeout).
+  // Timeout total : 25s (load JS + wait DOM idle 1.5s).
+  try {
+    return await scrapeWithPlaywright(url);
+  } catch (e) {
+    console.warn(`[KB] Playwright scrape failed (${e.message}). Fallback raw fetch.`);
+    return await scrapeWithFetch(url);
+  }
+}
+
+async function scrapeWithPlaywright(url) {
+  const { chromium } = await import("playwright");
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+  });
+  try {
+    const ctx = await browser.newContext({
+      userAgent: "ExevoriVoiceIA-KB-Bot/1.0 (+https://exevori.com) Playwright/Chromium",
+      viewport: { width: 1366, height: 900 },
+      locale: "fr-CA",
+    });
+    const page = await ctx.newPage();
+    // Bloque images/font/media pour scrape plus rapide
+    await page.route("**/*", (route) => {
+      const t = route.request().resourceType();
+      if (t === "image" || t === "font" || t === "media") return route.abort();
+      return route.continue();
+    });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    // Laisse le SPA hydrater
+    try { await page.waitForLoadState("networkidle", { timeout: 5000 }); }
+    catch (_) {} // tolère timeout sur sites qui pollent en boucle
+    const html = await page.content();
+    return cleanHtml(html);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+async function scrapeWithFetch(url) {
   const ctrl = new AbortController();
   const timeout = setTimeout(() => ctrl.abort(), 15000);
   try {
