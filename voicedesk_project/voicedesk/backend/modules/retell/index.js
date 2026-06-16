@@ -190,6 +190,14 @@ export function attachRetellWS(wss) {
       console.error("[retell/ws] failed to send init config:", e.message);
     }
 
+    // Keepalive : ping toutes les 25s pour empêcher l'ingress/Cloudflare de couper
+    // une WebSocket idle (default proxy timeout ~60-100s). Évite "Error_llm_websocket_lost".
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === ws.OPEN) {
+        try { ws.ping(); } catch (_) {}
+      }
+    }, 25_000);
+
     ws.on("message", async (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); }
@@ -243,10 +251,12 @@ export function attachRetellWS(wss) {
     });
 
     ws.on("close", () => {
+      clearInterval(pingInterval);
       console.log(`[retell/ws] connection closed from=${callInfo.from_number} to=${callInfo.to_number}`);
     });
 
     ws.on("error", (err) => {
+      clearInterval(pingInterval);
       console.error("[retell/ws] error:", err.message);
     });
   });
