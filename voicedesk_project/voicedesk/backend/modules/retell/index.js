@@ -175,6 +175,21 @@ export function attachRetellWS(wss) {
     console.log(`[retell/ws] connection opened: ${req.url}`);
     let callInfo = { from_number: "", to_number: "" };
 
+    // Retell Custom LLM protocol : le serveur DOIT envoyer un message "config"
+    // dès l'ouverture de la WebSocket, sinon Retell timeout et ferme.
+    try {
+      ws.send(JSON.stringify({
+        response_type: "config",
+        config: {
+          auto_reconnect: true,
+          call_details: true,
+        },
+        response_id: 1,
+      }));
+    } catch (e) {
+      console.error("[retell/ws] failed to send init config:", e.message);
+    }
+
     ws.on("message", async (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); }
