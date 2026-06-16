@@ -191,5 +191,6 @@ const llmHandler = async (req, res) => {
 
 router.post("/llm",                 express.json({ limit: "1mb" }), llmHandler);
 router.post("/llm/chat/completions", express.json({ limit: "1mb" }), llmHandler);
+router.post("/chat/completions",     express.json({ limit: "1mb" }), llmHandler);
 
 export default router;
