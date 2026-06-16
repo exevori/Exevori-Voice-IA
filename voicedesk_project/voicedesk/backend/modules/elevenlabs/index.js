@@ -38,7 +38,7 @@ function extractLastUserText(messages) {
   return lastUser?.content?.trim() || "";
 }
 
-router.post("/llm", express.json({ limit: "1mb" }), async (req, res) => {
+const llmHandler = async (req, res) => {
   const t0 = Date.now();
   const body = req.body || {};
   const messages = Array.isArray(body.messages) ? body.messages : [];
@@ -187,6 +187,9 @@ router.post("/llm", express.json({ limit: "1mb" }), async (req, res) => {
       res.end();
     } catch (_) {}
   }
-});
+};
+
+router.post("/llm",                 express.json({ limit: "1mb" }), llmHandler);
+router.post("/llm/chat/completions", express.json({ limit: "1mb" }), llmHandler);
 
 export default router;
