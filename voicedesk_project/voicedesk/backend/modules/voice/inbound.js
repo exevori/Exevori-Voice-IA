@@ -151,6 +151,9 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
         agent_id: retellAgentId,
         from_number: From || "",
         to_number: To || "",
+        audio_websocket_protocol: "twilio",
+        audio_encoding: "mulaw",
+        sample_rate: 8000,
         // Métadonnées remontées dans Retell pour traçabilité
         metadata: {
           twilio_call_sid: CallSid,
