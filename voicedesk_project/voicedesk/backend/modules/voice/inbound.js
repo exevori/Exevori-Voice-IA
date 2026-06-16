@@ -107,89 +107,62 @@ router.post("/inbound", verifyTwilioSignature, async (req, res) => {
   }
 
   // Génère un token éphémère qui authentifie la WS associée à CET appel
-  // (Conservé pour compat ConversationRelay éventuelle — non utilisé en flow Retell)
   const wsAuthToken = crypto.randomBytes(24).toString("base64url");
   wsTokens.set(wsAuthToken, {
     callSid: CallSid,
     callId: call?.id,
     companyId: company.company_id,
     accountSid: AccountSid,
+    // Snapshot de la config assistant pour la WS (évite un round-trip DB)
     assistantName: assistantConfig?.assistant_name || "Léa",
     systemPrompt: assistantConfig?.system_prompt_voice_fr || assistantConfig?.system_prompt_fr || "",
     voiceId: assistantConfig?.voice_id || process.env.ELEVENLABS_VOICE_ID || "WW0JfNPk5DgcQdM0d6X6",
     greeting: assistantConfig?.greeting_inbound_fr || `Bonjour, ici ${assistantConfig?.assistant_name || "Léa"}. Comment puis-je vous aider ?`,
     prerollEnabled: assistantConfig?.voice_preroll_enabled ?? (process.env.VOICE_PREROLL_ENABLED === "true"),
-    expiresAt: Date.now() + 60_000,
+    expiresAt: Date.now() + 60_000, // 60s pour que Twilio se connecte
   });
 
-  // ──────────────────────────────────────────────────────────
-  // Phase Retell : on bascule Twilio → Retell via register-call
-  //   1. POST https://api.retellai.com/register-call  { agent_id, ... }
-  //   2. Retell renvoie { call_id, access_token, ... }
-  //   3. On retourne à Twilio :
-  //      <Connect><Stream url="wss://api.retellai.com/audio-websocket/{access_token}"/></Connect>
-  // ──────────────────────────────────────────────────────────
-  const retellApiKey = process.env.RETELL_API_KEY;
-  const retellAgentId = process.env.RETELL_AGENT_ID;
-  if (!retellApiKey || !retellAgentId) {
-    console.error("[voice/inbound] RETELL_API_KEY ou RETELL_AGENT_ID manquant dans .env");
-    vr.say({ language: "fr-CA" },
-      "Désolée, problème technique. Veuillez rappeler dans quelques instants.");
-    vr.hangup();
-    return res.type("text/xml").send(vr.toString());
-  }
+  // Construction de l'URL WSS publique
+  // En prod Emergent: /api/voice/relay/ws (le proxy route /api/* vers backend)
+  const proto = req.header("X-Forwarded-Proto") || "https";
+  const host  = req.header("X-Forwarded-Host")  || req.header("host");
+  const wsUrl = `wss://${host}/api/voice/relay/ws`;
 
-  let retellCallId = null;
-  try {
-    const regResp = await fetch("https://api.retellai.com/v2/register-phone-call", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${retellApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        agent_id: retellAgentId,
-        from_number: From || "",
-        to_number: To || "",
-        audio_websocket_protocol: "twilio",
-        audio_encoding: "mulaw",
-        sample_rate: 8000,
-        // Métadonnées remontées dans Retell pour traçabilité
-        metadata: {
-          twilio_call_sid: CallSid,
-          company_id: company.company_id,
-          call_id: call?.id,
-        },
-      }),
-    });
-    const regBody = await regResp.json().catch(() => ({}));
-    if (!regResp.ok) {
-      console.error(`[voice/inbound] Retell register-phone-call ${regResp.status}:`, JSON.stringify(regBody));
-      vr.say({ language: "fr-CA" },
-        "Désolée, problème technique. Veuillez rappeler dans quelques instants.");
-      vr.hangup();
-      return res.type("text/xml").send(vr.toString());
-    }
-    retellCallId = regBody.call_id;
-    if (!retellCallId) {
-      console.error("[voice/inbound] Retell register-phone-call OK mais call_id manquant:", JSON.stringify(regBody));
-      vr.say({ language: "fr-CA" },
-        "Désolée, problème technique. Veuillez rappeler dans quelques instants.");
-      vr.hangup();
-      return res.type("text/xml").send(vr.toString());
-    }
-    console.log(`[voice/inbound] Retell call registered: retell_call_id=${retellCallId} twilio_sid=${CallSid}`);
-  } catch (err) {
-    console.error("[voice/inbound] Retell register-phone-call error:", err.message);
-    vr.say({ language: "fr-CA" },
-      "Désolée, problème technique. Veuillez rappeler dans quelques instants.");
-    vr.hangup();
-    return res.type("text/xml").send(vr.toString());
-  }
+  // Greeting depuis assistant_configs (sinon fallback générique)
+  const welcomeGreeting = assistantConfig?.greeting_inbound_fr
+    || `Bonjour, ici ${assistantConfig?.assistant_name || "Léa"}. Comment puis-je vous aider ?`;
 
-  // TwiML <Connect><Stream url="wss://api.retellai.com/audio-websocket/{call_id}"/></Connect>
-  const connect = vr.connect();
-  connect.stream({ url: `wss://api.retellai.com/audio-websocket/${retellCallId}` });
+  // Phase 8C-2 : voix ElevenLabs perso du compte client (Twilio expose toute la
+  // bibliothèque EL via son voice picker). Le format Twilio supporte le tuning
+  // direct dans le TwiML : "<voice_id>-<model>-<speed>_<stability>_<similarity>".
+  // Modèle "flash_v2_5" (PAS "eleven_flash_v2_5" qui était la cause du 64101).
+  const voiceIdRaw = assistantConfig?.voice_id
+    || process.env.ELEVENLABS_VOICE_ID
+    || "WW0JfNPk5DgcQdM0d6X6"; // Léa féminine FR-CA (default Exevori)
+  const voiceSpeed = (assistantConfig?.voice_speed ?? 1.10).toFixed(2);
+  const voiceStab  = (assistantConfig?.voice_stability ?? 0.50).toFixed(2);
+  const voiceSim   = (assistantConfig?.voice_similarity ?? 0.75).toFixed(2);
+  const voiceAttr  = `${voiceIdRaw}-flash_v2_5-${voiceSpeed}_${voiceStab}_${voiceSim}`;
+
+  // TwiML <Connect><ConversationRelay ttsProvider="ElevenLabs"/>
+  const connect = vr.connect({
+    action: `${proto}://${host}/api/voice/relay-action`,
+  });
+
+  const relayAttrs = {
+    url: wsUrl,
+    welcomeGreeting,
+    welcomeGreetingInterruptible: true,  // Karim peut couper la parole pendant le greeting
+    language: "fr-CA",
+    ttsLanguage: "fr-CA",
+    transcriptionProvider: "Deepgram",
+    speechModel: "nova-2-general",
+    ttsProvider: "ElevenLabs",
+    voice: voiceAttr,
+  };
+
+  connect.conversationRelay(relayAttrs)
+    .parameter({ name: "wsAuthToken", value: wsAuthToken });
 
   return res.type("text/xml").send(vr.toString());
 });
