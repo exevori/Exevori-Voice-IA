@@ -43,6 +43,7 @@ import onboardingRouter from "./modules/onboarding/index.js";
 import importRouter from "./modules/import/index.js";
 import notificationsRouter from "./modules/notifications/index.js";
 import outboundRouter from "./modules/outbound/index.js";
+import retellRouter from "./modules/retell/index.js";
 
 // Webhooks externes (Gmail Push, Twilio status, Resend, Calendly)
 import webhooksRouter from "./webhooks/index.js";
@@ -110,6 +111,9 @@ app.use("/webhooks", webhooksRouter);
 app.use("/api/voice", voiceWebhookRouter);
 // Alias historique pour compatibilité tests locaux
 app.use("/webhooks/voice", voiceWebhookRouter);
+
+// ── RETELL AI WEBHOOK (public, pas de JWT — appelé par Retell) ──
+app.use("/api/v1/retell", retellRouter);
 
 // ── ROUTES PUBLIQUES (login, signup, reset) ──
 app.use("/api/v1/auth", authRouter);
