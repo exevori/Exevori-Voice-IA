@@ -44,6 +44,7 @@ import importRouter from "./modules/import/index.js";
 import notificationsRouter from "./modules/notifications/index.js";
 import outboundRouter from "./modules/outbound/index.js";
 import retellRouter from "./modules/retell/index.js";
+import { attachRetellWS } from "./modules/retell/index.js";
 
 // Webhooks externes (Gmail Push, Twilio status, Resend, Calendly)
 import webhooksRouter from "./webhooks/index.js";
@@ -167,6 +168,8 @@ const voiceWss = new WebSocketServer({ noServer: true });
 attachVoiceRelayWS(voiceWss);
 const mediaStreamWss = new WebSocketServer({ noServer: true });
 attachMediaStreamWS(mediaStreamWss);
+const retellWss = new WebSocketServer({ noServer: true });
+attachRetellWS(retellWss);
 
 server.on("upgrade", (req, socket, head) => {
   const url = req.url || "";
@@ -180,6 +183,12 @@ server.on("upgrade", (req, socket, head) => {
   else if (url.startsWith("/api/voice/media-stream") || url.startsWith("/webhooks/voice/media-stream")) {
     mediaStreamWss.handleUpgrade(req, socket, head, (ws) => {
       mediaStreamWss.emit("connection", ws, req);
+    });
+  }
+  // Retell Custom LLM WebSocket
+  else if (url.startsWith("/api/v1/retell/llm-ws")) {
+    retellWss.handleUpgrade(req, socket, head, (ws) => {
+      retellWss.emit("connection", ws, req);
     });
   } else {
     socket.destroy();
