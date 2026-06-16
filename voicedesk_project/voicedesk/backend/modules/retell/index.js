@@ -32,7 +32,13 @@ router.post("/llm-webhook", express.json({ limit: "1mb" }), async (req, res) => 
   const call = body.call || {};
   const fromNumber = call.from_number || "";
   const toNumber = call.to_number || "";
-  const transcript = String(body.transcript || "").trim();
+  const transcriptArray = Array.isArray(body.transcript)
+    ? body.transcript
+    : [];
+  const lastUserMsg = [...transcriptArray]
+    .reverse()
+    .find(m => m.role === "user");
+  const userText = lastUserMsg?.content?.trim() || "";
   const interactionType = body.interaction_type || "response_required";
 
   // Retell envoie plusieurs types d'événements. On ne répond que pour response_required.
@@ -69,11 +75,11 @@ router.post("/llm-webhook", express.json({ limit: "1mb" }), async (req, res) => 
     // 3. RAG (best-effort — si rien trouvé, on continue sans contexte)
     let ragContext = "";
     let ragChunks = 0;
-    if (transcript) {
+    if (userText) {
       try {
         const chunks = await searchSimilarChunks({
           company_id: companyId,
-          query: transcript,
+          query: userText,
           topK: 3,
           minSimilarity: 0.25,
         });
@@ -97,7 +103,7 @@ router.post("/llm-webhook", express.json({ limit: "1mb" }), async (req, res) => 
     }
     const messages = [
       { role: "system", content: systemBlocks.join("\n\n---\n\n") },
-      { role: "user", content: transcript || "Bonjour" },
+      { role: "user", content: userText || "Bonjour" },
     ];
 
     // 5. LLM (non-streaming côté Retell : on attend la réponse complète)
