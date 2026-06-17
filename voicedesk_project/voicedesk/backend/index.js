@@ -82,6 +82,16 @@ app.post("/webhooks/stripe",
   }
 );
 
+// ── WEBHOOK ELEVENLABS POST-CALL (raw body, AVANT json parser, pour HMAC) ──
+// Le body brut est nécessaire pour vérifier la signature ElevenLabs-Signature
+app.post("/api/voice/call-complete",
+  express.raw({ type: "*/*", limit: "2mb" }),
+  (req, res, next) => {
+    req.url = "/"; // mappe vers la route interne du post_call module
+    postCallRouter(req, res, next);
+  }
+);
+
 // ── JSON parser pour le reste ──
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -117,7 +127,7 @@ app.use("/webhooks/voice", voiceWebhookRouter);
 app.use("/api/v1/elevenlabs", elevenLabsRouter);
 
 // ── ELEVENLABS POST-CALL WEBHOOK (public, sans JWT) ──
-app.use("/api/voice/call-complete", postCallRouter);
+// Route déjà montée plus haut (avant le json parser, pour HMAC body raw)
 
 // ── ROUTES PUBLIQUES (login, signup, reset) ──
 app.use("/api/v1/auth", authRouter);

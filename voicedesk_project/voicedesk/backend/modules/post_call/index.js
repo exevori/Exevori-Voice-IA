@@ -22,11 +22,47 @@
 // ============================================================
 
 import express from "express";
+import crypto from "crypto";
 import { supabase } from "../voice/lifecycle.js";
 
 const router = express.Router();
 
 let forensicDone = false;
+
+/**
+ * Vérifie la signature HMAC-SHA256 envoyée par ElevenLabs.
+ * Header attendu : ElevenLabs-Signature: t=<unix_secs>,v0=<hex_sha256>
+ * Payload signé  : <timestamp>.<raw_body>
+ * Tolérance     : ±5 min entre timestamp et heure serveur (anti-replay)
+ *
+ * @returns "ok" | "missing" | "invalid_format" | "stale" | "bad_signature" | "no_secret"
+ */
+function verifyElevenLabsSignature(rawBody, signatureHeader, secret) {
+  if (!secret) return "no_secret";
+  if (!signatureHeader) return "missing";
+
+  const parts = String(signatureHeader).split(",").reduce((acc, kv) => {
+    const [k, v] = kv.split("=");
+    if (k && v) acc[k.trim()] = v.trim();
+    return acc;
+  }, {});
+  const ts = parts.t;
+  const sig = parts.v0;
+  if (!ts || !sig) return "invalid_format";
+
+  // Anti-replay : tolérance 5 min
+  const tsNum = Number(ts);
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (Number.isFinite(tsNum) && Math.abs(nowSec - tsNum) > 300) return "stale";
+
+  const payload = `${ts}.${rawBody}`;
+  const computed = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+  // timingSafeEqual exige des Buffers de même longueur
+  const a = Buffer.from(computed, "hex");
+  const b = Buffer.from(sig, "hex");
+  if (a.length !== b.length) return "bad_signature";
+  return crypto.timingSafeEqual(a, b) ? "ok" : "bad_signature";
+}
 
 function getValue(obj, path) {
   return path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
@@ -50,8 +86,39 @@ function detectAppointment(text) {
   return /(rendez[- ]?vous|appointment|réserver|booking|prendre rdv|fixer un rdv)/i.test(lower);
 }
 
-router.post("/", express.json({ limit: "2mb" }), async (req, res) => {
-  const body = req.body || {};
+router.post("/", async (req, res) => {
+  const rawBody = req.body instanceof Buffer ? req.body.toString("utf8") : (typeof req.body === "string" ? req.body : "");
+  const sigHeader = req.headers["elevenlabs-signature"] || req.headers["x-elevenlabs-signature"] || "";
+
+  // 1. Vérification signature ElevenLabs (HMAC-SHA256)
+  const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
+  const sigStatus = verifyElevenLabsSignature(rawBody, sigHeader, secret);
+
+  if (sigStatus === "bad_signature" || sigStatus === "stale" || sigStatus === "invalid_format") {
+    // Debug temporaire pour comprendre les rejections (à retirer plus tard)
+    const parts = String(sigHeader).split(",").reduce((acc, kv) => {
+      const [k, v] = kv.split("="); if (k && v) acc[k.trim()] = v.trim(); return acc;
+    }, {});
+    if (parts.t && parts.v0) {
+      const payload = `${parts.t}.${rawBody}`;
+      const computed = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+      console.warn(`[post-call] SIG_DEBUG status=${sigStatus} ts=${parts.t} got=${parts.v0.slice(0,16)}... computed=${computed.slice(0,16)}... bodyLen=${rawBody.length} bodyHead=${rawBody.slice(0,80).replace(/\s+/g," ")}`);
+    }
+    console.warn(`[post-call] signature REJECTED: ${sigStatus}`);
+    return res.status(401).json({ success: false, error: `signature ${sigStatus}` });
+  }
+  // Cas tolérés (en dev/test local sans header) : "missing" et "no_secret" — on log, on accepte.
+  if (sigStatus !== "ok") {
+    console.warn(`[post-call] signature ${sigStatus} — accepted (dev/test mode)`);
+  }
+
+  // Parse JSON manuellement (on a utilisé express.raw pour préserver le body pour HMAC)
+  let body = {};
+  try {
+    body = rawBody ? JSON.parse(rawBody) : {};
+  } catch (e) {
+    return res.status(400).json({ success: false, error: "invalid JSON" });
+  }
 
   // 1. Forensic log (1 fois pour comprendre la structure réelle)
   if (!forensicDone) {
