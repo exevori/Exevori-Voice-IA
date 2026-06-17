@@ -53,14 +53,55 @@ const llmHandler = async (req, res) => {
   const elAgentId = req.headers["x-elevenlabs-agent-id"] || "";
   const elCallId = req.headers["x-elevenlabs-call-id"] || "";
 
+  // Log forensique : ElevenLabs ne documente pas tous les headers / payload
+  // qu'il envoie. On dump UNE FOIS pour comprendre, puis on raffinera la
+  // logique de résolution multi-tenant.
   if (!toNumber) {
-    return res.status(400).json({ error: { message: "x-elevenlabs-called-number header missing" } });
+    try {
+      const safeBody = { ...body };
+      if (Array.isArray(safeBody.messages)) {
+        safeBody.messages = safeBody.messages.map(m => ({
+          role: m.role,
+          content: typeof m.content === "string" ? m.content.slice(0, 200) : m.content,
+        }));
+      }
+      console.log("[elevenlabs] FORENSIC headers=", JSON.stringify({
+        "x-elevenlabs-called-number": req.headers["x-elevenlabs-called-number"],
+        "x-elevenlabs-caller-number": req.headers["x-elevenlabs-caller-number"],
+        "x-elevenlabs-agent-id":      req.headers["x-elevenlabs-agent-id"],
+        "x-elevenlabs-call-id":       req.headers["x-elevenlabs-call-id"],
+        "x-elevenlabs-conversation-id": req.headers["x-elevenlabs-conversation-id"],
+        "user-agent":                 req.headers["user-agent"],
+        "x-source":                   req.headers["x-source"],
+        "authorization":              req.headers["authorization"] ? "[present]" : undefined,
+      }));
+      console.log("[elevenlabs] FORENSIC body=", JSON.stringify(safeBody).slice(0, 800));
+    } catch (_) {}
   }
 
-  const company = await findCompanyByTwilioNumber(toNumber);
+  let company = null;
+  if (toNumber) {
+    company = await findCompanyByTwilioNumber(toNumber);
+  }
+
+  // Fallback : si ElevenLabs n'envoie pas le header (cas observé en prod),
+  // on utilise un company_id par défaut configuré dans .env.
+  const defaultCompanyId = process.env.ELEVENLABS_DEFAULT_COMPANY_ID;
+  if (!company && defaultCompanyId) {
+    const { data: defaultCompany } = await supabase
+      .from("companies")
+      .select("id")
+      .eq("id", defaultCompanyId)
+      .maybeSingle();
+    if (defaultCompany) {
+      company = { company_id: defaultCompany.id };
+      console.log(`[elevenlabs] using ELEVENLABS_DEFAULT_COMPANY_ID=${defaultCompanyId} (header missing)`);
+    }
+  }
+
   if (!company) {
-    console.warn(`[elevenlabs] PME introuvable pour to_number=${toNumber}`);
-    return res.status(404).json({ error: { message: `Company not configured for ${toNumber}` } });
+    console.warn(`[elevenlabs] PME introuvable: to_number="${toNumber}" et pas de ELEVENLABS_DEFAULT_COMPANY_ID utilisable`);
+    return res.status(404).json({ error: { message: `Company not configured (to_number=${toNumber || "none"})` } });
   }
   const companyId = company.company_id;
 
