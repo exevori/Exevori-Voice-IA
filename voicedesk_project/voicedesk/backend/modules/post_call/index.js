@@ -24,10 +24,88 @@
 import express from "express";
 import crypto from "crypto";
 import { supabase } from "../voice/lifecycle.js";
+import { streamChat } from "../voice/llm.js";
 
 const router = express.Router();
 
 let forensicDone = false;
+
+/**
+ * Analyse post-appel via Groq : extrait intent, confidence, outcome, summary, hesitations
+ * en JSON structuré. 1 seul appel LLM par appel téléphonique.
+ *
+ * @returns {Promise<{summary, intent, confidence, outcome, hesitations: Array<{question, response_given, suggested_kb}>}>}
+ */
+async function analyzeCall({ transcriptText, existingSummary }) {
+  if (!transcriptText || transcriptText.length < 20) {
+    return {
+      summary: existingSummary || "",
+      intent: "unknown",
+      confidence: 0,
+      outcome: "no_data",
+      hesitations: [],
+    };
+  }
+
+  const systemPrompt = `Tu es un analyste qui structure les appels téléphoniques d'une assistante vocale IA d'une PME québécoise.
+À partir du transcript fourni, produis STRICTEMENT un JSON valide (aucun texte avant/après) avec les champs :
+{
+  "summary": "résumé en 1 à 2 phrases en français du Québec",
+  "intent": "info_request|quote_request|appointment_request|complaint|support|other",
+  "confidence": <entier 0-100 — confiance globale dans la qualité des réponses de l'assistante>,
+  "outcome": "resolved|appointment_booked|info_provided|transferred|abandoned|unresolved",
+  "hesitations": [
+    {
+      "question": "question exacte posée par le client",
+      "response_given": "ce que l'assistante a répondu (souvent évasif ou je transmets à l'équipe)",
+      "suggested_kb": "ce qu'on devrait ajouter à la base de connaissances pour répondre la prochaine fois"
+    }
+  ]
+}
+Une hésitation se détecte quand l'assistante dit "je vais transmettre votre question", "je ne sais pas", "laissez-moi vérifier", ou répond de façon vague à une question factuelle. Mets [] si aucune hésitation.`;
+
+  try {
+    const result = await streamChat(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Transcript de l'appel :\n\n${transcriptText}\n\nProduis le JSON d'analyse.` },
+      ],
+      () => {}, // no streaming needed
+      { temperature: 0.2, max_tokens: 800 }
+    );
+
+    let raw = (result.text || "").trim();
+    // Strip markdown code fences if present
+    raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    // Extract first {...} block if junk surrounds
+    const m = raw.match(/\{[\s\S]*\}$/);
+    if (m) raw = m[0];
+
+    const parsed = JSON.parse(raw);
+    return {
+      summary: String(parsed.summary || existingSummary || "").trim(),
+      intent: String(parsed.intent || "unknown").trim().slice(0, 50),
+      confidence: Math.max(0, Math.min(100, Math.round(Number(parsed.confidence) || 0))),
+      outcome: String(parsed.outcome || "unresolved").trim().slice(0, 50),
+      hesitations: Array.isArray(parsed.hesitations)
+        ? parsed.hesitations.filter(h => h && h.question).slice(0, 10).map(h => ({
+            question: String(h.question || "").trim().slice(0, 500),
+            response_given: String(h.response_given || "").trim().slice(0, 500),
+            suggested_kb: String(h.suggested_kb || "").trim().slice(0, 1000),
+          }))
+        : [],
+    };
+  } catch (e) {
+    console.warn(`[post-call] analyzeCall LLM JSON parse error: ${e.message}`);
+    return {
+      summary: existingSummary || "",
+      intent: "unknown",
+      confidence: 0,
+      outcome: "unresolved",
+      hesitations: [],
+    };
+  }
+}
 
 /**
  * Vérifie la signature HMAC-SHA256 envoyée par ElevenLabs.
@@ -210,7 +288,7 @@ router.post("/", async (req, res) => {
       }
     }
 
-    // 4. INSERT calls (table existante)
+    // 4. INSERT calls (table existante) — version initiale (intent/conf seront mis à jour après analyse)
     const callRow = {
       company_id: companyId,
       contact_id: contactId,
@@ -232,6 +310,45 @@ router.post("/", async (req, res) => {
       console.error("[post-call] insert calls error:", callErr.message);
     }
     const callId = callInserted?.id || null;
+
+    // 4b. Analyse Groq post-call : intent / confidence / outcome / summary fin / hesitations
+    let analysis = { summary, intent: null, confidence: null, outcome: null, hesitations: [] };
+    if (transcriptText) {
+      analysis = await analyzeCall({ transcriptText, existingSummary: summary });
+      if (callId) {
+        await supabase.from("calls").update({
+          ai_summary: analysis.summary || summary || null,
+          intent: analysis.intent,
+          confidence_score: analysis.confidence,
+          outcome: analysis.outcome,
+        }).eq("id", callId);
+      }
+    }
+
+    // 4c. Hésitations détectées → learning_suggestions (type=kb_gap, status=pending)
+    const learningInserted = [];
+    for (const h of (analysis.hesitations || [])) {
+      const { data: ls, error: lsErr } = await supabase
+        .from("learning_suggestions")
+        .insert({
+          company_id: companyId,
+          type: "kb_gap",
+          question: h.question,
+          proposed_answer: h.suggested_kb || h.response_given || "",
+          source: callId ? `call:${callId}` : "post_call_webhook",
+          occurrences: 1,
+          confidence: analysis.confidence || null,
+          status: "pending",
+          detected_at: new Date().toISOString(),
+        })
+        .select("id")
+        .single();
+      if (lsErr) {
+        console.warn("[post-call] insert learning_suggestions error:", lsErr.message);
+      } else if (ls?.id) {
+        learningInserted.push(ls.id);
+      }
+    }
 
     // 5. Détection rendez-vous → INSERT appointments status=pending
     let appointmentCreated = null;
@@ -261,7 +378,9 @@ router.post("/", async (req, res) => {
     console.log(
       `[post-call] company=${companyId} caller=${callerNumber} duration=${durationSecs}s `
       + `contact_id=${contactId} call_id=${callId} appointment_id=${appointmentCreated || "—"} `
-      + `transcript_len=${transcriptText.length} summary_len=${summary.length}`
+      + `intent=${analysis.intent || "—"} confidence=${analysis.confidence ?? "—"} outcome=${analysis.outcome || "—"} `
+      + `hesitations=${(analysis.hesitations || []).length} learning_inserted=${learningInserted.length} `
+      + `transcript_len=${transcriptText.length} summary_len=${(analysis.summary || summary).length}`
     );
 
     return res.json({
@@ -269,6 +388,11 @@ router.post("/", async (req, res) => {
       contact_id: contactId,
       call_id: callId,
       appointment_id: appointmentCreated,
+      intent: analysis.intent,
+      confidence: analysis.confidence,
+      outcome: analysis.outcome,
+      hesitations_detected: (analysis.hesitations || []).length,
+      learning_suggestions_created: learningInserted.length,
     });
   } catch (err) {
     console.error("[post-call] error:", err.message);

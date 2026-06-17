@@ -398,8 +398,16 @@ function ContactDetailSheet({ contactId, open, onClose, token, t, lang, onEdit, 
             </SheetHeader>
 
             <div className="px-6 py-4">
-              <Tabs defaultValue="infos" data-testid="detail-tabs">
-                <TabsList className="w-full grid grid-cols-3">
+              <Tabs defaultValue="ai" data-testid="detail-tabs">
+                <TabsList className="w-full grid grid-cols-4">
+                  <TabsTrigger value="ai" data-testid="tab-ai">
+                    {t("contacts.tabs.ai", "IA")}
+                    {(detail.history?.calls?.length > 0 || detail.history?.learning_suggestions?.length > 0) && (
+                      <span className="ml-1.5 rounded-full bg-brand-purple/20 text-brand-purple px-1.5 py-0.5 text-[10px] tabular-nums">
+                        {(detail.history?.calls?.length || 0) + (detail.history?.learning_suggestions?.length || 0)}
+                      </span>
+                    )}
+                  </TabsTrigger>
                   <TabsTrigger value="infos" data-testid="tab-infos">{t("contacts.tabs.info", "Infos")}</TabsTrigger>
                   <TabsTrigger value="history" data-testid="tab-history">
                     {t("contacts.tabs.history", "Historique")}
@@ -418,6 +426,23 @@ function ContactDetailSheet({ contactId, open, onClose, token, t, lang, onEdit, 
                     )}
                   </TabsTrigger>
                 </TabsList>
+
+                {/* ── TAB IA — 3 zones (Léa / Humain / Hésitations) ── */}
+                <TabsContent value="ai">
+                  <AiTab
+                    contact={c}
+                    calls={detail.history?.calls || []}
+                    suggestions={detail.history?.learning_suggestions || []}
+                    token={token}
+                    onContactUpdate={(updated) => setDetail((d) => ({ ...d, contact: { ...d.contact, ...updated } }))}
+                    onSuggestionResolved={(sid) => setDetail((d) => ({
+                      ...d,
+                      history: { ...d.history, learning_suggestions: d.history.learning_suggestions.filter(s => s.id !== sid) },
+                    }))}
+                    t={t}
+                    lang={lang}
+                  />
+                </TabsContent>
 
                 {/* ── TAB INFOS ── */}
                 <TabsContent value="infos">
@@ -439,6 +464,299 @@ function ContactDetailSheet({ contactId, open, onClose, token, t, lang, onEdit, 
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+//  AI TAB — 3 zones (Léa / Humain / Hésitations)
+// ────────────────────────────────────────────────────────────────
+function formatTranscript(raw) {
+  if (!raw) return "";
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) {
+    return raw
+      .map((t) => {
+        const role = t.role === "agent" || t.role === "assistant" ? "Léa" : (t.role || "?");
+        const msg = t.message || t.text || t.content || "";
+        return `${role}: ${msg}`;
+      })
+      .join("\n");
+  }
+  try { return JSON.stringify(raw, null, 2); } catch { return String(raw); }
+}
+
+function AiTab({ contact: c, calls, suggestions, token, onContactUpdate, onSuggestionResolved, t, lang }) {
+  // Plus récent appel (avec ai_summary / intent / etc.)
+  const lastCall = (calls || []).find((cc) => cc.ai_summary || cc.ai_transcript) || calls?.[0] || null;
+  const pendingSuggestions = (suggestions || []).filter((s) => s.status === "pending");
+
+  return (
+    <div className="space-y-4" data-testid="ai-tab">
+      {/* ZONE BLEUE — Léa (in-band, IA) */}
+      <LeaZone call={lastCall} t={t} lang={lang} />
+
+      {/* ZONE VERTE — Humain (out-of-band) */}
+      <HumanNotesZone contact={c} token={token} onUpdate={onContactUpdate} t={t} />
+
+      {/* ZONE VIOLETTE — Hésitations IA */}
+      <HesitationsZone
+        suggestions={pendingSuggestions}
+        token={token}
+        onResolved={onSuggestionResolved}
+        t={t}
+        lang={lang}
+      />
+    </div>
+  );
+}
+
+function LeaZone({ call, t, lang }) {
+  return (
+    <section
+      data-testid="ai-zone-lea"
+      className="rounded-xl border border-brand/30 bg-brand/8 p-4"
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-brand/20 text-brand">
+            <Sparkles size={14} />
+          </div>
+          <h4 className="text-sm font-semibold text-text-primary">
+            {t("contacts.ai.lea_title", "Notes Léa (IA)")}
+          </h4>
+        </div>
+        {call?.confidence_score != null && (
+          <Badge variant="ghost" className="text-[10px]" data-testid="lea-confidence">
+            {t("contacts.ai.confidence", "Confiance")} {call.confidence_score}%
+          </Badge>
+        )}
+      </div>
+
+      {!call ? (
+        <p className="text-xs text-text-tertiary">
+          {t("contacts.ai.lea_empty", "Aucun appel analysé pour ce contact.")}
+        </p>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {call.intent && (
+              <Badge variant="ghost" className="text-[10px]" data-testid="lea-intent">
+                <Tag size={9} /> {call.intent}
+              </Badge>
+            )}
+            {call.outcome && (
+              <Badge variant="ghost" className="text-[10px]" data-testid="lea-outcome">
+                <Activity size={9} /> {call.outcome}
+              </Badge>
+            )}
+            {call.duration_seconds != null && (
+              <Badge variant="ghost" className="text-[10px]">
+                <Phone size={9} /> {Math.round(call.duration_seconds)}s
+              </Badge>
+            )}
+            <Badge variant="ghost" className="text-[10px]">
+              {formatRelative(call.created_at, lang)}
+            </Badge>
+          </div>
+
+          {call.ai_summary && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-text-tertiary mb-1">
+                {t("contacts.ai.summary", "Résumé")}
+              </div>
+              <p className="text-sm text-text-primary whitespace-pre-wrap" data-testid="lea-summary">
+                {call.ai_summary}
+              </p>
+            </div>
+          )}
+
+          {call.ai_transcript && (
+            <details>
+              <summary className="cursor-pointer text-[10px] uppercase tracking-wider text-text-tertiary hover:text-text-secondary">
+                {t("contacts.ai.transcript", "Transcript complet")}
+              </summary>
+              <pre
+                data-testid="lea-transcript"
+                className="mt-2 max-h-72 overflow-y-auto rounded-md border border-border bg-bg-elev px-3 py-2 text-xs text-text-secondary whitespace-pre-wrap font-mono"
+              >
+                {formatTranscript(call.ai_transcript)}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function HumanNotesZone({ contact: c, token, onUpdate, t }) {
+  const [value, setValue] = useState(c?.notes || "");
+  const [saving, setSaving] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  useEffect(() => { setValue(c?.notes || ""); }, [c?.id]);
+
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const r = await fetch(`${API}/api/v1/contacts/${c.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ notes: value }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        onUpdate?.(d.contact || { notes: value });
+        setSavedFlash(true);
+        setTimeout(() => setSavedFlash(false), 1500);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const dirty = (c?.notes || "") !== value;
+
+  return (
+    <section
+      data-testid="ai-zone-human"
+      className="rounded-xl border border-brand-green/30 bg-brand-green/8 p-4"
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-green/20 text-brand-green">
+            <Pencil size={14} />
+          </div>
+          <h4 className="text-sm font-semibold text-text-primary">
+            {t("contacts.ai.human_title", "Notes humaines")}
+          </h4>
+        </div>
+        {savedFlash && (
+          <span className="text-[10px] text-brand-green animate-fade-in">
+            {t("contacts.ai.saved", "Enregistré ✓")}
+          </span>
+        )}
+      </div>
+
+      <textarea
+        data-testid="ai-human-notes"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={t("contacts.ai.human_placeholder", "Notes éditables sur ce contact (rappels, contexte, préférences)…")}
+        rows={5}
+        className="w-full rounded-md border border-border bg-bg-elev px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:border-brand-green focus:outline-none resize-y"
+      />
+
+      <div className="mt-2 flex items-center justify-end">
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={save}
+          disabled={!dirty || saving}
+          data-testid="ai-human-save"
+        >
+          {saving ? t("common.saving", "Enregistrement…") : t("common.save", "Enregistrer")}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function HesitationsZone({ suggestions, token, onResolved, t, lang }) {
+  const handle = async (id, action) => {
+    const path = action === "approve" ? "approve" : "reject";
+    const r = await fetch(`${API}/api/v1/learning/suggestions/${id}/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({}),
+    });
+    if (r.ok) onResolved?.(id);
+  };
+
+  return (
+    <section
+      data-testid="ai-zone-hesitations"
+      className="rounded-xl border border-brand-purple/30 bg-brand-purple/8 p-4"
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-purple/20 text-brand-purple">
+            <MessageSquare size={14} />
+          </div>
+          <h4 className="text-sm font-semibold text-text-primary">
+            {t("contacts.ai.hesitations_title", "Hésitations IA")}
+          </h4>
+        </div>
+        {suggestions.length > 0 && (
+          <Badge variant="ghost" className="text-[10px]">
+            {suggestions.length} {t("contacts.ai.pending", "en attente")}
+          </Badge>
+        )}
+      </div>
+
+      {suggestions.length === 0 ? (
+        <p className="text-xs text-text-tertiary">
+          {t("contacts.ai.hesitations_empty", "Aucune hésitation détectée — Léa a su répondre.")}
+        </p>
+      ) : (
+        <ul className="space-y-3" data-testid="hesitations-list">
+          {suggestions.map((s) => (
+            <li
+              key={s.id}
+              className="rounded-lg border border-brand-purple/20 bg-brand-purple/4 p-3"
+              data-testid={`hesitation-${s.id}`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] uppercase tracking-wider text-text-tertiary">
+                  {formatRelative(s.detected_at, lang)}
+                </span>
+                {s.confidence != null && (
+                  <span className="text-[10px] text-text-tertiary tabular-nums">
+                    {s.confidence}%
+                  </span>
+                )}
+              </div>
+              <div className="space-y-2 text-sm">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-text-tertiary">
+                    {t("contacts.ai.question", "Question")}
+                  </div>
+                  <p className="text-text-primary">{s.question}</p>
+                </div>
+                {s.proposed_answer && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-text-tertiary">
+                      {t("contacts.ai.suggested_kb", "À ajouter à la KB")}
+                    </div>
+                    <p className="text-text-secondary italic">{s.proposed_answer}</p>
+                  </div>
+                )}
+              </div>
+              <div className="mt-3 flex items-center gap-2 justify-end">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-red-300 hover:text-red-200 hover:bg-brand-red/10"
+                  onClick={() => handle(s.id, "reject")}
+                  data-testid={`hesitation-reject-${s.id}`}
+                >
+                  {t("contacts.ai.reject", "Refuser")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => handle(s.id, "approve")}
+                  data-testid={`hesitation-approve-${s.id}`}
+                >
+                  {t("contacts.ai.approve", "Approuver")}
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

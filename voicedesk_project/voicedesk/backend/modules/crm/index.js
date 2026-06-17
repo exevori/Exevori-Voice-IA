@@ -134,6 +134,20 @@ router.get("/:id", async (req, res) => {
 
     if (!contact.data) return res.status(404).json({ error: "Contact introuvable" });
 
+    // Hésitations IA liées aux appels de ce contact (source = "call:<call_id>")
+    const callIds = (calls.data || []).map((c) => c.id).filter(Boolean);
+    let learningSuggestions = [];
+    if (callIds.length > 0) {
+      const sources = callIds.map((cid) => `call:${cid}`);
+      const { data: ls } = await supabase
+        .from("learning_suggestions")
+        .select("*")
+        .eq("company_id", contact.data.company_id)
+        .in("source", sources)
+        .order("detected_at", { ascending: false });
+      learningSuggestions = ls || [];
+    }
+
     return res.json({
       contact: contact.data,
       history: {
@@ -142,6 +156,7 @@ router.get("/:id", async (req, res) => {
         outbound_calls: outboundCalls.data || [],
         emails: emails.data || [],
         appointments: appointments.data || [],
+        learning_suggestions: learningSuggestions,
       },
       stats: {
         total_interactions:
@@ -150,6 +165,7 @@ router.get("/:id", async (req, res) => {
           (outboundCalls.data?.length || 0) +
           (emails.data?.length || 0),
         total_appointments: appointments.data?.length || 0,
+        pending_learning_suggestions: learningSuggestions.filter((s) => s.status === "pending").length,
       },
     });
   } catch (err) {
