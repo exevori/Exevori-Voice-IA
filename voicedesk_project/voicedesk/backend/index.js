@@ -44,6 +44,7 @@ import importRouter from "./modules/import/index.js";
 import notificationsRouter from "./modules/notifications/index.js";
 import outboundRouter from "./modules/outbound/index.js";
 import elevenLabsRouter from "./modules/elevenlabs/index.js";
+import postCallRouter from "./modules/post_call/index.js";
 
 // Webhooks externes (Gmail Push, Twilio status, Resend, Calendly)
 import webhooksRouter from "./webhooks/index.js";
@@ -114,6 +115,9 @@ app.use("/webhooks/voice", voiceWebhookRouter);
 
 // ── ELEVENLABS CUSTOM LLM (public, sans JWT — appelé par ElevenLabs) ──
 app.use("/api/v1/elevenlabs", elevenLabsRouter);
+
+// ── ELEVENLABS POST-CALL WEBHOOK (public, sans JWT) ──
+app.use("/api/voice/call-complete", postCallRouter);
 
 // ── ROUTES PUBLIQUES (login, signup, reset) ──
 app.use("/api/v1/auth", authRouter);
