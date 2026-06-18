@@ -7,7 +7,6 @@
 // instancient un SupabaseClient via middleware/auth.js & routers).
 import "./lib/polyfill-websocket.js";
 
-import { WebSocketServer } from "ws";
 import express from "express";
 import http from "node:http";
 import cors from "cors";
@@ -32,7 +31,6 @@ import companyRouter from "./modules/company/index.js";
 import teamRouter from "./modules/team/index.js";
 import emailAccountsRouter from "./modules/email-accounts/index.js";
 import twilioConfigRouter from "./modules/twilio-config/index.js";
-import { voiceWebhookRouter, attachVoiceRelayWS, attachMediaStreamWS } from "./modules/voice/index.js";
 import learningRouter from "./modules/learning/index.js";
 import knowledgeRouter from "./modules/knowledge/index.js";
 import billingRouter from "./modules/billing/index.js";
@@ -118,10 +116,6 @@ app.get("/", (req, res) => {
 
 // ── WEBHOOKS EXTERNES (Gmail, Twilio, Resend, Calendly) - pas d'auth ──
 app.use("/webhooks", webhooksRouter);
-// Voice ConversationRelay : doit être sous /api/* pour passer le proxy Emergent
-app.use("/api/voice", voiceWebhookRouter);
-// Alias historique pour compatibilité tests locaux
-app.use("/webhooks/voice", voiceWebhookRouter);
 
 // ── ELEVENLABS CUSTOM LLM (public, sans JWT — appelé par ElevenLabs) ──
 app.use("/api/v1/elevenlabs", elevenLabsRouter);
@@ -175,29 +169,15 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ── HTTP server + WebSocket pour ConversationRelay + Media Streams ──
+// ── HTTP server ──
 const server = http.createServer(app);
-const voiceWss = new WebSocketServer({ noServer: true });
-attachVoiceRelayWS(voiceWss);
-const mediaStreamWss = new WebSocketServer({ noServer: true });
-attachMediaStreamWS(mediaStreamWss);
+
+// (Phase 8B/8C ConversationRelay + Phase 8D Media Streams supprimés le 18 juin
+//  — Twilio appelle désormais ElevenLabs en direct, plus aucun WS audio local.)
 
 server.on("upgrade", (req, socket, head) => {
-  const url = req.url || "";
-  // ConversationRelay (Phase 8B/8C)
-  if (url.startsWith("/api/voice/relay/ws") || url.startsWith("/webhooks/voice/relay/ws")) {
-    voiceWss.handleUpgrade(req, socket, head, (ws) => {
-      voiceWss.emit("connection", ws, req);
-    });
-  }
-  // Twilio Media Streams custom (Phase 8D)
-  else if (url.startsWith("/api/voice/media-stream") || url.startsWith("/webhooks/voice/media-stream")) {
-    mediaStreamWss.handleUpgrade(req, socket, head, (ws) => {
-      mediaStreamWss.emit("connection", ws, req);
-    });
-  } else {
-    socket.destroy();
-  }
+  // Aucun WebSocket interne actuellement exposé — toute requête Upgrade est rejetée.
+  socket.destroy();
 });
 
 server.listen(PORT, () => {
@@ -205,7 +185,6 @@ server.listen(PORT, () => {
     port: PORT,
     env: NODE_ENV,
     modules: 16,
-    websocket: "/webhooks/voice/relay/ws",
   });
 });
 
