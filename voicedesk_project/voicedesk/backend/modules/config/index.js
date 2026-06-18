@@ -130,6 +130,7 @@ router.post("/", async (req, res) => {
     twilio_number,
     transfer_phone,
     transfer_triggers,
+    system_prompt_voice_fr,  // NEW : prompt vocal personnalisable, utilisé en appel
   } = req.body;
 
   if (!company_id || !assistant_name) {
@@ -145,6 +146,13 @@ router.post("/", async (req, res) => {
       .single();
 
     const companyName = company?.name || "votre entreprise";
+
+    // Charger la config existante pour préserver les champs auto-générés une fois personnalisés
+    const { data: existingConfig } = await supabase
+      .from("assistant_configs")
+      .select("system_prompt_fr, system_prompt_voice_fr")
+      .eq("company_id", company_id)
+      .maybeSingle();
 
     // Générer les prompts système par défaut si non fournis
     const defaultGreetingFR = greeting_inbound_fr ||
@@ -169,6 +177,21 @@ Be ${tone === "warm" ? "warm and welcoming" : tone === "casual" ? "natural and r
 Keep responses to 2-3 sentences maximum.
 If you don't know something, say so honestly and offer to take a message.
 Suggest scheduling a meeting if relevant.`;
+
+    // system_prompt_voice_fr (prompt vocal personnalisé, utilisé en appel)
+    //   - Si body fournit une valeur non vide → on l'utilise tel quel
+    //   - Sinon → on préserve la valeur existante en DB (pas d'écrasement à null)
+    const customVoicePrompt = typeof system_prompt_voice_fr === "string" ? system_prompt_voice_fr.trim() : "";
+    const finalVoicePrompt = customVoicePrompt
+      ? customVoicePrompt
+      : (existingConfig?.system_prompt_voice_fr || null);
+
+    // system_prompt_fr (fallback générique)
+    //   - Si la ligne existe déjà avec un prompt non vide → on préserve (ne pas écraser le custom existant)
+    //   - Sinon → on génère le défaut
+    const finalSystemPromptFR = (existingConfig?.system_prompt_fr && existingConfig.system_prompt_fr.trim())
+      ? existingConfig.system_prompt_fr
+      : defaultSystemPromptFR;
 
     const { data, error } = await supabase
       .from("assistant_configs")
@@ -196,7 +219,8 @@ Suggest scheduling a meeting if relevant.`;
         phone_mode,
         transfer_phone,
         transfer_triggers: transfer_triggers || ["parler à quelqu'un", "un humain", "speak to someone"],
-        system_prompt_fr: defaultSystemPromptFR,
+        system_prompt_fr: finalSystemPromptFR,
+        system_prompt_voice_fr: finalVoicePrompt,
         system_prompt_en: defaultSystemPromptEN,
         updated_at: new Date(),
       }, { onConflict: "company_id" })

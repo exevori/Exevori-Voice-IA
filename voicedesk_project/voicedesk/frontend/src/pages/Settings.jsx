@@ -220,10 +220,10 @@ function AssistantTab() {
       <Card>
         <SectionTitle icon={ShieldCheck} title={t("settings.assistant.systemPrompt", "Instructions système")} />
         <Field
-          label={t("settings.assistant.systemPromptFR", "Comportement de Léa (FR)")}
-          hint={t("settings.assistant.systemPromptHint", "Décrivez le rôle, le ton et les limites de votre assistante. Pour utilisateurs avancés.")}
+          label={t("settings.assistant.voicePrompt", "Prompt vocal (utilisé pendant les appels)")}
+          hint={t("settings.assistant.voicePromptHint", "Décrivez le rôle, le ton et les limites de votre assistante. Ce texte est envoyé tel quel au LLM pendant chaque appel téléphonique.")}
         >
-          <TextArea value={form.system_prompt_fr || ""} onChange={(e) => update("system_prompt_fr", e.target.value)} rows={6} testId="assistant-system-prompt-fr" />
+          <TextArea value={form.system_prompt_voice_fr || ""} onChange={(e) => update("system_prompt_voice_fr", e.target.value)} rows={6} testId="assistant-system-prompt-voice-fr" />
         </Field>
       </Card>
 
