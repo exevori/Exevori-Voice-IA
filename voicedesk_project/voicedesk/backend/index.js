@@ -16,6 +16,7 @@ import dotenv from "dotenv";
 
 import { logger, requestLogger } from "./lib/logger.js";
 import { requireAuth, requireRole } from "./middleware/auth.js";
+import { enforceTenantOwnership } from "./middleware/enforceTenantOwnership.js";
 
 // Modules backend (15)
 import authRouter from "./modules/auth/index.js";
@@ -129,14 +130,14 @@ app.use("/api/v1/auth", authRouter);
 // ── ROUTES PROTÉGÉES (requireAuth) ──
 app.use("/api/v1/config",         requireAuth, configRouter);
 app.use("/api/v1/dashboard",      requireAuth, dashboardRouter);
-app.use("/api/v1/contacts",       requireAuth, crmRouter);
-app.use("/api/v1/calls",          requireAuth, callsRouter);
-app.use("/api/v1/kb",             requireAuth, kbRouter);
-app.use("/api/v1/reports",        requireAuth, reportsRouter);
-app.use("/api/v1/company",        requireAuth, companyRouter);
+app.use("/api/v1/contacts",       requireAuth, enforceTenantOwnership, crmRouter);
+app.use("/api/v1/calls",          requireAuth, enforceTenantOwnership, callsRouter);
+app.use("/api/v1/kb",             requireAuth, enforceTenantOwnership, kbRouter);
+app.use("/api/v1/reports",        requireAuth, enforceTenantOwnership, reportsRouter);
+app.use("/api/v1/company",        requireAuth, enforceTenantOwnership, companyRouter);
 app.use("/api/v1/team",           requireAuth, teamRouter);
-app.use("/api/v1/email-accounts", requireAuth, emailAccountsRouter);
-app.use("/api/v1/twilio-config",  requireAuth, twilioConfigRouter);
+app.use("/api/v1/email-accounts", requireAuth, enforceTenantOwnership, emailAccountsRouter);
+app.use("/api/v1/twilio-config",  requireAuth, enforceTenantOwnership, twilioConfigRouter);
 app.use("/api/v1/calendar",       requireAuth, calendarRouter);
 app.use("/api/v1/emails",         requireAuth, emailRouter);
 app.use("/api/v1/learning",       requireAuth, learningRouter);
