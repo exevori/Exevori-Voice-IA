@@ -30,9 +30,7 @@ import multer from "multer";
 import { createClient } from "@supabase/supabase-js";
 import twilio from "twilio";
 import dotenv from "dotenv";
-import { createRequire } from "node:module";
-const _require = createRequire(import.meta.url);
-const XLSX = _require("xlsx");
+import ExcelJS from "exceljs";
 
 dotenv.config();
 
@@ -277,10 +275,56 @@ router.post("/campaigns/:id/contacts/import", upload.single("file"), async (req,
         rows.push(row);
       }
     } else {
-      // Excel (.xlsx, .xls)
-      const wb = XLSX.read(file.buffer, { type: "buffer" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      // Excel (.xlsx) — exceljs ne supporte PAS l'ancien format binaire .xls
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(file.buffer);
+      const ws = wb.worksheets[0];
+      if (!ws) return res.status(422).json({ error: "Fichier Excel vide" });
+
+      // Normalise une cellule exceljs en string (équivalent au comportement xlsx)
+      const cellToString = (v) => {
+        if (v === null || v === undefined) return "";
+        if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return String(v);
+        if (v instanceof Date) return v.toISOString();
+        // Hyperlink { text, hyperlink }
+        if (typeof v === "object" && "text" in v) return String(v.text ?? "");
+        // Rich text { richText: [{ text }, ...] }
+        if (typeof v === "object" && Array.isArray(v.richText)) {
+          return v.richText.map(r => r.text || "").join("");
+        }
+        // Formula { formula, result }
+        if (typeof v === "object" && "result" in v) return cellToString(v.result);
+        // Erreur { error }
+        if (typeof v === "object" && "error" in v) return "";
+        return String(v);
+      };
+
+      // 1re ligne = en-têtes
+      const headerRow = ws.getRow(1);
+      const headers = [];
+      headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        headers[colNumber - 1] = cellToString(cell.value).trim();
+      });
+
+      // Lignes suivantes = données ; defval="" pour les cellules vides
+      const lastRow = ws.actualRowCount || ws.rowCount;
+      for (let r = 2; r <= lastRow; r++) {
+        const dataRow = ws.getRow(r);
+        // Skip lignes entièrement vides
+        const allEmpty = dataRow.values
+          .slice(1)
+          .every(v => v === null || v === undefined || cellToString(v).trim() === "");
+        if (allEmpty) continue;
+
+        const row = {};
+        for (let c = 0; c < headers.length; c++) {
+          const key = headers[c];
+          if (!key) continue;
+          const cell = dataRow.getCell(c + 1);
+          row[key] = cellToString(cell.value);
+        }
+        rows.push(row);
+      }
     }
   } catch (e) {
     return res.status(422).json({ error: `Erreur lecture fichier : ${e.message}` });
