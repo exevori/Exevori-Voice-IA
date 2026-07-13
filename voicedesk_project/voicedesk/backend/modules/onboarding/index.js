@@ -10,6 +10,7 @@
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import { provisionNewClient } from "./provision_service.js";
 
 dotenv.config();
 
@@ -390,5 +391,107 @@ function getNextActionLabel(currentStep) {
   };
   return labels[currentStep] || "Configuration terminée";
 }
+
+// ============================================================
+// EXEVORI VOICE IA — Étapes onboarding 5 + statut provisioning
+// Fichier : coller dans backend/modules/onboarding/index.js
+//           AVANT la ligne "export default router;"
+//
+// Import à ajouter en haut du fichier :
+//   import { provisionNewClient } from "./provision_service.js";
+// ============================================================
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/v1/onboarding/step/5
+// Lance le provisioning automatique Twilio + ElevenLabs
+// ─────────────────────────────────────────────────────────────
+router.post("/step/5", express.json(), async (req, res) => {
+  const { company_id, area_code = "581" } = req.body;
+  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+
+  const { data: cfg } = await supabase
+    .from("assistant_configs")
+    .select("assistant_name, voice_id, system_prompt_voice_fr")
+    .eq("company_id", company_id)
+    .single();
+
+  if (!cfg) return res.status(400).json({ error: "Config introuvable — compléter étapes 1-3 d'abord" });
+
+  const missing = [];
+  if (!process.env.TWILIO_ACCOUNT_SID)        missing.push("TWILIO_ACCOUNT_SID");
+  if (!process.env.TWILIO_AUTH_TOKEN)          missing.push("TWILIO_AUTH_TOKEN");
+  if (!process.env.ELEVENLABS_API_KEY)         missing.push("ELEVENLABS_API_KEY");
+  if (!process.env.ELEVENLABS_MASTER_AGENT_ID) missing.push("ELEVENLABS_MASTER_AGENT_ID");
+  if (missing.length) return res.status(503).json({ error: `Variables manquantes : ${missing.join(", ")}` });
+
+  await supabase.from("onboarding_progress").update({
+    provisioning_status:     "in_progress",
+    provisioning_started_at: new Date().toISOString(),
+  }).eq("company_id", company_id);
+
+  try {
+    const result = await provisionNewClient({
+      companyId:     company_id,
+      assistantName: cfg.assistant_name || "Votre assistante",
+      voiceId:       cfg.voice_id,
+      systemPrompt:  cfg.system_prompt_voice_fr,
+      areaCode:      area_code,
+    });
+
+    if (!result.success) {
+      await supabase.from("onboarding_progress").update({
+        provisioning_status: "failed",
+        provisioning_error:  result.error,
+      }).eq("company_id", company_id);
+      return res.status(500).json({ error: result.error, log: result.log });
+    }
+
+    await supabase.from("onboarding_progress").update({
+      provisioning_status: "done",
+      provisioning_error:  null,
+    }).eq("company_id", company_id);
+
+    return res.json({
+      success:      true,
+      phone_number: result.phone_number,
+      agent_id:     result.agent_id,
+      log:          result.log,
+    });
+
+  } catch (err) {
+    await supabase.from("onboarding_progress").update({
+      provisioning_status: "failed",
+      provisioning_error:  err.message,
+    }).eq("company_id", company_id);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/v1/onboarding/provisioning-status
+// Polling frontend pendant le provisioning
+// ─────────────────────────────────────────────────────────────
+router.get("/provisioning-status", async (req, res) => {
+  const { company_id } = req.query;
+  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+
+  const { data: p } = await supabase
+    .from("onboarding_progress")
+    .select("provisioning_status, provisioning_error, provisioning_started_at")
+    .eq("company_id", company_id).single();
+
+  const { data: c } = await supabase
+    .from("assistant_configs")
+    .select("twilio_number, elevenlabs_agent_id")
+    .eq("company_id", company_id).single();
+
+  return res.json({
+    status:       p?.provisioning_status || "idle",
+    error:        p?.provisioning_error  || null,
+    started_at:   p?.provisioning_started_at || null,
+    phone_number: c?.twilio_number || null,
+    agent_id:     c?.elevenlabs_agent_id || null,
+  });
+});
 
 export default router;
