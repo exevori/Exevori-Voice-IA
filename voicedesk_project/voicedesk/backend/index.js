@@ -139,7 +139,7 @@ app.use("/api/v1/team",           requireAuth, teamRouter);
 app.use("/api/v1/email-accounts", requireAuth, enforceTenantOwnership, emailAccountsRouter);
 app.use("/api/v1/twilio-config",  requireAuth, enforceTenantOwnership, twilioConfigRouter);
 app.use("/api/v1/calendar",       requireAuth, calendarRouter);
-app.use("/api/v1/emails",         requireAuth, emailRouter);
+app.use("/api/v1/emails",         requireAuth, enforceTenantOwnership, emailRouter);
 app.use("/api/v1/learning",       requireAuth, learningRouter);
 app.use("/api/v1/knowledge",      requireAuth, knowledgeRouter);
 app.use("/api/v1/billing",        requireAuth, billingRouter);
@@ -148,7 +148,7 @@ app.use("/api/v1/voice-library",  requireAuth, voiceLibraryRouter);
 app.use("/api/v1/onboarding",     requireAuth, onboardingRouter);
 app.use("/api/v1/import",         requireAuth, importRouter);
 app.use("/api/v1/notifications",  requireAuth, notificationsRouter);
-app.use("/api/v1/outbound",       requireAuth, outboundRouter);
+app.use("/api/v1/outbound",       requireAuth, enforceTenantOwnership, outboundRouter);
 
 // ── ROUTES ADMIN (super_admin uniquement) ──
 app.use("/api/v1/admin", requireAuth, requireRole("super_admin"), adminRouter);

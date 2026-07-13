@@ -410,8 +410,11 @@ router.get("/sources", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.get("/sources/:id", async (req, res) => {
   const { id } = req.params;
-  const { data: source, error } = await supabase
-    .from("knowledge_sources").select("*").eq("id", id).maybeSingle();
+  const companyId = req.user?.company_id;
+  const isAdmin = req.user?.role === "super_admin";
+  const query = supabase.from("knowledge_sources").select("*").eq("id", id);
+  if (!isAdmin) query.eq("company_id", companyId);
+  const { data: source, error } = await query.maybeSingle();
   if (error)   return res.status(500).json({ error: error.message });
   if (!source) return res.status(404).json({ error: "Source introuvable" });
 
@@ -430,8 +433,12 @@ router.get("/sources/:id", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.delete("/sources/:id", async (req, res) => {
   const { id } = req.params;
-  const { data: source } = await supabase
-    .from("knowledge_sources").select("storage_path").eq("id", id).maybeSingle();
+  const companyId = req.user?.company_id;
+  const isAdmin = req.user?.role === "super_admin";
+  const verif = supabase.from("knowledge_sources").select("storage_path").eq("id", id);
+  if (!isAdmin) verif.eq("company_id", companyId);
+  const { data: source } = await verif.maybeSingle();
+  if (!source) return res.status(403).json({ error: "Accès refusé" });
 
   // 1. Delete row → cascade chunks via FK
   const { error } = await supabase.from("knowledge_sources").delete().eq("id", id);
