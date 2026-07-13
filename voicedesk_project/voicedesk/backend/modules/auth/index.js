@@ -25,6 +25,121 @@ const router = express.Router();
 // POST /api/v1/auth/invite
 // Admin Exevori crée une entreprise + envoie invitation
 // ─────────────────────────────────────────────────────────────
+// ============================================================
+// EXEVORI VOICE IA — Endpoint POST /api/v1/auth/register
+// Fichier : coller dans backend/modules/auth/index.js
+//           AVANT le bloc router.post("/invite"
+//
+// Import à ajouter en haut si absent :
+//   import { Resend } from "resend";
+//   const resend = new Resend(process.env.RESEND_API_KEY);
+// ============================================================
+
+router.post("/register", async (req, res) => {
+  const {
+    company_name, contact_name, contact_email,
+    password, phone = "", city = "Québec", plan = "demarrage",
+  } = req.body;
+
+  if (!company_name || !contact_name || !contact_email || !password)
+    return res.status(400).json({ error: "Champs obligatoires manquants" });
+
+  if (password.length < 8)
+    return res.status(400).json({ error: "Mot de passe min 8 caractères" });
+
+  const { data: existing } = await supabase
+    .from("profiles").select("id").eq("email", contact_email).maybeSingle();
+  if (existing) return res.status(409).json({ error: "Un compte existe déjà avec ce courriel" });
+
+  const PLAN_PRICES = { solo: 79, demarrage: 159, essentiel: 319, professionnel: 529 };
+  let companyId = null, userId = null;
+
+  try {
+    // 1. Créer la company
+    const { data: company, error: cErr } = await supabase
+      .from("companies").insert({
+        name: company_name, contact_name, contact_email,
+        phone, city, province: "Québec", plan,
+        status: "trial", billing_country: "CA",
+        created_at: new Date().toISOString(),
+      }).select().single();
+    if (cErr) throw new Error(`Company : ${cErr.message}`);
+    companyId = company.id;
+
+    // 2. Créer le user Supabase Auth
+    const { data: auth, error: aErr } = await supabase.auth.admin.createUser({
+      email: contact_email, password, email_confirm: true,
+      user_metadata: { company_name, contact_name },
+    });
+    if (aErr) throw new Error(`Auth : ${aErr.message}`);
+    userId = auth.user.id;
+
+    // 3. Profil
+    await supabase.from("profiles").insert({
+      user_id: userId, company_id: companyId,
+      full_name: contact_name, email: contact_email,
+      role: "company_admin", status: "active",
+    });
+
+    // 4. Subscription trial 14 jours
+    const trialEnd = new Date();
+    trialEnd.setDate(trialEnd.getDate() + 14);
+    await supabase.from("subscriptions").insert({
+      company_id: companyId, plan_name: plan,
+      monthly_price: PLAN_PRICES[plan] || 159,
+      payment_status: "trial",
+      trial_ends_at: trialEnd.toISOString(),
+    });
+
+    // 5. assistant_configs vide
+    await supabase.from("assistant_configs").insert({
+      company_id: companyId, assistant_name: "Léa",
+      tone: "professional", language: "fr-CA",
+      confidence_threshold: 80, created_at: new Date().toISOString(),
+    });
+
+    // 6. onboarding_progress
+    await supabase.from("onboarding_progress").insert({
+      company_id: companyId, current_step: 1,
+      completed_steps: [], provisioning_status: "idle",
+    });
+
+    // 7. Email de bienvenue (non bloquant)
+    try {
+      const firstName = contact_name.split(" ")[0];
+      await resend.emails.send({
+        from: process.env.EMAIL_FROM || "VoiceDesk <bonjour@voicedesk.ca>",
+        to:   contact_email,
+        subject: `Bienvenue dans VoiceDesk AI, ${firstName} !`,
+        html: `<div style="font-family:Arial;max-width:540px;margin:auto">
+          <div style="background:#1E3A5F;padding:24px 32px">
+            <h1 style="color:#fff;margin:0;font-size:22px">Bienvenue, ${firstName} !</h1>
+          </div>
+          <div style="padding:24px 32px">
+            <p style="color:#374151">Votre compte <strong>${company_name}</strong> est prêt.</p>
+            <p style="color:#374151">Complétez la configuration pour obtenir votre numéro dédié.</p>
+            <a href="${process.env.FRONTEND_URL}/onboarding"
+               style="display:inline-block;background:#3B82F6;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600">
+              Configurer mon assistante →
+            </a>
+          </div>
+          <div style="padding:16px 32px;background:#F9FAFB;text-align:center">
+            <p style="color:#9CA3AF;font-size:11px;margin:0">Exevori · VoiceDesk AI · Lévis, Québec</p>
+          </div>
+        </div>`,
+      });
+    } catch {}
+
+    return res.status(201).json({ success: true, company_id: companyId, user_id: userId });
+
+  } catch (err) {
+    // Rollback
+    if (userId) { try { await supabase.auth.admin.deleteUser(userId); } catch {} }
+    if (companyId) { try { await supabase.from("companies").delete().eq("id", companyId); } catch {} }
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 router.post("/invite", async (req, res) => {
   const {
     company_name, contact_name, contact_email, phone, city,
