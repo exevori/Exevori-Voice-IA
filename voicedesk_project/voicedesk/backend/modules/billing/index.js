@@ -684,5 +684,73 @@ router.get("/pricing", async (req, res) => {
   }
 });
 
+// ============================================================
+// EXEVORI VOICE IA — Endpoint vérification session Stripe post-paiement
+// Fichier : ajouter dans backend/modules/billing/index.js
+//
+// Coller ce bloc AVANT "export default router;"
+// ============================================================
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/v1/billing/verify-session?session_id=cs_xxx
+// Vérifie qu'une session Stripe checkout est bien payée
+// et met à jour la subscription en DB
+// ─────────────────────────────────────────────────────────────
+router.get("/verify-session", async (req, res) => {
+  const { session_id } = req.query;
+
+  if (!session_id) {
+    return res.status(400).json({ error: "session_id requis" });
+  }
+
+  try {
+    // Récupérer la session depuis Stripe
+    const session = await stripe.checkout.sessions.retrieve(session_id, {
+      expand: ["subscription", "customer"],
+    });
+
+    if (session.payment_status !== "paid" && session.status !== "complete") {
+      return res.json({
+        success: false,
+        error: `Paiement non confirmé (status: ${session.payment_status})`,
+      });
+    }
+
+    const companyId = session.metadata?.company_id ||
+                      session.subscription?.metadata?.company_id;
+
+    if (!companyId) {
+      // On retourne quand même success — le webhook Stripe mettra à jour la DB
+      console.warn("[verify-session] company_id absent du metadata Stripe");
+      return res.json({ success: true, warning: "company_id absent — mise à jour via webhook" });
+    }
+
+    // Mettre à jour la subscription en DB
+    await supabase.from("subscriptions").update({
+      payment_status:      "active",
+      stripe_customer_id:  session.customer?.id || session.customer,
+      stripe_subscription_id: session.subscription?.id || session.subscription,
+      activated_at:        new Date().toISOString(),
+    }).eq("company_id", companyId);
+
+    // Activer la company si encore en trial
+    await supabase.from("companies").update({
+      status: "active",
+    }).eq("id", companyId).eq("status", "trial");
+
+    console.log(`[verify-session] Paiement confirmé pour company ${companyId}`);
+
+    return res.json({
+      success:    true,
+      company_id: companyId,
+      plan:       session.metadata?.plan_name || session.subscription?.metadata?.plan_name,
+    });
+
+  } catch (err) {
+    console.error("[verify-session] Erreur:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
 export { PLANS };

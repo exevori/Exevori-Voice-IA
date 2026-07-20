@@ -142,7 +142,14 @@ app.use("/api/v1/calendar",       requireAuth, calendarRouter);
 app.use("/api/v1/emails",         requireAuth, enforceTenantOwnership, emailRouter);
 app.use("/api/v1/learning",       requireAuth, learningRouter);
 app.use("/api/v1/knowledge",      requireAuth, knowledgeRouter);
-app.use("/api/v1/billing",        requireAuth, billingRouter);
+app.use(
+  "/api/v1/billing",
+  (req, res, next) =>
+    req.method === "GET" && req.path === "/verify-session"
+      ? next()
+      : requireAuth(req, res, next),
+  billingRouter
+);
 app.use("/api/v1/tickets",        requireAuth, ticketsRouter);
 app.use("/api/v1/voice-library",  requireAuth, voiceLibraryRouter);
 app.use("/api/v1/onboarding",     requireAuth, onboardingRouter);
