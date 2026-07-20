@@ -47,6 +47,7 @@ import postCallRouter from "./modules/post_call/index.js";
 
 // Webhooks externes (Gmail Push, Twilio status, Resend, Calendly)
 import webhooksRouter from "./webhooks/index.js";
+import { startEmailPoller } from "./modules/email/email_poller.js";
 
 dotenv.config();
 
@@ -195,5 +196,7 @@ server.listen(PORT, () => {
     modules: 16,
   });
 });
+
+startEmailPoller();
 
 export default app;
