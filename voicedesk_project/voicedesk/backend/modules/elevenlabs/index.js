@@ -38,6 +38,73 @@ function extractLastUserText(messages) {
   return lastUser?.content?.trim() || "";
 }
 
+async function resolveCompany(toNumber) {
+  if (toNumber) {
+    const { data: pn } = await supabase
+      .from("phone_numbers")
+      .select("company_id")
+      .eq("phone_number", toNumber)
+      .eq("status", "active")
+      .single();
+    if (pn?.company_id) {
+      console.log(`[elevenlabs] tenant via phone_numbers: ${toNumber} → ${pn.company_id}`);
+      return { company_id: pn.company_id };
+    }
+  }
+  if (toNumber) {
+    const { data: tc } = await supabase
+      .from("twilio_configs")
+      .select("company_id")
+      .eq("phone_number", toNumber)
+      .single();
+    if (tc?.company_id) {
+      console.log(`[elevenlabs] tenant via twilio_configs: ${toNumber} → ${tc.company_id}`);
+      return { company_id: tc.company_id };
+    }
+  }
+  const defaultId = process.env.ELEVENLABS_DEFAULT_COMPANY_ID;
+  if (defaultId) {
+    const { data: co } = await supabase
+      .from("companies").select("id").eq("id", defaultId).single();
+    if (co) {
+      console.log(`[elevenlabs] fallback ELEVENLABS_DEFAULT_COMPANY_ID (to_number="${toNumber || "none"}")`);
+      return { company_id: defaultId };
+    }
+  }
+  return null;
+}
+
+async function buildContactContext(fromNumber, companyId) {
+  if (!fromNumber || !companyId) return "";
+  const { data: contact } = await supabase
+    .from("contacts")
+    .select("full_name, main_need, status, notes")
+    .eq("company_id", companyId)
+    .eq("phone", fromNumber)
+    .maybeSingle();
+  if (!contact) return "";
+  const { data: lastCall } = await supabase
+    .from("calls")
+    .select("ai_summary, created_at")
+    .eq("company_id", companyId)
+    .eq("caller_phone", fromNumber)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const lines = [
+    `\n\n═══ HISTORIQUE CLIENT ═══`,
+    `Nom : ${contact.full_name}`,
+    contact.status    ? `Statut : ${contact.status}` : null,
+    contact.main_need ? `Besoin connu : ${contact.main_need}` : null,
+    contact.notes     ? `Notes : ${contact.notes}` : null,
+    lastCall?.ai_summary
+      ? `Dernier appel (${new Date(lastCall.created_at).toLocaleDateString("fr-CA")}) : ${lastCall.ai_summary}`
+      : null,
+    `═══════════════════════`,
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
 const llmHandler = async (req, res) => {
   const t0 = Date.now();
   const body = req.body || {};
@@ -79,25 +146,7 @@ const llmHandler = async (req, res) => {
     } catch (_) {}
   }
 
-  let company = null;
-  if (toNumber) {
-    company = await findCompanyByTwilioNumber(toNumber);
-  }
-
-  // Fallback : si ElevenLabs n'envoie pas le header (cas observé en prod),
-  // on utilise un company_id par défaut configuré dans .env.
-  const defaultCompanyId = process.env.ELEVENLABS_DEFAULT_COMPANY_ID;
-  if (!company && defaultCompanyId) {
-    const { data: defaultCompany } = await supabase
-      .from("companies")
-      .select("id")
-      .eq("id", defaultCompanyId)
-      .maybeSingle();
-    if (defaultCompany) {
-      company = { company_id: defaultCompany.id };
-      console.log(`[elevenlabs] using ELEVENLABS_DEFAULT_COMPANY_ID=${defaultCompanyId} (header missing)`);
-    }
-  }
+  const company = await resolveCompany(toNumber);
 
   if (!company) {
     console.warn(`[elevenlabs] PME introuvable: to_number="${toNumber}" et pas de ELEVENLABS_DEFAULT_COMPANY_ID utilisable`);
@@ -113,8 +162,11 @@ const llmHandler = async (req, res) => {
     .maybeSingle();
 
   const assistantName = cfg?.assistant_name || "Léa";
-  const systemPrompt = cfg?.system_prompt_voice_fr || cfg?.system_prompt_fr
+  let systemPrompt = cfg?.system_prompt_voice_fr || cfg?.system_prompt_fr
     || `Tu es ${assistantName}, assistante vocale d'une PME québécoise. Réponds en français du Québec, ton chaleureux et professionnel, phrases courtes adaptées à l'audio.`;
+
+  const contactCtx = await buildContactContext(fromNumber, companyId);
+  if (contactCtx) systemPrompt += contactCtx;
 
   // 3. RAG sur le dernier message utilisateur
   const userText = extractLastUserText(messages);
