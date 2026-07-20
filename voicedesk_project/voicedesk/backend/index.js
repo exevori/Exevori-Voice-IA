@@ -49,6 +49,7 @@ import postCallRouter from "./modules/post_call/index.js";
 // Webhooks externes (Gmail Push, Twilio status, Resend, Calendly)
 import webhooksRouter from "./webhooks/index.js";
 import { startEmailPoller } from "./modules/email/email_poller.js";
+import { startWeeklyReportJob, triggerWeeklyReport } from "./modules/notifications/weekly_report_job.js";
 
 dotenv.config();
 
@@ -163,6 +164,13 @@ app.use("/api/v1/outbound",       requireAuth, enforceTenantOwnership, outboundR
 // ── ROUTES ADMIN (super_admin uniquement) ──
 app.use("/api/v1/admin", requireAuth, requireRole("super_admin"), adminRouter);
 
+app.get(
+  "/api/v1/notifications/weekly-report",
+  requireAuth,
+  requireRole("super_admin"),
+  triggerWeeklyReport
+);
+
 // ── 404 ──
 app.use((req, res) => {
   res.status(404).json({
@@ -200,5 +208,6 @@ server.listen(PORT, () => {
 });
 
 startEmailPoller();
+startWeeklyReportJob();
 
 export default app;

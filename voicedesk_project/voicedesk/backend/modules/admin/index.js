@@ -390,4 +390,92 @@ async function getTicketStats() {
   return stats;
 }
 
+// ============================================================
+// EXEVORI VOICE IA — Endpoint statut des providers externes
+// Fichier : ajouter dans backend/modules/admin/index.js
+//
+// Coller ce bloc AVANT "export default router;"
+//
+// Vérifie en temps réel : Groq, ElevenLabs, Twilio, Supabase
+// Utilisé par la page frontend Monitoring.jsx
+// ============================================================
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/v1/admin/provider-status
+// Ping rapide de chaque provider externe — mesure latence + statut
+// ─────────────────────────────────────────────────────────────
+router.get("/provider-status", async (req, res) => {
+  if (req.user?.role !== "super_admin") {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const checkWithTimeout = async (fn, timeoutMs = 5000) => {
+    const t0 = Date.now();
+    try {
+      const result = await Promise.race([
+        fn(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs)),
+      ]);
+      return { status: "ok", latency: Date.now() - t0, detail: result || null };
+    } catch (err) {
+      return { status: "error", latency: Date.now() - t0, detail: err.message };
+    }
+  };
+
+  // ── Groq ────────────────────────────────────────────────
+  const groqCheck = checkWithTimeout(async () => {
+    if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY absent");
+    const r = await fetch("https://api.groq.com/openai/v1/models", {
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return "API accessible";
+  });
+
+  // ── ElevenLabs ──────────────────────────────────────────
+  const elevenCheck = checkWithTimeout(async () => {
+    if (!process.env.ELEVENLABS_API_KEY) throw new Error("ELEVENLABS_API_KEY absent");
+    const r = await fetch("https://api.elevenlabs.io/v1/user", {
+      headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY },
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    return `Quota: ${data.subscription?.character_count || 0}/${data.subscription?.character_limit || "?"}`;
+  });
+
+  // ── Twilio ──────────────────────────────────────────────
+  const twilioCheck = checkWithTimeout(async () => {
+    if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+      throw new Error("Credentials Twilio absentes");
+    }
+    const auth = Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString("base64");
+    const r = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}.json`,
+      { headers: { Authorization: `Basic ${auth}` } }
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    return `Compte: ${data.status}`;
+  });
+
+  // ── Supabase ────────────────────────────────────────────
+  const supabaseCheck = checkWithTimeout(async () => {
+    const { error } = await supabase.from("companies").select("id").limit(1);
+    if (error) throw new Error(error.message);
+    return "Connexion DB OK";
+  });
+
+  const [groq, elevenlabs, twilio, supa] = await Promise.all([
+    groqCheck, elevenCheck, twilioCheck, supabaseCheck,
+  ]);
+
+  return res.json({
+    groq:       { status: groq.status,       latency: groq.latency,       detail: groq.detail },
+    elevenlabs: { status: elevenlabs.status,  latency: elevenlabs.latency, detail: elevenlabs.detail },
+    twilio:     { status: twilio.status,      latency: twilio.latency,     detail: twilio.detail },
+    supabase:   { status: supa.status,        latency: supa.latency,       detail: supa.detail },
+    checked_at: new Date().toISOString(),
+  });
+});
+
 export default router;
