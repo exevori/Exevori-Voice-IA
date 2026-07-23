@@ -22,6 +22,13 @@ import Reports from "./pages/Reports.jsx";
 import Settings from "./pages/Settings.jsx";
 import Admin from "./pages/Admin.jsx";
 import Outbound from "./pages/Outbound.jsx";
+import CalendarPage from "./pages/Calendar.jsx";
+import Tickets from "./pages/Tickets.jsx";
+import OnboardingPage from "./pages/OnboardingPage.jsx";
+import OnboardingSuccess from "./pages/OnboardingSuccess.jsx";
+import Signup from "./pages/Signup.jsx";
+import Landing from "./pages/Landing.jsx";
+import Monitoring from "./pages/Monitoring.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext.jsx";
 
 import "./styles/global.css";
@@ -48,6 +55,9 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/invite/:token" element={<InviteAccept />} />
+          <Route path="/landing" element={<Landing />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/onboarding/success" element={<OnboardingSuccess />} />
 
           <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />
@@ -65,6 +75,11 @@ function App() {
             <Route path="settings" element={<Settings />} />
             <Route path="config" element={<Settings />} />
             <Route path="outbound" element={<Outbound />} />
+            <Route path="calendar" element={<CalendarPage />} />
+            <Route path="support" element={<Tickets />} />
+            <Route path="tickets" element={<Tickets />} />
+            <Route path="onboarding" element={<OnboardingPage />} />
+            <Route path="monitoring" element={<Monitoring />} />
             {/* Autres pages à construire par Emergent dans frontend/src/pages/ */}
           </Route>
 

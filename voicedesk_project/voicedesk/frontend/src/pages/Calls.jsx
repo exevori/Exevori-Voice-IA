@@ -19,6 +19,7 @@ import {
 import DataTable, { RowActionButton } from "../components/common/DataTable.jsx";
 import FilterBar from "../components/common/FilterBar.jsx";
 import TranscriptView from "../components/calls/TranscriptView.jsx";
+import CallRecordingPlayer from "../components/calls/CallRecordingPlayer.jsx";
 import { cn } from "../lib/utils.js";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -348,6 +349,11 @@ function CallDetailSheet({ callId, open, onClose, token, t, lang, assistantName,
                     {t("calls.detail.confidence", "Confiance modèle :")} <ConfidencePill value={c.confidence_score} />
                   </div>
                 )}
+              </section>
+
+              <section>
+                <h4>Enregistrement</h4>
+                <CallRecordingPlayer callId={c.id} token={token} hasExternalId={!!c.external_id} />
               </section>
 
               {/* Transcript */}
