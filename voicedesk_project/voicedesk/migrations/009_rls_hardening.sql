@@ -690,40 +690,8 @@ IN SCHEMA public
 GRANT EXECUTE
 ON FUNCTIONS TO service_role;
 
-ALTER DEFAULT PRIVILEGES
-FOR ROLE supabase_admin
-IN SCHEMA public
-REVOKE ALL ON TABLES
-FROM anon, authenticated;
-
-ALTER DEFAULT PRIVILEGES
-FOR ROLE supabase_admin
-IN SCHEMA public
-REVOKE ALL ON SEQUENCES
-FROM anon, authenticated;
-
-ALTER DEFAULT PRIVILEGES
-FOR ROLE supabase_admin
-IN SCHEMA public
-REVOKE EXECUTE ON FUNCTIONS
-FROM PUBLIC, anon, authenticated;
-
-ALTER DEFAULT PRIVILEGES
-FOR ROLE supabase_admin
-IN SCHEMA public
-GRANT SELECT, INSERT, UPDATE, DELETE
-ON TABLES TO service_role;
-
-ALTER DEFAULT PRIVILEGES
-FOR ROLE supabase_admin
-IN SCHEMA public
-GRANT USAGE, SELECT, UPDATE
-ON SEQUENCES TO service_role;
-
-ALTER DEFAULT PRIVILEGES
-FOR ROLE supabase_admin
-IN SCHEMA public
-GRANT EXECUTE
-ON FUNCTIONS TO service_role;
+-- The hosted SQL role is postgres and is not a member of
+-- supabase_admin. Changing supabase_admin-owned default ACLs therefore
+-- requires the Supabase Data API setting rather than migration SQL.
 
 COMMIT;
