@@ -26,7 +26,16 @@ const router = express.Router();
 // Étape 1 — Upload + preview avec détection automatique des colonnes
 // ─────────────────────────────────────────────────────────────
 router.post("/preview", upload.single("file"), async (req, res) => {
-  const { company_id } = req.body;
+  const requestedCompanyId = req.body.company_id;
+  if (
+    req.user.role !== "super_admin" &&
+    requestedCompanyId &&
+    requestedCompanyId !== req.user.company_id
+  ) {
+    return res.status(403).json({ error: "forbidden_cross_tenant" });
+  }
+  const company_id =
+    req.user.role === "super_admin" ? requestedCompanyId : req.user.company_id;
   const file = req.file;
 
   if (!company_id || !file) {
@@ -78,13 +87,22 @@ router.post("/preview", upload.single("file"), async (req, res) => {
 // Étape 2 — Exécuter l'import après validation par l'admin
 // ─────────────────────────────────────────────────────────────
 router.post("/execute", upload.single("file"), async (req, res) => {
+  const requestedCompanyId = req.body.company_id;
+  if (
+    req.user.role !== "super_admin" &&
+    requestedCompanyId &&
+    requestedCompanyId !== req.user.company_id
+  ) {
+    return res.status(403).json({ error: "forbidden_cross_tenant" });
+  }
   const {
-    company_id,
     column_mapping,
     duplicate_action = "skip", // skip | overwrite | create
     default_status = "new",
     default_source = "csv_import",
   } = req.body;
+  const company_id =
+    req.user.role === "super_admin" ? requestedCompanyId : req.user.company_id;
   const file = req.file;
 
   if (!company_id || !file) {
@@ -180,7 +198,8 @@ router.post("/execute", upload.single("file"), async (req, res) => {
             const { error } = await supabase
               .from("contacts")
               .update(patch)
-              .eq("id", existing.id);
+              .eq("id", existing.id)
+              .eq("company_id", company_id);
             if (error) {
               errors.push({ row: rowNum, message: error.message });
             } else {
@@ -240,7 +259,17 @@ router.post("/execute", upload.single("file"), async (req, res) => {
 // Saisie manuelle (1-50 contacts en une fois)
 // ─────────────────────────────────────────────────────────────
 router.post("/manual", async (req, res) => {
-  const { company_id, contacts, default_status = "new" } = req.body;
+  const requestedCompanyId = req.body.company_id;
+  if (
+    req.user.role !== "super_admin" &&
+    requestedCompanyId &&
+    requestedCompanyId !== req.user.company_id
+  ) {
+    return res.status(403).json({ error: "forbidden_cross_tenant" });
+  }
+  const { contacts, default_status = "new" } = req.body;
+  const company_id =
+    req.user.role === "super_admin" ? requestedCompanyId : req.user.company_id;
 
   if (!company_id || !Array.isArray(contacts) || contacts.length === 0) {
     return res.status(400).json({ error: "company_id et contacts (array) requis" });

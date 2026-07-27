@@ -17,6 +17,19 @@ const supabase = createClient(
 
 const router = express.Router();
 
+async function respondTenantMiss(res, id, isSuperAdmin) {
+  if (!isSuperAdmin) {
+    const { data, error } = await supabase
+      .from("calls")
+      .select("id")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (data) return res.status(403).json({ error: "Accès refusé" });
+  }
+  return res.status(404).json({ error: "Appel introuvable" });
+}
+
 // ─────────────────────────────────────────────────────────────
 // GET /api/v1/calls
 // Filtres: status, intent, search, date_from, date_to, limit, offset
@@ -123,24 +136,33 @@ router.get("/stats", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
+  const isSuperAdmin = req.user?.role === "super_admin";
 
   try {
-    const { data: call, error } = await supabase
+    let callQuery = supabase
       .from("calls")
       .select("*")
-      .eq("id", id)
-      .single();
-    if (error || !call) {
-      return res.status(404).json({ error: "Appel introuvable" });
+      .eq("id", id);
+    if (!isSuperAdmin) {
+      callQuery = callQuery.eq("company_id", req.user.company_id);
+    }
+    const { data: call, error } = await callQuery.maybeSingle();
+    if (error) throw error;
+    if (!call) {
+      return respondTenantMiss(res, id, isSuperAdmin);
     }
 
     let contact = null;
     if (call.contact_id) {
-      const { data: c } = await supabase
+      let contactQuery = supabase
         .from("contacts")
         .select("id, full_name, email, phone, company, status, urgency")
-        .eq("id", call.contact_id)
-        .maybeSingle();
+        .eq("id", call.contact_id);
+      if (!isSuperAdmin) {
+        contactQuery = contactQuery.eq("company_id", req.user.company_id);
+      }
+      const { data: c, error: contactError } = await contactQuery.maybeSingle();
+      if (contactError) throw contactError;
       contact = c || null;
     }
 

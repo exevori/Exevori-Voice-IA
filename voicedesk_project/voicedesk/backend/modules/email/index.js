@@ -30,13 +30,47 @@ const AI_GATEWAY_URL = process.env.AI_GATEWAY_URL || "http://localhost:3100";
 
 const router = express.Router();
 
+function isSuperAdmin(req) {
+  return req.user?.role === "super_admin";
+}
+
+function scopeToTenant(query, req) {
+  return isSuperAdmin(req)
+    ? query
+    : query.eq("company_id", req.user.company_id);
+}
+
+function resolveCompanyId(req, requestedCompanyId) {
+  return isSuperAdmin(req) ? requestedCompanyId : req.user.company_id;
+}
+
+function targetsAnotherTenant(req, requestedCompanyId) {
+  return !isSuperAdmin(req)
+    && requestedCompanyId
+    && requestedCompanyId !== req.user.company_id;
+}
+
+async function checkTenantResourceAccess(table, id, req) {
+  const { data, error } = await supabase
+    .from(table)
+    .select("id, company_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) return { error };
+  if (!data) return { status: 404 };
+  if (!isSuperAdmin(req) && data.company_id !== req.user.company_id) {
+    return { status: 403 };
+  }
+  return { status: 200, companyId: data.company_id };
+}
+
 // ─────────────────────────────────────────────────────────────
 // GET /api/v1/emails
 // Liste boîte de réception (avec filtres status, classification, search)
 // ─────────────────────────────────────────────────────────────
 router.get("/", async (req, res) => {
   const {
-    company_id,
+    company_id: requestedCompanyId,
     status,
     classification,
     search,
@@ -46,13 +80,17 @@ router.get("/", async (req, res) => {
     offset = 0,
   } = req.query;
 
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+  if (targetsAnotherTenant(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const companyId = resolveCompanyId(req, requestedCompanyId);
+  if (!companyId) return res.status(400).json({ error: "company_id requis" });
 
   try {
     let query = supabase
       .from("emails")
       .select("*", { count: "exact" })
-      .eq("company_id", company_id);
+      .eq("company_id", companyId);
 
     if (status) query = query.eq("status", status);
     if (classification) query = query.eq("classification", classification);
@@ -75,6 +113,7 @@ router.get("/", async (req, res) => {
       const { data: contacts } = await supabase
         .from("contacts")
         .select("id, full_name, status")
+        .eq("company_id", companyId)
         .in("id", contactIds);
       contactMap = Object.fromEntries((contacts || []).map((c) => [c.id, c]));
     }
@@ -99,7 +138,20 @@ router.get("/", async (req, res) => {
 // Webhook appelé par Gmail Push OU Resend quand nouveau courriel
 // ─────────────────────────────────────────────────────────────
 router.post("/incoming", async (req, res) => {
-  const { company_id, from_email, from_name, subject, body, message_id, received_at } = req.body;
+  const {
+    company_id: requestedCompanyId,
+    from_email,
+    from_name,
+    subject,
+    body,
+    message_id,
+    received_at,
+  } = req.body;
+
+  if (targetsAnotherTenant(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const company_id = resolveCompanyId(req, requestedCompanyId);
 
   if (!company_id || !from_email || !subject) {
     return res.status(400).json({ error: "champs requis manquants" });
@@ -214,15 +266,19 @@ router.post("/incoming", async (req, res) => {
 // Liste les brouillons en attente de validation
 // ─────────────────────────────────────────────────────────────
 router.get("/drafts", async (req, res) => {
-  const { company_id, status = "pending_validation" } = req.query;
+  const { company_id: requestedCompanyId, status = "pending_validation" } = req.query;
 
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+  if (targetsAnotherTenant(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const companyId = resolveCompanyId(req, requestedCompanyId);
+  if (!companyId) return res.status(400).json({ error: "company_id requis" });
 
   try {
     const { data: drafts, error } = await supabase
       .from("email_drafts")
       .select("*")
-      .eq("company_id", company_id)
+      .eq("company_id", companyId)
       .eq("status", status)
       .order("created_at", { ascending: false });
 
@@ -236,6 +292,7 @@ router.get("/drafts", async (req, res) => {
       const { data: emails } = await supabase
         .from("emails")
         .select("id, from_email, from_name, subject, body, received_at, ai_summary, classification, contact_id")
+        .eq("company_id", companyId)
         .in("id", emailIds);
       emailMap = Object.fromEntries((emails || []).map((e) => [e.id, e]));
 
@@ -244,6 +301,7 @@ router.get("/drafts", async (req, res) => {
         const { data: contacts } = await supabase
           .from("contacts")
           .select("id, full_name, company")
+          .eq("company_id", companyId)
           .in("id", contactIds);
         contactMap = Object.fromEntries((contacts || []).map((c) => [c.id, c]));
       }
@@ -270,12 +328,19 @@ router.post("/drafts/:id/approve", async (req, res) => {
   const { edited_body, edited_subject } = req.body;
 
   try {
-    const { data: draft, error: dErr } = await supabase
+    const access = await checkTenantResourceAccess("email_drafts", id, req);
+    if (access.error) return res.status(500).json({ error: access.error.message });
+    if (access.status === 404) return res.status(404).json({ error: "brouillon introuvable" });
+    if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
+    let draftQuery = supabase
       .from("email_drafts")
       .select("*")
-      .eq("id", id)
-      .single();
-    if (dErr || !draft) return res.status(404).json({ error: "brouillon introuvable" });
+      .eq("id", id);
+    draftQuery = scopeToTenant(draftQuery, req);
+    const { data: draft, error: dErr } = await draftQuery.maybeSingle();
+    if (dErr) return res.status(500).json({ error: dErr.message });
+    if (!draft) return res.status(404).json({ error: "brouillon introuvable" });
 
     // Récupérer l'email source (peut être null si standalone draft)
     let sourceEmail = null;
@@ -284,6 +349,7 @@ router.post("/drafts/:id/approve", async (req, res) => {
         .from("emails")
         .select("id, from_email, from_name, subject")
         .eq("id", draft.email_id)
+        .eq("company_id", draft.company_id)
         .maybeSingle();
       sourceEmail = e || null;
     }
@@ -332,7 +398,7 @@ router.post("/drafts/:id/approve", async (req, res) => {
       ? `[SEND_WARNING:${sendError}] ${draft.ai_reasoning || ""}`.trim()
       : draft.ai_reasoning;
 
-    await supabase
+    let updateDraftQuery = supabase
       .from("email_drafts")
       .update({
         status: "sent",
@@ -342,12 +408,20 @@ router.post("/drafts/:id/approve", async (req, res) => {
         ai_reasoning: newReasoning,
       })
       .eq("id", id);
+    updateDraftQuery = scopeToTenant(updateDraftQuery, req);
+    const { data: updatedDraft, error: updateDraftError } = await updateDraftQuery
+      .select("id")
+      .maybeSingle();
+    if (updateDraftError) throw updateDraftError;
+    if (!updatedDraft) return res.status(404).json({ error: "brouillon introuvable" });
 
     if (sourceEmail) {
-      await supabase
+      const { error: sourceUpdateError } = await supabase
         .from("emails")
         .update({ status: "replied" })
-        .eq("id", sourceEmail.id);
+        .eq("id", sourceEmail.id)
+        .eq("company_id", draft.company_id);
+      if (sourceUpdateError) throw sourceUpdateError;
     }
 
     return res.json({
@@ -376,13 +450,21 @@ router.patch("/drafts/:id", async (req, res) => {
   }
 
   try {
-    const { data, error } = await supabase
+    const access = await checkTenantResourceAccess("email_drafts", id, req);
+    if (access.error) return res.status(500).json({ error: access.error.message });
+    if (access.status === 404) return res.status(404).json({ error: "brouillon introuvable" });
+    if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
+    let updateQuery = supabase
       .from("email_drafts")
       .update(updates)
-      .eq("id", id)
+      .eq("id", id);
+    updateQuery = scopeToTenant(updateQuery, req);
+    const { data, error } = await updateQuery
       .select()
-      .single();
-    if (error) throw error;
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: "brouillon introuvable" });
     return res.json({ success: true, draft: data });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -398,13 +480,21 @@ router.post("/drafts/:id/reject", async (req, res) => {
   const { reason } = req.body;
 
   try {
+    const access = await checkTenantResourceAccess("email_drafts", id, req);
+    if (access.error) return res.status(500).json({ error: access.error.message });
+    if (access.status === 404) return res.status(404).json({ error: "brouillon introuvable" });
+    if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
     // ai_reasoning sert de log post-mortem ; on stocke aussi la raison du rejet ici
     const newReasoning = reason ? `[REJECTED] ${reason}` : "[REJECTED] Refusé par l'admin";
-    const { error } = await supabase
+    let updateQuery = supabase
       .from("email_drafts")
       .update({ status: "rejected", ai_reasoning: newReasoning })
       .eq("id", id);
-    if (error) throw error;
+    updateQuery = scopeToTenant(updateQuery, req);
+    const { data, error } = await updateQuery.select("id").maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: "brouillon introuvable" });
     return res.json({ success: true });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -420,12 +510,19 @@ router.post("/drafts/:id/regenerate", async (req, res) => {
   const { instruction } = req.body;
 
   try {
-    const { data: draft, error: dErr } = await supabase
+    const access = await checkTenantResourceAccess("email_drafts", id, req);
+    if (access.error) return res.status(500).json({ error: access.error.message });
+    if (access.status === 404) return res.status(404).json({ error: "brouillon introuvable" });
+    if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
+    let draftQuery = supabase
       .from("email_drafts")
       .select("*")
-      .eq("id", id)
-      .single();
-    if (dErr || !draft) return res.status(404).json({ error: "brouillon introuvable" });
+      .eq("id", id);
+    draftQuery = scopeToTenant(draftQuery, req);
+    const { data: draft, error: dErr } = await draftQuery.maybeSingle();
+    if (dErr) return res.status(500).json({ error: dErr.message });
+    if (!draft) return res.status(404).json({ error: "brouillon introuvable" });
 
     // Récupérer email source pour donner du contexte à l'IA
     let sourceEmail = null;
@@ -434,6 +531,7 @@ router.post("/drafts/:id/regenerate", async (req, res) => {
         .from("emails")
         .select("from_email, from_name, subject, body")
         .eq("id", draft.email_id)
+        .eq("company_id", draft.company_id)
         .maybeSingle();
       sourceEmail = e || null;
     }
@@ -458,13 +556,16 @@ router.post("/drafts/:id/regenerate", async (req, res) => {
       ? `[REGEN] ${instruction}`
       : (draft.ai_reasoning || "[REGEN] Régénération sans instruction");
 
-    const { data: updated, error: uErr } = await supabase
+    let updateQuery = supabase
       .from("email_drafts")
       .update({ body: finalBody, subject: finalSubject, ai_reasoning: reasoning })
-      .eq("id", id)
+      .eq("id", id);
+    updateQuery = scopeToTenant(updateQuery, req);
+    const { data: updated, error: uErr } = await updateQuery
       .select()
-      .single();
-    if (uErr) throw uErr;
+      .maybeSingle();
+    if (uErr) return res.status(500).json({ error: uErr.message });
+    if (!updated) return res.status(404).json({ error: "brouillon introuvable" });
 
     return res.json({ success: true, draft: updated });
   } catch (err) {
@@ -480,12 +581,19 @@ router.post("/drafts/:id/regenerate", async (req, res) => {
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   try {
-    const { data: email, error } = await supabase
+    const access = await checkTenantResourceAccess("emails", id, req);
+    if (access.error) return res.status(500).json({ error: access.error.message });
+    if (access.status === 404) return res.status(404).json({ error: "Courriel introuvable" });
+    if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
+    let emailQuery = supabase
       .from("emails")
       .select("*")
-      .eq("id", id)
-      .single();
-    if (error || !email) return res.status(404).json({ error: "Courriel introuvable" });
+      .eq("id", id);
+    emailQuery = scopeToTenant(emailQuery, req);
+    const { data: email, error } = await emailQuery.maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!email) return res.status(404).json({ error: "Courriel introuvable" });
 
     let contact = null;
     if (email.contact_id) {
@@ -493,6 +601,7 @@ router.get("/:id", async (req, res) => {
         .from("contacts")
         .select("id, full_name, email, phone, company, status")
         .eq("id", email.contact_id)
+        .eq("company_id", email.company_id)
         .maybeSingle();
       contact = c || null;
     }
@@ -502,6 +611,7 @@ router.get("/:id", async (req, res) => {
       .from("email_drafts")
       .select("*")
       .eq("email_id", id)
+      .eq("company_id", email.company_id)
       .order("created_at", { ascending: false })
       .limit(1);
 

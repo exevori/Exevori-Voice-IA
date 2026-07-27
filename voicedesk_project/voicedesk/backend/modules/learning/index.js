@@ -26,6 +26,40 @@ const AI_GATEWAY_URL = process.env.AI_GATEWAY_URL || "http://localhost:3100";
 
 const router = express.Router();
 
+function isSuperAdmin(req) {
+  return req.user?.role === "super_admin";
+}
+
+function scopeToTenant(query, req) {
+  return isSuperAdmin(req)
+    ? query
+    : query.eq("company_id", req.user.company_id);
+}
+
+function resolveCompanyId(req, requestedCompanyId) {
+  return isSuperAdmin(req) ? requestedCompanyId : req.user.company_id;
+}
+
+function targetsAnotherTenant(req, requestedCompanyId) {
+  return !isSuperAdmin(req)
+    && requestedCompanyId
+    && requestedCompanyId !== req.user.company_id;
+}
+
+async function checkSuggestionAccess(id, req) {
+  const { data, error } = await supabase
+    .from("learning_suggestions")
+    .select("id, company_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) return { error };
+  if (!data) return { status: 404 };
+  if (!isSuperAdmin(req) && data.company_id !== req.user.company_id) {
+    return { status: 403 };
+  }
+  return { status: 200, companyId: data.company_id };
+}
+
 // ─────────────────────────────────────────────────────────────
 // CRON / SCHEDULED JOB
 // À exécuter toutes les 6 heures pour détecter de nouveaux patterns
@@ -131,13 +165,19 @@ async function detectPatternsForCompany(companyId) {
 // Liste les suggestions pour validation
 // ─────────────────────────────────────────────────────────────
 router.get("/suggestions", async (req, res) => {
-  const { company_id, status = "pending" } = req.query;
+  const { company_id: requestedCompanyId, status = "pending" } = req.query;
 
-  const { data, error } = await supabase
+  if (targetsAnotherTenant(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const companyId = resolveCompanyId(req, requestedCompanyId);
+
+  let query = supabase
     .from("learning_suggestions")
     .select("*")
-    .eq("company_id", company_id)
-    .eq("status", status)
+    .eq("status", status);
+  if (companyId) query = query.eq("company_id", companyId);
+  const { data, error } = await query
     .order("confidence_score", { ascending: false });
 
   if (error) return res.status(500).json({ error: error.message });
@@ -150,22 +190,30 @@ router.get("/suggestions", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.post("/suggestions/:id/approve", async (req, res) => {
   const { id } = req.params;
-  const { edited_question, edited_answer, category = "FAQ", approved_by } = req.body;
+  const { edited_question, edited_answer, category = "FAQ" } = req.body;
+  const approvedBy = req.user.id;
 
   try {
-    const { data: suggestion } = await supabase
+    const access = await checkSuggestionAccess(id, req);
+    if (access.error) return res.status(500).json({ error: access.error.message });
+    if (access.status === 404) return res.status(404).json({ error: "suggestion introuvable" });
+    if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
+    let suggestionQuery = supabase
       .from("learning_suggestions")
       .select("*")
-      .eq("id", id)
-      .single();
+      .eq("id", id);
+    suggestionQuery = scopeToTenant(suggestionQuery, req);
+    const { data: suggestion, error: suggestionError } = await suggestionQuery.maybeSingle();
 
+    if (suggestionError) return res.status(500).json({ error: suggestionError.message });
     if (!suggestion) return res.status(404).json({ error: "suggestion introuvable" });
 
     const finalQuestion = edited_question || suggestion.question_detected;
     const finalAnswer = edited_answer || suggestion.suggested_answer;
 
     // 1. Ajouter à la base de connaissances officielle
-    const { data: kbEntry } = await supabase
+    const { data: kbEntry, error: kbError } = await supabase
       .from("knowledge_base")
       .insert({
         company_id: suggestion.company_id,
@@ -175,23 +223,30 @@ router.post("/suggestions/:id/approve", async (req, res) => {
         status: "active",
         source: "learning_validated",
         source_suggestion_id: id,
-        approved_by,
+        approved_by: approvedBy,
       })
       .select()
       .single();
+    if (kbError) throw kbError;
 
     // 2. Marquer la suggestion comme approuvée
-    await supabase
+    let updateQuery = supabase
       .from("learning_suggestions")
       .update({
         status: "approved",
         approved_at: new Date(),
-        approved_by,
+        approved_by: approvedBy,
         knowledge_base_id: kbEntry.id,
         final_question: finalQuestion,
         final_answer: finalAnswer,
       })
       .eq("id", id);
+    updateQuery = scopeToTenant(updateQuery, req);
+    const { data: updatedSuggestion, error: updateError } = await updateQuery
+      .select("id")
+      .maybeSingle();
+    if (updateError) throw updateError;
+    if (!updatedSuggestion) return res.status(404).json({ error: "suggestion introuvable" });
 
     return res.json({ success: true, knowledge_base_id: kbEntry.id });
   } catch (err) {
@@ -205,17 +260,26 @@ router.post("/suggestions/:id/approve", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.post("/suggestions/:id/reject", async (req, res) => {
   const { id } = req.params;
-  const { reason, rejected_by } = req.body;
+  const { reason } = req.body;
 
-  await supabase
+  const access = await checkSuggestionAccess(id, req);
+  if (access.error) return res.status(500).json({ error: access.error.message });
+  if (access.status === 404) return res.status(404).json({ error: "suggestion introuvable" });
+  if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
+  let updateQuery = supabase
     .from("learning_suggestions")
     .update({
       status: "rejected",
       rejected_at: new Date(),
-      rejected_by,
+      rejected_by: req.user.id,
       rejection_reason: reason || "Refusé sans motif",
     })
     .eq("id", id);
+  updateQuery = scopeToTenant(updateQuery, req);
+  const { data, error } = await updateQuery.select("id").maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "suggestion introuvable" });
 
   return res.json({ success: true });
 });
@@ -226,19 +290,28 @@ router.post("/suggestions/:id/reject", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.post("/suggestions/:id/modify", async (req, res) => {
   const { id } = req.params;
-  const { new_question, new_answer, modified_by } = req.body;
+  const { new_question, new_answer } = req.body;
 
-  const { data: suggestion } = await supabase
+  const access = await checkSuggestionAccess(id, req);
+  if (access.error) return res.status(500).json({ error: access.error.message });
+  if (access.status === 404) return res.status(404).json({ error: "suggestion introuvable" });
+  if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
+  let updateQuery = supabase
     .from("learning_suggestions")
     .update({
       question_detected: new_question,
       suggested_answer: new_answer,
-      modified_by,
+      modified_by: req.user.id,
       modified_at: new Date(),
     })
-    .eq("id", id)
+    .eq("id", id);
+  updateQuery = scopeToTenant(updateQuery, req);
+  const { data: suggestion, error } = await updateQuery
     .select()
-    .single();
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!suggestion) return res.status(404).json({ error: "suggestion introuvable" });
 
   return res.json({ success: true, suggestion });
 });
@@ -248,12 +321,19 @@ router.post("/suggestions/:id/modify", async (req, res) => {
 // Statistiques d'apprentissage pour le dashboard
 // ─────────────────────────────────────────────────────────────
 router.get("/stats", async (req, res) => {
-  const { company_id } = req.query;
+  const requestedCompanyId = req.query.company_id;
 
-  const { data } = await supabase
+  if (targetsAnotherTenant(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const companyId = resolveCompanyId(req, requestedCompanyId);
+
+  let suggestionsQuery = supabase
     .from("learning_suggestions")
-    .select("status")
-    .eq("company_id", company_id);
+    .select("status");
+  if (companyId) suggestionsQuery = suggestionsQuery.eq("company_id", companyId);
+  const { data, error: suggestionsError } = await suggestionsQuery;
+  if (suggestionsError) return res.status(500).json({ error: suggestionsError.message });
 
   const stats = {
     pending: data?.filter(s => s.status === "pending").length || 0,
@@ -263,11 +343,13 @@ router.get("/stats", async (req, res) => {
   };
 
   // KB totale
-  const { count: kbTotal } = await supabase
+  let kbQuery = supabase
     .from("knowledge_base")
     .select("*", { count: "exact", head: true })
-    .eq("company_id", company_id)
     .eq("status", "active");
+  if (companyId) kbQuery = kbQuery.eq("company_id", companyId);
+  const { count: kbTotal, error: kbError } = await kbQuery;
+  if (kbError) return res.status(500).json({ error: kbError.message });
 
   stats.knowledge_base_size = kbTotal || 0;
 
@@ -279,21 +361,28 @@ router.get("/stats", async (req, res) => {
 // Admin ajoute manuellement une entrée à la KB (sans passer par détection)
 // ─────────────────────────────────────────────────────────────
 router.post("/manual", async (req, res) => {
-  const { company_id, question, answer, category, created_by } = req.body;
+  const { company_id: requestedCompanyId, question, answer, category } = req.body;
 
-  const { data } = await supabase
+  if (targetsAnotherTenant(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const companyId = resolveCompanyId(req, requestedCompanyId);
+  if (!companyId) return res.status(400).json({ error: "company_id requis" });
+
+  const { data, error } = await supabase
     .from("knowledge_base")
     .insert({
-      company_id,
+      company_id: companyId,
       question,
       answer,
       category: category || "FAQ",
       status: "active",
       source: "manual",
-      approved_by: created_by,
+      approved_by: req.user.id,
     })
     .select()
     .single();
+  if (error) return res.status(500).json({ error: error.message });
 
   return res.json({ success: true, knowledge_base_id: data?.id });
 });

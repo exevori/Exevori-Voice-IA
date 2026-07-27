@@ -19,20 +19,39 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const router = express.Router();
 
+function isSuperAdmin(req) {
+  return req.user?.role === "super_admin";
+}
+
+function hasTenantMismatch(req, requestedCompanyId) {
+  return !isSuperAdmin(req)
+    && requestedCompanyId
+    && requestedCompanyId !== req.user?.company_id;
+}
+
+function getTargetCompanyId(req, requestedCompanyId) {
+  return isSuperAdmin(req)
+    ? requestedCompanyId || null
+    : req.user?.company_id || null;
+}
+
 // GET /api/v1/team
 router.get("/", async (req, res) => {
-  const { company_id } = req.query;
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+  if (hasTenantMismatch(req, req.query.company_id)) {
+    return res.status(403).json({ error: "forbidden_company" });
+  }
+  const companyId = getTargetCompanyId(req, req.query.company_id);
+  if (!companyId) return res.status(400).json({ error: "company_id requis" });
 
   try {
     const [membersRes, invitesRes] = await Promise.all([
       supabase.from("profiles")
         .select("id, user_id, full_name, email, role, status, preferred_language, created_at")
-        .eq("company_id", company_id)
+        .eq("company_id", companyId)
         .order("created_at", { ascending: true }),
       supabase.from("invitations")
         .select("id, email, role, status, expires_at, created_at")
-        .eq("company_id", company_id)
+        .eq("company_id", companyId)
         .in("status", ["pending", "expired"])
         .order("created_at", { ascending: false }),
     ]);
@@ -53,8 +72,12 @@ router.get("/", async (req, res) => {
 // body: { company_id, email, role: 'company_admin' | 'company_member' }
 // Différent de /auth/invite qui crée un NOUVEAU tenant.
 router.post("/invitations", express.json(), async (req, res) => {
-  const { company_id, email, role = "company_member" } = req.body;
-  if (!company_id || !email) return res.status(400).json({ error: "company_id et email requis" });
+  const { company_id: requestedCompanyId, email, role = "company_member" } = req.body;
+  if (hasTenantMismatch(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden_company" });
+  }
+  const companyId = getTargetCompanyId(req, requestedCompanyId);
+  if (!companyId || !email) return res.status(400).json({ error: "company_id et email requis" });
   if (!["company_admin", "company_member"].includes(role)) {
     return res.status(400).json({ error: "role invalide (company_admin ou company_member)" });
   }
@@ -68,7 +91,7 @@ router.post("/invitations", express.json(), async (req, res) => {
     const { data: dup } = await supabase
       .from("invitations")
       .select("id, status")
-      .eq("company_id", company_id)
+      .eq("company_id", companyId)
       .eq("email", cleanEmail)
       .in("status", ["pending"])
       .maybeSingle();
@@ -79,7 +102,7 @@ router.post("/invitations", express.json(), async (req, res) => {
     const { data: existing } = await supabase
       .from("profiles")
       .select("id, status")
-      .eq("company_id", company_id)
+      .eq("company_id", companyId)
       .eq("email", cleanEmail)
       .maybeSingle();
     if (existing) {
@@ -93,7 +116,7 @@ router.post("/invitations", express.json(), async (req, res) => {
     const { data, error } = await supabase
       .from("invitations")
       .insert({
-        company_id,
+        company_id: companyId,
         email: cleanEmail,
         role,
         token,
@@ -107,7 +130,7 @@ router.post("/invitations", express.json(), async (req, res) => {
 
     // Lookup company name for email branding
     const { data: companyRow } = await supabase
-      .from("companies").select("name").eq("id", company_id).maybeSingle();
+      .from("companies").select("name").eq("id", companyId).maybeSingle();
     const companyName = companyRow?.name || "Exevori";
 
     const inviteUrl = `${process.env.FRONTEND_URL || ""}/invite/${token}`;
@@ -165,10 +188,22 @@ router.post("/invitations", express.json(), async (req, res) => {
 router.post("/invitations/:id/cancel", async (req, res) => {
   const { id } = req.params;
   try {
+    const { data: invitation, error: lookupError } = await supabase
+      .from("invitations")
+      .select("id, company_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+    if (!invitation) return res.status(404).json({ error: "Invitation introuvable" });
+    if (!isSuperAdmin(req) && invitation.company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "forbidden_company" });
+    }
+
     const { data, error } = await supabase
       .from("invitations")
       .update({ status: "cancelled" })
       .eq("id", id)
+      .eq("company_id", invitation.company_id)
       .select("id, status")
       .maybeSingle();
     if (error) throw error;
@@ -182,8 +217,14 @@ router.post("/invitations/:id/cancel", async (req, res) => {
 // PATCH /api/v1/team/members/:user_id  body: {status: 'active'|'suspended'} ou {role: ...}
 router.patch("/members/:user_id", express.json(), async (req, res) => {
   const { user_id } = req.params;
-  const { company_id, status, role } = req.body;
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+  const { company_id: requestedCompanyId, status, role } = req.body;
+  if (hasTenantMismatch(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden_company" });
+  }
+  const companyId = getTargetCompanyId(req, requestedCompanyId);
+  if (!isSuperAdmin(req) && !companyId) {
+    return res.status(400).json({ error: "company_id requis" });
+  }
 
   const updates = {};
   if (status && ["active", "suspended"].includes(status)) updates.status = status;
@@ -191,11 +232,22 @@ router.patch("/members/:user_id", express.json(), async (req, res) => {
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Aucun champ valide" });
 
   try {
+    const { data: member, error: lookupError } = await supabase
+      .from("profiles")
+      .select("user_id, company_id")
+      .eq("user_id", user_id)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+    if (!member) return res.status(404).json({ error: "Membre introuvable" });
+    if (!isSuperAdmin(req) && member.company_id !== req.user.company_id) {
+      return res.status(403).json({ error: "forbidden_company" });
+    }
+
     const { data, error } = await supabase
       .from("profiles")
       .update(updates)
       .eq("user_id", user_id)
-      .eq("company_id", company_id) // double check tenant
+      .eq("company_id", member.company_id)
       .select("id, user_id, full_name, email, role, status")
       .maybeSingle();
     if (error) throw error;

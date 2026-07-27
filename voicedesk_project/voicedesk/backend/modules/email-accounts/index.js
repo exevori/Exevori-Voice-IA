@@ -22,6 +22,34 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 
 const router = express.Router();
 
+function isSuperAdmin(req) {
+  return req.user?.role === "super_admin";
+}
+
+function resolveCompanyId(req, requestedCompanyId) {
+  return isSuperAdmin(req) ? requestedCompanyId : req.user.company_id;
+}
+
+function targetsAnotherTenant(req, requestedCompanyId) {
+  return !isSuperAdmin(req)
+    && requestedCompanyId
+    && requestedCompanyId !== req.user.company_id;
+}
+
+async function checkAccountAccess(id, req) {
+  const { data, error } = await supabase
+    .from("email_accounts")
+    .select("id, company_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) return { error };
+  if (!data) return { status: 404 };
+  if (!isSuperAdmin(req) && data.company_id !== req.user.company_id) {
+    return { status: 403 };
+  }
+  return { status: 200 };
+}
+
 // ─────────────────────────────────────────────────────────────
 // Templates providers (Zoho / Gmail / Outlook / Custom)
 // Le frontend pré-remplit l'UI avec ces valeurs au choix du provider
@@ -144,11 +172,15 @@ router.post("/test-connection", express.json(), async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.post("/", express.json(), async (req, res) => {
   const {
-    company_id, provider = "imap", email, display_name = null,
+    company_id: requestedCompanyId, provider = "imap", email, display_name = null,
     signature = null, tone = "friendly", auto_reply_threshold = 0.85,
     mode = "draft_only", kb_filter = {}, is_primary = false, imap,
   } = req.body || {};
 
+  if (targetsAnotherTenant(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const company_id = resolveCompanyId(req, requestedCompanyId);
   if (!company_id || !email || !imap) {
     return res.status(400).json({ error: "company_id, email et imap requis" });
   }
@@ -219,7 +251,11 @@ router.post("/", express.json(), async (req, res) => {
 // GET / — list par company
 // ─────────────────────────────────────────────────────────────
 router.get("/", async (req, res) => {
-  const { company_id } = req.query;
+  const requestedCompanyId = req.query.company_id;
+  if (targetsAnotherTenant(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const company_id = resolveCompanyId(req, requestedCompanyId);
   if (!company_id) return res.status(400).json({ error: "company_id requis" });
 
   try {
@@ -246,9 +282,26 @@ router.get("/", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.delete("/:id", async (req, res) => {
   const { id } = req.params;
-  const { error } = await supabase.from("email_accounts").delete().eq("id", id);
-  if (error) return res.status(500).json({ error: error.message });
-  return res.json({ success: true });
+  try {
+    const access = await checkAccountAccess(id, req);
+    if (access.error) return res.status(500).json({ error: access.error.message });
+    if (access.status === 404) return res.status(404).json({ error: "compte courriel introuvable" });
+    if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
+    let deleteQuery = supabase
+      .from("email_accounts")
+      .delete()
+      .eq("id", id);
+    if (!isSuperAdmin(req)) {
+      deleteQuery = deleteQuery.eq("company_id", req.user.company_id);
+    }
+    const { data, error } = await deleteQuery.select("id").maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: "compte courriel introuvable" });
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
 });
 
 export default router;

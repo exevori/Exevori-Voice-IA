@@ -30,6 +30,55 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const router = express.Router();
 
+function isSuperAdmin(req) {
+  return req.user?.role === "super_admin";
+}
+
+function scopeToTenant(query, req) {
+  return isSuperAdmin(req)
+    ? query
+    : query.eq("company_id", req.user.company_id);
+}
+
+function resolveCompanyId(req, requestedCompanyId) {
+  return isSuperAdmin(req) ? requestedCompanyId : req.user.company_id;
+}
+
+function targetsAnotherTenant(req, requestedCompanyId) {
+  return !isSuperAdmin(req)
+    && requestedCompanyId
+    && requestedCompanyId !== req.user.company_id;
+}
+
+function requestActor(req) {
+  return {
+    userId: req.user.id,
+    name: req.user.profile?.full_name || req.user.email || "Utilisateur",
+    email: req.user.email,
+    role: isSuperAdmin(req) ? "exevori_agent" : "client",
+  };
+}
+
+function visibleTicket(ticket, req) {
+  if (isSuperAdmin(req)) return ticket;
+  const { internal_notes, ...safeTicket } = ticket;
+  return safeTicket;
+}
+
+async function checkTicketAccess(id, req) {
+  const { data, error } = await supabase
+    .from("tickets")
+    .select("id, company_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) return { error };
+  if (!data) return { status: 404 };
+  if (!isSuperAdmin(req) && data.company_id !== req.user.company_id) {
+    return { status: 403 };
+  }
+  return { status: 200, companyId: data.company_id };
+}
+
 // ── SLA PAR PRIORITÉ (en heures) ──────────────────────────────
 const SLA = {
   urgent: { first_response_hours: 1,  resolution_hours: 4    },
@@ -44,13 +93,21 @@ const SLA = {
 // ─────────────────────────────────────────────────────────────
 router.post("/", async (req, res) => {
   const {
-    company_id, subject, description, category = "general", priority = "normal",
-    created_by_user_id, created_by_name, created_by_email,
+    company_id: requestedCompanyId,
+    subject,
+    description,
+    category = "general",
+    priority = "normal",
   } = req.body;
 
-  if (!company_id || !subject) {
+  if (targetsAnotherTenant(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const companyId = resolveCompanyId(req, requestedCompanyId);
+  if (!companyId || !subject) {
     return res.status(400).json({ error: "company_id et subject requis" });
   }
+  const actor = requestActor(req);
 
   try {
     // Génération du numéro de ticket
@@ -62,27 +119,30 @@ router.post("/", async (req, res) => {
     const slaFirstResponse = new Date(now.getTime() + sla.first_response_hours * 3600000);
     const slaResolution = new Date(now.getTime() + sla.resolution_hours * 3600000);
 
-    const { data: ticket } = await supabase
+    const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
       .insert({
-        company_id, ticket_number: ticketNumber,
+        company_id: companyId, ticket_number: ticketNumber,
         subject, description, category, priority,
         status: "open",
-        created_by_user_id, created_by_name, created_by_email,
+        created_by_user_id: actor.userId,
+        created_by_name: actor.name,
+        created_by_email: actor.email,
         sla_first_response_due: slaFirstResponse,
         sla_resolution_due: slaResolution,
       })
       .select()
       .single();
+    if (ticketError) throw ticketError;
 
     // Message initial dans le thread
     if (description) {
       await supabase.from("ticket_messages").insert({
         ticket_id: ticket.id,
-        company_id,
-        author_user_id: created_by_user_id,
-        author_name: created_by_name,
-        author_role: "client",
+        company_id: companyId,
+        author_user_id: actor.userId,
+        author_name: actor.name,
+        author_role: actor.role,
         body: description,
       });
     }
@@ -90,7 +150,7 @@ router.post("/", async (req, res) => {
     // Notification admin Exevori
     await notifyAdmins(ticket);
 
-    return res.json({ success: true, ticket });
+    return res.json({ success: true, ticket: visibleTicket(ticket, req) });
   } catch (err) {
     console.error("[TICKETS] Create error:", err);
     return res.status(500).json({ error: err.message });
@@ -102,14 +162,26 @@ router.post("/", async (req, res) => {
 // Liste des tickets (filtres : status, priority, category, assigned)
 // ─────────────────────────────────────────────────────────────
 router.get("/", async (req, res) => {
-  const { company_id, status, priority, category, assigned_to, limit = 50 } = req.query;
+  const {
+    company_id: requestedCompanyId,
+    status,
+    priority,
+    category,
+    assigned_to,
+    limit = 50,
+  } = req.query;
+
+  if (targetsAnotherTenant(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const companyId = resolveCompanyId(req, requestedCompanyId);
 
   try {
     let query = supabase
       .from("tickets")
       .select("*, companies(name, contact_name), assigned_to:profiles!assigned_to_user_id(full_name, email)");
 
-    if (company_id) query = query.eq("company_id", company_id);
+    if (companyId) query = query.eq("company_id", companyId);
     if (status) query = query.eq("status", status);
     if (priority) query = query.eq("priority", priority);
     if (category) query = query.eq("category", category);
@@ -124,10 +196,13 @@ router.get("/", async (req, res) => {
 
     // Calcul SLA status pour chaque ticket
     const now = new Date();
-    const tickets = (data || []).map(t => ({
-      ...t,
-      sla_status: calculateSLAStatus(t, now),
-    }));
+    const tickets = (data || []).map((ticket) => {
+      const visible = visibleTicket(ticket, req);
+      return {
+        ...visible,
+        sla_status: calculateSLAStatus(ticket, now),
+      };
+    });
 
     return res.json({ tickets });
   } catch (err) {
@@ -142,31 +217,41 @@ router.get("/", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
-  const { is_admin = false } = req.query;
 
   try {
-    const { data: ticket } = await supabase
+    const access = await checkTicketAccess(id, req);
+    if (access.error) return res.status(500).json({ error: access.error.message });
+    if (access.status === 404) return res.status(404).json({ error: "ticket introuvable" });
+    if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
+    let ticketQuery = supabase
       .from("tickets")
       .select("*, companies(*)")
-      .eq("id", id)
-      .single();
+      .eq("id", id);
+    ticketQuery = scopeToTenant(ticketQuery, req);
+    const { data: ticket, error: ticketError } = await ticketQuery.maybeSingle();
 
+    if (ticketError) throw ticketError;
     if (!ticket) return res.status(404).json({ error: "ticket introuvable" });
 
     // Récupérer les messages (filtrer les internes si pas admin)
     let messagesQuery = supabase
       .from("ticket_messages")
       .select("*, attachments:ticket_attachments(*)")
-      .eq("ticket_id", id);
+      .eq("ticket_id", id)
+      .eq("company_id", ticket.company_id);
 
-    if (!is_admin) {
+    if (!isSuperAdmin(req)) {
       messagesQuery = messagesQuery.eq("is_internal", false);
     }
 
-    const { data: messages } = await messagesQuery.order("created_at", { ascending: true });
+    const { data: messages, error: messagesError } = await messagesQuery
+      .order("created_at", { ascending: true });
+    if (messagesError) throw messagesError;
 
+    const visible = visibleTicket(ticket, req);
     return res.json({
-      ticket: { ...ticket, sla_status: calculateSLAStatus(ticket, new Date()) },
+      ticket: { ...visible, sla_status: calculateSLAStatus(ticket, new Date()) },
       messages: messages || [],
     });
   } catch (err) {
@@ -181,51 +266,71 @@ router.get("/:id", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.post("/:id/messages", async (req, res) => {
   const { id } = req.params;
-  const { author_user_id, author_name, author_role, body, is_internal = false, attachments = [] } = req.body;
+  const { body, is_internal = false, attachments = [] } = req.body;
+  if (!body?.trim()) return res.status(400).json({ error: "body requis" });
 
   try {
-    const { data: ticket } = await supabase
+    const access = await checkTicketAccess(id, req);
+    if (access.error) return res.status(500).json({ error: access.error.message });
+    if (access.status === 404) return res.status(404).json({ error: "ticket introuvable" });
+    if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
+    let ticketQuery = supabase
       .from("tickets")
       .select("*")
-      .eq("id", id)
-      .single();
+      .eq("id", id);
+    ticketQuery = scopeToTenant(ticketQuery, req);
+    const { data: ticket, error: ticketError } = await ticketQuery.maybeSingle();
 
+    if (ticketError) throw ticketError;
     if (!ticket) return res.status(404).json({ error: "ticket introuvable" });
+    const actor = requestActor(req);
+    const isInternal = isSuperAdmin(req) && is_internal === true;
 
-    const { data: message } = await supabase
+    const { data: message, error: messageError } = await supabase
       .from("ticket_messages")
       .insert({
         ticket_id: id,
         company_id: ticket.company_id,
-        author_user_id, author_name, author_role,
-        body, is_internal, attachments,
+        author_user_id: actor.userId,
+        author_name: actor.name,
+        author_role: actor.role,
+        body: body.trim(),
+        is_internal: isInternal,
+        attachments,
       })
       .select()
       .single();
+    if (messageError) throw messageError;
 
     // Mise à jour du ticket
     const updates = { updated_at: new Date() };
 
     // Si première réponse Exevori → enregistrer first_response_at
-    if (author_role === "exevori_agent" && !ticket.first_response_at) {
+    if (actor.role === "exevori_agent" && !ticket.first_response_at) {
       updates.first_response_at = new Date();
     }
 
     // Si message client + status was 'waiting_client' → repasser en 'in_progress'
-    if (author_role === "client" && ticket.status === "waiting_client") {
+    if (actor.role === "client" && ticket.status === "waiting_client") {
       updates.status = "in_progress";
     }
 
     // Si message Exevori + status was 'open' → 'in_progress'
-    if (author_role === "exevori_agent" && ticket.status === "open") {
+    if (actor.role === "exevori_agent" && ticket.status === "open") {
       updates.status = "in_progress";
     }
 
-    await supabase.from("tickets").update(updates).eq("id", id);
+    const { error: ticketUpdateError } = await supabase
+      .from("tickets")
+      .update(updates)
+      .eq("id", id)
+      .eq("company_id", ticket.company_id);
+    if (ticketUpdateError) throw ticketUpdateError;
 
     // Notification l'autre partie
-    if (!is_internal) {
-      await notifyTicketUpdate(ticket, message, author_role);
+    if (!isInternal) {
+      await notifyTicketUpdate(ticket, message, actor.role);
     }
 
     return res.json({ success: true, message });
@@ -243,14 +348,23 @@ router.patch("/:id/assign", async (req, res) => {
   const { id } = req.params;
   const { assigned_to_user_id, assigned_to_name } = req.body;
 
-  await supabase
+  if (!isSuperAdmin(req)) return res.status(403).json({ error: "forbidden" });
+  const access = await checkTicketAccess(id, req);
+  if (access.error) return res.status(500).json({ error: access.error.message });
+  if (access.status === 404) return res.status(404).json({ error: "ticket introuvable" });
+
+  const { data, error } = await supabase
     .from("tickets")
     .update({
       assigned_to_user_id, assigned_to_name,
       status: "in_progress",
       updated_at: new Date(),
     })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "ticket introuvable" });
 
   return res.json({ success: true });
 });
@@ -263,6 +377,7 @@ router.patch("/:id/status", async (req, res) => {
   const { id } = req.params;
   const { status, resolution_summary } = req.body;
 
+  if (!isSuperAdmin(req)) return res.status(403).json({ error: "forbidden" });
   const validStatuses = ["open", "in_progress", "waiting_client", "resolved", "closed"];
   if (!validStatuses.includes(status)) {
     return res.status(400).json({ error: "statut invalide" });
@@ -277,7 +392,18 @@ router.patch("/:id/status", async (req, res) => {
     updates.closed_at = new Date();
   }
 
-  await supabase.from("tickets").update(updates).eq("id", id);
+  const access = await checkTicketAccess(id, req);
+  if (access.error) return res.status(500).json({ error: access.error.message });
+  if (access.status === 404) return res.status(404).json({ error: "ticket introuvable" });
+
+  const { data, error } = await supabase
+    .from("tickets")
+    .update(updates)
+    .eq("id", id)
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "ticket introuvable" });
 
   return res.json({ success: true });
 });
@@ -290,6 +416,7 @@ router.patch("/:id/priority", async (req, res) => {
   const { id } = req.params;
   const { priority } = req.body;
 
+  if (!isSuperAdmin(req)) return res.status(403).json({ error: "forbidden" });
   if (!SLA[priority]) return res.status(400).json({ error: "priorité invalide" });
 
   const sla = SLA[priority];
@@ -297,7 +424,11 @@ router.patch("/:id/priority", async (req, res) => {
   const slaFirstResponse = new Date(now.getTime() + sla.first_response_hours * 3600000);
   const slaResolution = new Date(now.getTime() + sla.resolution_hours * 3600000);
 
-  await supabase
+  const access = await checkTicketAccess(id, req);
+  if (access.error) return res.status(500).json({ error: access.error.message });
+  if (access.status === 404) return res.status(404).json({ error: "ticket introuvable" });
+
+  const { data, error } = await supabase
     .from("tickets")
     .update({
       priority,
@@ -305,7 +436,11 @@ router.patch("/:id/priority", async (req, res) => {
       sla_resolution_due: slaResolution,
       updated_at: new Date(),
     })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "ticket introuvable" });
 
   return res.json({ success: true });
 });
@@ -322,17 +457,32 @@ router.post("/:id/rate", async (req, res) => {
     return res.status(400).json({ error: "rating doit être entre 1 et 5" });
   }
 
-  await supabase
+  const access = await checkTicketAccess(id, req);
+  if (access.error) return res.status(500).json({ error: access.error.message });
+  if (access.status === 404) return res.status(404).json({ error: "ticket introuvable" });
+  if (access.status === 403) return res.status(403).json({ error: "forbidden" });
+
+  let updateQuery = supabase
     .from("tickets")
     .update({ satisfaction_rating, updated_at: new Date() })
     .eq("id", id);
+  updateQuery = scopeToTenant(updateQuery, req);
+  const { data, error } = await updateQuery.select("id").maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "ticket introuvable" });
 
   if (feedback) {
-    await supabase.from("ticket_messages").insert({
+    const actor = requestActor(req);
+    const { error: feedbackError } = await supabase.from("ticket_messages").insert({
       ticket_id: id,
-      author_role: "client",
+      company_id: access.companyId,
+      author_user_id: actor.userId,
+      author_name: actor.name,
+      author_role: actor.role,
+      is_internal: false,
       body: `Évaluation: ${satisfaction_rating}/5\n\n${feedback}`,
     });
+    if (feedbackError) return res.status(500).json({ error: feedbackError.message });
   }
 
   return res.json({ success: true });
@@ -343,13 +493,19 @@ router.post("/:id/rate", async (req, res) => {
 // Statistiques pour dashboard admin
 // ─────────────────────────────────────────────────────────────
 router.get("/stats/overview", async (req, res) => {
-  const { company_id } = req.query;
+  const requestedCompanyId = req.query.company_id;
+
+  if (targetsAnotherTenant(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const companyId = resolveCompanyId(req, requestedCompanyId);
 
   try {
     let query = supabase.from("tickets").select("status, priority, sla_first_response_due, first_response_at, sla_resolution_due, resolved_at, satisfaction_rating");
-    if (company_id) query = query.eq("company_id", company_id);
+    if (companyId) query = query.eq("company_id", companyId);
 
-    const { data } = await query;
+    const { data, error } = await query;
+    if (error) throw error;
     const now = new Date();
 
     const stats = {

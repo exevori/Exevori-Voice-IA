@@ -29,6 +29,43 @@ const supabase = createClient(
 const ELEVENLABS_API = "https://api.elevenlabs.io/v1";
 const router = express.Router();
 
+function isSuperAdmin(req) {
+  return req.user?.role === "super_admin";
+}
+
+function hasTenantMismatch(req, requestedCompanyId) {
+  return !isSuperAdmin(req)
+    && requestedCompanyId
+    && requestedCompanyId !== req.user?.company_id;
+}
+
+function requireSuperAdmin(req, res, next) {
+  if (!isSuperAdmin(req)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  next();
+}
+
+function getTargetCompanyId(req, requestedCompanyId) {
+  return isSuperAdmin(req)
+    ? requestedCompanyId || null
+    : req.user?.company_id || null;
+}
+
+async function findTenantResource(table, id, req, columns = "id, company_id") {
+  const { data, error } = await supabase
+    .from(table)
+    .select(columns)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return { status: 404, data: null };
+  if (!isSuperAdmin(req) && data.company_id !== req.user?.company_id) {
+    return { status: 403, data: null };
+  }
+  return { status: 200, data };
+}
+
 // ─────────────────────────────────────────────────────────────
 // CATALOGUE DE VOIX (Admin Exevori)
 // ─────────────────────────────────────────────────────────────
@@ -100,7 +137,7 @@ router.get("/:id", async (req, res) => {
 
 // POST /api/v1/voice-library  (Admin only)
 // Ajouter une nouvelle voix au catalogue
-router.post("/", async (req, res) => {
+router.post("/", requireSuperAdmin, async (req, res) => {
   const {
     external_voice_id, provider = "elevenlabs", name, display_name,
     description_fr, description_en, gender, language = "fr-CA",
@@ -134,7 +171,7 @@ router.post("/", async (req, res) => {
 });
 
 // PATCH /api/v1/voice-library/:id  (Admin only)
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", requireSuperAdmin, async (req, res) => {
   const updates = { ...req.body, updated_at: new Date() };
   delete updates.id;
 
@@ -144,9 +181,10 @@ router.patch("/:id", async (req, res) => {
       .update(updates)
       .eq("id", req.params.id)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: "Voix introuvable" });
     return res.json({ success: true, voice: data });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -154,17 +192,21 @@ router.patch("/:id", async (req, res) => {
 });
 
 // POST /api/v1/voice-library/:id/deactivate  (Admin only)
-router.post("/:id/deactivate", async (req, res) => {
-  await supabase
+router.post("/:id/deactivate", requireSuperAdmin, async (req, res) => {
+  const { data, error } = await supabase
     .from("voice_library")
     .update({ is_active: false, updated_at: new Date() })
-    .eq("id", req.params.id);
+    .eq("id", req.params.id)
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Voix introuvable" });
   return res.json({ success: true });
 });
 
 // POST /api/v1/voice-library/sync-elevenlabs  (Admin only)
 // Récupère toutes les voix disponibles dans le compte ElevenLabs
-router.post("/sync-elevenlabs", async (req, res) => {
+router.post("/sync-elevenlabs", requireSuperAdmin, async (req, res) => {
   try {
     const response = await fetch(`${ELEVENLABS_API}/voices`, {
       headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY },
@@ -256,12 +298,16 @@ router.post("/:id/test", async (req, res) => {
 
 // GET /api/v1/services?company_id=...
 router.get("/services/list", async (req, res) => {
-  const { company_id } = req.query;
+  if (hasTenantMismatch(req, req.query.company_id)) {
+    return res.status(403).json({ error: "forbidden_company" });
+  }
+  const companyId = getTargetCompanyId(req, req.query.company_id);
+  if (!companyId) return res.status(400).json({ error: "company_id requis" });
 
   const { data, error } = await supabase
     .from("services")
     .select("*")
-    .eq("company_id", company_id)
+    .eq("company_id", companyId)
     .order("display_order");
 
   if (error) return res.status(500).json({ error: error.message });
@@ -271,22 +317,26 @@ router.get("/services/list", async (req, res) => {
 // POST /api/v1/services
 router.post("/services/create", async (req, res) => {
   const {
-    company_id, code, name_fr, name_en, description_fr, description_en,
+    company_id: requestedCompanyId, code, name_fr, name_en, description_fr, description_en,
     icon, color, scenario_triggers, business_hours, transfer_phone,
   } = req.body;
+  if (hasTenantMismatch(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden_company" });
+  }
+  const companyId = getTargetCompanyId(req, requestedCompanyId);
 
-  if (!company_id || !code || !name_fr) {
+  if (!companyId || !code || !name_fr) {
     return res.status(400).json({ error: "company_id, code, name_fr requis" });
   }
 
   try {
     // Vérifier limite forfait
-    await checkPlanLimit(company_id, "max_services", "services");
+    await checkPlanLimit(companyId, "max_services", "services");
 
     const { data, error } = await supabase
       .from("services")
       .insert({
-        company_id, code, name_fr, name_en, description_fr, description_en,
+        company_id: companyId, code, name_fr, name_en, description_fr, description_en,
         icon, color, scenario_triggers, business_hours, transfer_phone,
       })
       .select()
@@ -301,27 +351,58 @@ router.post("/services/create", async (req, res) => {
 
 // PATCH /api/v1/services/:id
 router.patch("/services/:id", async (req, res) => {
+  if (hasTenantMismatch(req, req.body.company_id)) {
+    return res.status(403).json({ error: "forbidden_company" });
+  }
   const updates = { ...req.body, updated_at: new Date() };
   delete updates.id;
   delete updates.company_id;
+
+  let owned;
+  try {
+    owned = await findTenantResource("services", req.params.id, req);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+  if (owned.status === 404) return res.status(404).json({ error: "Service introuvable" });
+  if (owned.status === 403) return res.status(403).json({ error: "forbidden_company" });
 
   const { data, error } = await supabase
     .from("services")
     .update(updates)
     .eq("id", req.params.id)
+    .eq("company_id", owned.data.company_id)
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Service introuvable" });
   return res.json({ success: true, service: data });
 });
 
 // DELETE /api/v1/services/:id  (soft delete)
 router.delete("/services/:id", async (req, res) => {
-  await supabase
+  if (hasTenantMismatch(req, req.query.company_id)) {
+    return res.status(403).json({ error: "forbidden_company" });
+  }
+  let owned;
+  try {
+    owned = await findTenantResource("services", req.params.id, req);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+  if (owned.status === 404) return res.status(404).json({ error: "Service introuvable" });
+  if (owned.status === 403) return res.status(403).json({ error: "forbidden_company" });
+
+  const { data, error } = await supabase
     .from("services")
     .update({ is_active: false })
-    .eq("id", req.params.id);
+    .eq("id", req.params.id)
+    .eq("company_id", owned.data.company_id)
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Service introuvable" });
   return res.json({ success: true });
 });
 
@@ -331,12 +412,31 @@ router.delete("/services/:id", async (req, res) => {
 
 // GET /api/v1/voice-assignments?company_id=...
 router.get("/assignments/list", async (req, res) => {
-  const { company_id, service_id } = req.query;
+  const { service_id } = req.query;
+  if (hasTenantMismatch(req, req.query.company_id)) {
+    return res.status(403).json({ error: "forbidden_company" });
+  }
+  const companyId = getTargetCompanyId(req, req.query.company_id);
+  if (!companyId) return res.status(400).json({ error: "company_id requis" });
+
+  if (service_id) {
+    let service;
+    try {
+      service = await findTenantResource("services", service_id, req);
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+    if (service.status === 404) return res.status(404).json({ error: "Service introuvable" });
+    if (service.status === 403) return res.status(403).json({ error: "forbidden_company" });
+    if (service.data.company_id !== companyId) {
+      return res.status(404).json({ error: "Service introuvable" });
+    }
+  }
 
   let query = supabase
     .from("voice_assignments")
     .select("*, voice_library(*), services(*)")
-    .eq("company_id", company_id);
+    .eq("company_id", companyId);
 
   if (service_id) query = query.eq("service_id", service_id);
 
@@ -348,27 +448,53 @@ router.get("/assignments/list", async (req, res) => {
 // POST /api/v1/voice-assignments
 router.post("/assignments/create", async (req, res) => {
   const {
-    company_id, voice_library_id, service_id, scenario, agent_profile_id,
+    company_id: requestedCompanyId, voice_library_id, service_id, scenario, agent_profile_id,
     language = "fr-CA", custom_settings, custom_name, is_default = false,
   } = req.body;
+  if (hasTenantMismatch(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "forbidden_company" });
+  }
+  const companyId = getTargetCompanyId(req, requestedCompanyId);
 
-  if (!company_id || !voice_library_id || !service_id) {
+  if (!companyId || !voice_library_id || !service_id) {
     return res.status(400).json({ error: "company_id, voice_library_id, service_id requis" });
   }
 
   try {
+    const service = await findTenantResource("services", service_id, req);
+    if (service.status === 404) return res.status(404).json({ error: "Service introuvable" });
+    if (service.status === 403) return res.status(403).json({ error: "forbidden_company" });
+    if (service.data.company_id !== companyId) {
+      return res.status(404).json({ error: "Service introuvable" });
+    }
+
+    if (agent_profile_id) {
+      const agentProfile = await findTenantResource("agent_profiles", agent_profile_id, req);
+      if (agentProfile.status === 404) {
+        return res.status(404).json({ error: "Profil agent introuvable" });
+      }
+      if (agentProfile.status === 403) {
+        return res.status(403).json({ error: "forbidden_company" });
+      }
+      if (agentProfile.data.company_id !== companyId) {
+        return res.status(404).json({ error: "Profil agent introuvable" });
+      }
+    }
+
     // Vérifier limite forfait
-    await checkPlanLimit(company_id, "max_voices", "voice_assignments");
+    await checkPlanLimit(companyId, "max_voices", "voice_assignments");
 
     // Vérifier que la voix est accessible au forfait
-    const { data: voice } = await supabase
+    const { data: voice, error: voiceError } = await supabase
       .from("voice_library")
       .select("is_premium")
       .eq("id", voice_library_id)
-      .single();
+      .maybeSingle();
+    if (voiceError) throw voiceError;
+    if (!voice) return res.status(404).json({ error: "Voix introuvable" });
 
     if (voice?.is_premium) {
-      const { data: limits } = await getPlanLimitsForCompany(company_id);
+      const { data: limits } = await getPlanLimitsForCompany(companyId);
       if (!limits?.premium_voices_enabled) {
         return res.status(403).json({
           error: "premium_voice_locked",
@@ -382,7 +508,7 @@ router.post("/assignments/create", async (req, res) => {
       await supabase
         .from("voice_assignments")
         .update({ is_default: false })
-        .eq("company_id", company_id)
+        .eq("company_id", companyId)
         .eq("service_id", service_id)
         .eq("language", language);
     }
@@ -390,7 +516,7 @@ router.post("/assignments/create", async (req, res) => {
     const { data, error } = await supabase
       .from("voice_assignments")
       .insert({
-        company_id, voice_library_id, service_id, scenario, agent_profile_id,
+        company_id: companyId, voice_library_id, service_id, scenario, agent_profile_id,
         language, custom_settings, custom_name, is_default,
       })
       .select("*, voice_library(*), services(*)")
@@ -405,10 +531,27 @@ router.post("/assignments/create", async (req, res) => {
 
 // DELETE /api/v1/voice-assignments/:id
 router.delete("/assignments/:id", async (req, res) => {
-  await supabase
+  if (hasTenantMismatch(req, req.query.company_id)) {
+    return res.status(403).json({ error: "forbidden_company" });
+  }
+  let owned;
+  try {
+    owned = await findTenantResource("voice_assignments", req.params.id, req);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+  if (owned.status === 404) return res.status(404).json({ error: "Attribution introuvable" });
+  if (owned.status === 403) return res.status(403).json({ error: "forbidden_company" });
+
+  const { data, error } = await supabase
     .from("voice_assignments")
     .delete()
-    .eq("id", req.params.id);
+    .eq("id", req.params.id)
+    .eq("company_id", owned.data.company_id)
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Attribution introuvable" });
   return res.json({ success: true });
 });
 
@@ -416,25 +559,31 @@ router.delete("/assignments/:id", async (req, res) => {
 // Trouver quelle voix utiliser pour un contexte donné
 // Utilisé par voice/inbound.js et voice/outbound.js
 router.get("/assignments/resolve", async (req, res) => {
-  const { company_id, service_code, scenario, language = "fr-CA" } = req.query;
+  const { service_code, scenario, language = "fr-CA" } = req.query;
+  if (hasTenantMismatch(req, req.query.company_id)) {
+    return res.status(403).json({ error: "forbidden_company" });
+  }
+  const companyId = getTargetCompanyId(req, req.query.company_id);
+  if (!companyId) return res.status(400).json({ error: "company_id requis" });
 
   try {
     // 1. Si scenario fourni, chercher d'abord par scenario
     let query = supabase
       .from("voice_assignments")
       .select("*, voice_library(*), services(*)")
-      .eq("company_id", company_id)
+      .eq("company_id", companyId)
       .eq("language", language);
 
     if (service_code) {
       const { data: service } = await supabase
         .from("services")
         .select("id")
-        .eq("company_id", company_id)
+        .eq("company_id", companyId)
         .eq("code", service_code)
-        .single();
+        .maybeSingle();
 
-      if (service) query = query.eq("service_id", service.id);
+      if (!service) return res.status(404).json({ error: "Service introuvable" });
+      query = query.eq("service_id", service.id);
     }
 
     // Préférer le scénario si correspondance
@@ -451,7 +600,7 @@ router.get("/assignments/resolve", async (req, res) => {
       const { data: fallback } = await supabase
         .from("voice_assignments")
         .select("*, voice_library(*)")
-        .eq("company_id", company_id)
+        .eq("company_id", companyId)
         .eq("language", language)
         .limit(1)
         .maybeSingle();
@@ -471,12 +620,21 @@ router.get("/assignments/resolve", async (req, res) => {
 
 // GET /api/v1/voice-library/plan-limits/:company_id
 router.get("/plan-limits/:company_id", async (req, res) => {
-  const limits = await getPlanLimitsForCompany(req.params.company_id);
+  const requestedCompanyId = req.params.company_id;
+  if (hasTenantMismatch(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+
+  const companyId = getTargetCompanyId(req, requestedCompanyId);
+  const limits = await getPlanLimitsForCompany(companyId);
+  if (!limits.data) {
+    return res.status(404).json({ error: "Limites de forfait introuvables" });
+  }
   return res.json({ limits: limits.data });
 });
 
 // GET /api/v1/voice-library/plan-limits-admin (Admin Exevori only)
-router.get("/plan-limits-admin/list", async (req, res) => {
+router.get("/plan-limits-admin/list", requireSuperAdmin, async (req, res) => {
   const { data, error } = await supabase
     .from("plan_limits")
     .select("*")
@@ -487,17 +645,20 @@ router.get("/plan-limits-admin/list", async (req, res) => {
 });
 
 // PATCH /api/v1/voice-library/plan-limits/:plan_name (Admin only)
-router.patch("/plan-limits-admin/:plan_name", async (req, res) => {
+router.patch("/plan-limits-admin/:plan_name", requireSuperAdmin, async (req, res) => {
   const updates = { ...req.body, updated_at: new Date() };
+  delete updates.id;
+  delete updates.plan_name;
 
   const { data, error } = await supabase
     .from("plan_limits")
     .update(updates)
     .eq("plan_name", req.params.plan_name)
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Forfait introuvable" });
   return res.json({ success: true, plan: data });
 });
 

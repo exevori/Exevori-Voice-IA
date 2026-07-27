@@ -30,6 +30,53 @@ const supabase = createClient(
 
 const router = express.Router();
 
+function isSuperAdmin(req) {
+  return req.user?.role === "super_admin";
+}
+
+function hasTenantMismatch(req, requestedCompanyId) {
+  return Boolean(
+    !isSuperAdmin(req) &&
+    requestedCompanyId &&
+    requestedCompanyId !== req.user?.company_id
+  );
+}
+
+function getTargetCompanyId(req, requestedCompanyId) {
+  return isSuperAdmin(req)
+    ? requestedCompanyId || null
+    : req.user?.company_id || null;
+}
+
+function requireSuperAdmin(req, res, next) {
+  if (!isSuperAdmin(req)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  return next();
+}
+
+async function getCompany(companyId, columns = "id") {
+  const { data, error } = await supabase
+    .from("companies")
+    .select(columns)
+    .eq("id", companyId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+async function getSubscription(companyId, columns = "*") {
+  const { data, error } = await supabase
+    .from("subscriptions")
+    .select(columns)
+    .eq("company_id", companyId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
 // ── PRIX DES FORFAITS ─────────────────────────────────────────
 // ── PRIX MULTI-DEVISE ──
 // Source de vérité : shared/constants.js
@@ -67,24 +114,26 @@ function currencyForCountry(country) {
 router.post("/checkout", async (req, res) => {
   const { company_id, plan_name, billing_cycle = "monthly", country: countryOverride } = req.body;
 
-  try {
-    const { data: company } = await supabase
-      .from("companies")
-      .select("*")
-      .eq("id", company_id)
-      .single();
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
 
+  const companyId = getTargetCompanyId(req, company_id);
+  if (!companyId) {
+    return res.status(isSuperAdmin(req) ? 400 : 403).json({
+      error: isSuperAdmin(req) ? "company_id requis" : "forbidden",
+    });
+  }
+
+  try {
+    const company = await getCompany(companyId, "*");
     if (!company) return res.status(404).json({ error: "company introuvable" });
 
     const plan = PLANS[plan_name];
     if (!plan) return res.status(400).json({ error: "plan invalide" });
 
     // Récupérer ou créer le customer Stripe
-    let { data: sub } = await supabase
-      .from("subscriptions")
-      .select("*")
-      .eq("company_id", company_id)
-      .single();
+    const sub = await getSubscription(companyId);
 
     let customerId = sub?.stripe_customer_id;
     if (!customerId) {
@@ -92,7 +141,11 @@ router.post("/checkout", async (req, res) => {
       const customer = await stripe.customers.create({
         email: company.contact_email,
         name: company.contact_name,
-        metadata: { company_id, company_name: company.name, billing_country: billingCountry },
+        metadata: {
+          company_id: companyId,
+          company_name: company.name,
+          billing_country: billingCountry,
+        },
         address: { country: billingCountry, state: billingCountry === "CA" ? (company.province || "QC") : undefined },
       });
       customerId = customer.id;
@@ -145,7 +198,7 @@ router.post("/checkout", async (req, res) => {
       // ── TAXES AUTOMATIQUES (TPS/TVQ au Canada via Stripe Tax) ──
       automatic_tax: { enabled: isCanada },
       subscription_data: {
-        metadata: { company_id, plan_name },
+        metadata: { company_id: companyId, plan_name },
         trial_period_days: 14,
       },
       success_url: `${process.env.FRONTEND_URL}/onboarding/success?session_id={CHECKOUT_SESSION_ID}`,
@@ -168,12 +221,22 @@ router.post("/checkout", async (req, res) => {
 router.post("/portal", async (req, res) => {
   const { company_id } = req.body;
 
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const companyId = getTargetCompanyId(req, company_id);
+  if (!companyId) {
+    return res.status(isSuperAdmin(req) ? 400 : 403).json({
+      error: isSuperAdmin(req) ? "company_id requis" : "forbidden",
+    });
+  }
+
   try {
-    const { data: sub } = await supabase
-      .from("subscriptions")
-      .select("stripe_customer_id")
-      .eq("company_id", company_id)
-      .single();
+    const company = await getCompany(companyId);
+    if (!company) return res.status(404).json({ error: "company introuvable" });
+
+    const sub = await getSubscription(companyId, "stripe_customer_id");
 
     if (!sub?.stripe_customer_id) {
       return res.status(404).json({ error: "Pas de compte Stripe pour ce client" });
@@ -199,17 +262,37 @@ router.post("/portal", async (req, res) => {
 router.get("/me", async (req, res) => {
   const { company_id } = req.query;
 
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const companyId = getTargetCompanyId(req, company_id);
+  if (!companyId) {
+    return res.status(isSuperAdmin(req) ? 400 : 403).json({
+      error: isSuperAdmin(req) ? "company_id requis" : "forbidden",
+    });
+  }
+
   try {
+    const company = await getCompany(companyId);
+    if (!company) return res.status(404).json({ error: "company introuvable" });
+
     const [sub, currentUsage, invoices, paymentMethods] = await Promise.all([
-      supabase.from("subscriptions").select("*").eq("company_id", company_id).single(),
-      getCurrentPeriodUsage(company_id),
-      supabase.from("invoices").select("*").eq("company_id", company_id)
+      supabase.from("subscriptions").select("*").eq("company_id", companyId).maybeSingle(),
+      getCurrentPeriodUsage(companyId),
+      supabase.from("invoices").select("*").eq("company_id", companyId)
         .order("created_at", { ascending: false }).limit(12),
-      supabase.from("payment_methods").select("*").eq("company_id", company_id),
+      supabase.from("payment_methods").select("*").eq("company_id", companyId),
     ]);
 
+    if (sub.error) throw sub.error;
+    if (invoices.error) throw invoices.error;
+    if (paymentMethods.error) throw paymentMethods.error;
+
     const subscription = sub.data;
-    if (!subscription) return res.json({ subscription: null });
+    if (!subscription) {
+      return res.status(404).json({ error: "abonnement introuvable" });
+    }
 
     const plan = PLANS[subscription.plan_name];
     const minutesUsed = currentUsage.voice_minutes || 0;
@@ -258,16 +341,42 @@ router.get("/me", async (req, res) => {
 router.post("/overage-policy", async (req, res) => {
   const { company_id, overage_policy } = req.body;
 
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const companyId = getTargetCompanyId(req, company_id);
+  if (!companyId) {
+    return res.status(isSuperAdmin(req) ? 400 : 403).json({
+      error: isSuperAdmin(req) ? "company_id requis" : "forbidden",
+    });
+  }
+
   if (!["pay_as_you_go", "block_at_limit"].includes(overage_policy)) {
     return res.status(400).json({ error: "overage_policy invalide" });
   }
 
-  await supabase
-    .from("subscriptions")
-    .update({ overage_policy, updated_at: new Date() })
-    .eq("company_id", company_id);
+  try {
+    const company = await getCompany(companyId);
+    if (!company) return res.status(404).json({ error: "company introuvable" });
 
-  return res.json({ success: true, overage_policy });
+    const { data: subscription, error } = await supabase
+      .from("subscriptions")
+      .update({ overage_policy, updated_at: new Date() })
+      .eq("company_id", companyId)
+      .select("company_id")
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!subscription) {
+      return res.status(404).json({ error: "abonnement introuvable" });
+    }
+
+    return res.json({ success: true, overage_policy });
+  } catch (err) {
+    console.error("[BILLING] Overage policy error:", err);
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -277,14 +386,25 @@ router.post("/overage-policy", async (req, res) => {
 router.post("/change-plan", async (req, res) => {
   const { company_id, new_plan } = req.body;
 
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const companyId = getTargetCompanyId(req, company_id);
+  if (!companyId) {
+    return res.status(isSuperAdmin(req) ? 400 : 403).json({
+      error: isSuperAdmin(req) ? "company_id requis" : "forbidden",
+    });
+  }
+
   if (!PLANS[new_plan]) return res.status(400).json({ error: "plan invalide" });
 
   try {
-    const { data: sub } = await supabase
-      .from("subscriptions")
-      .select("*")
-      .eq("company_id", company_id)
-      .single();
+    const company = await getCompany(companyId);
+    if (!company) return res.status(404).json({ error: "company introuvable" });
+
+    const sub = await getSubscription(companyId);
+    if (!sub) return res.status(404).json({ error: "abonnement introuvable" });
 
     if (sub.stripe_subscription_id) {
       // Mettre à jour Stripe (prorata automatique)
@@ -304,7 +424,7 @@ router.post("/change-plan", async (req, res) => {
     }
 
     // Mettre à jour Supabase
-    await supabase
+    const { data: updatedSubscription, error } = await supabase
       .from("subscriptions")
       .update({
         plan_name: new_plan,
@@ -314,7 +434,14 @@ router.post("/change-plan", async (req, res) => {
         overage_rate_usd: PLANS[new_plan].overage_rate,
         updated_at: new Date(),
       })
-      .eq("company_id", company_id);
+      .eq("company_id", companyId)
+      .select("company_id")
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!updatedSubscription) {
+      return res.status(404).json({ error: "abonnement introuvable" });
+    }
 
     return res.json({ success: true, new_plan, label: PLANS[new_plan].label });
   } catch (err) {
@@ -327,61 +454,107 @@ router.post("/change-plan", async (req, res) => {
 // POST /api/v1/billing/track-usage
 // Enregistrer la consommation (appelé après chaque appel/email)
 // ─────────────────────────────────────────────────────────────
-router.post("/track-usage", async (req, res) => {
+router.post("/track-usage", requireSuperAdmin, async (req, res) => {
   const { company_id, resource_type, quantity, unit_cost_usd = 0 } = req.body;
 
+  if (typeof company_id !== "string" || !company_id.trim()) {
+    return res.status(400).json({ error: "company_id requis" });
+  }
+  if (typeof resource_type !== "string" || !resource_type.trim()) {
+    return res.status(400).json({ error: "resource_type requis" });
+  }
+
+  const usageQuantity = Number(quantity);
+  if (quantity === null || quantity === undefined || !Number.isFinite(usageQuantity)) {
+    return res.status(400).json({ error: "quantity doit être un nombre fini" });
+  }
+
+  const unitCost = Number(unit_cost_usd);
+  if (!Number.isFinite(unitCost)) {
+    return res.status(400).json({ error: "unit_cost_usd doit être un nombre fini" });
+  }
+
+  const companyId = company_id.trim();
+  const resourceType = resource_type.trim();
+
   try {
+    const company = await getCompany(companyId);
+    if (!company) return res.status(404).json({ error: "company introuvable" });
+
+    let subscription = null;
+    if (resourceType === "voice_minutes") {
+      subscription = await getSubscription(companyId);
+      if (!subscription) {
+        return res.status(404).json({ error: "abonnement introuvable" });
+      }
+    }
+
     const now = new Date();
     const period_start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
     const period_end = lastDay.toISOString().split("T")[0];
 
     // Upsert dans usage_records
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from("usage_records")
       .select("*")
-      .eq("company_id", company_id)
+      .eq("company_id", companyId)
       .eq("period_start", period_start)
-      .eq("resource_type", resource_type)
-      .single();
+      .eq("resource_type", resourceType)
+      .maybeSingle();
+
+    if (existingError) throw existingError;
 
     if (existing) {
-      await supabase
+      const { error } = await supabase
         .from("usage_records")
         .update({
-          quantity: parseFloat(existing.quantity) + quantity,
-          total_cost_usd: parseFloat(existing.total_cost_usd) + (quantity * unit_cost_usd),
+          quantity: (Number(existing.quantity) || 0) + usageQuantity,
+          total_cost_usd: (Number(existing.total_cost_usd) || 0) + (usageQuantity * unitCost),
         })
-        .eq("id", existing.id);
+        .eq("id", existing.id)
+        .eq("company_id", companyId);
+
+      if (error) throw error;
     } else {
-      await supabase.from("usage_records").insert({
-        company_id, period_start, period_end,
-        resource_type, quantity, unit_cost_usd,
-        total_cost_usd: quantity * unit_cost_usd,
+      const { error } = await supabase.from("usage_records").insert({
+        company_id: companyId,
+        period_start,
+        period_end,
+        resource_type: resourceType,
+        quantity: usageQuantity,
+        unit_cost_usd: unitCost,
+        total_cost_usd: usageQuantity * unitCost,
       });
+
+      if (error) throw error;
     }
 
     // Si voice_minutes, mettre à jour le compteur sur subscriptions
-    if (resource_type === "voice_minutes") {
-      const { data: sub } = await supabase
-        .from("subscriptions")
-        .select("*")
-        .eq("company_id", company_id)
-        .single();
-
-      const newMinutesUsed = (sub.minutes_used_current_period || 0) + quantity;
-      await supabase
+    if (resourceType === "voice_minutes") {
+      const newMinutesUsed =
+        (Number(subscription.minutes_used_current_period) || 0) + usageQuantity;
+      const { data: updatedSubscription, error } = await supabase
         .from("subscriptions")
         .update({ minutes_used_current_period: newMinutesUsed })
-        .eq("company_id", company_id);
+        .eq("company_id", companyId)
+        .select("company_id")
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!updatedSubscription) {
+        return res.status(404).json({ error: "abonnement introuvable" });
+      }
 
       // Si block_at_limit et dépassement → bloquer
-      const limit = sub.minutes_included;
-      if (sub.overage_policy === "block_at_limit" && newMinutesUsed >= limit) {
-        await supabase
+      const limit = subscription.minutes_included;
+      if (subscription.overage_policy === "block_at_limit" && newMinutesUsed >= limit) {
+        const { error: suspendError } = await supabase
           .from("companies")
           .update({ status: "suspended_overage" })
-          .eq("id", company_id);
+          .eq("id", companyId);
+
+        if (suspendError) throw suspendError;
 
         return res.json({
           success: true,
@@ -391,16 +564,16 @@ router.post("/track-usage", async (req, res) => {
       }
 
       // Si pay_as_you_go et Stripe metering activé → reporter à Stripe
-      if (sub.overage_policy === "pay_as_you_go" &&
-          sub.stripe_subscription_id &&
-          sub.stripe_meter_id &&
+      if (subscription.overage_policy === "pay_as_you_go" &&
+          subscription.stripe_subscription_id &&
+          subscription.stripe_meter_id &&
           newMinutesUsed > limit) {
         const overage = newMinutesUsed - limit;
         await stripe.billing.meterEvents.create({
           event_name: "voice_minutes_overage",
           payload: {
-            stripe_customer_id: sub.stripe_customer_id,
-            value: String(quantity),
+            stripe_customer_id: subscription.stripe_customer_id,
+            value: String(usageQuantity),
           },
         });
       }

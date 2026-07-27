@@ -16,6 +16,19 @@ const supabase = createClient(
 
 const router = express.Router();
 
+async function respondTenantMiss(res, id, notFoundMessage, isSuperAdmin) {
+  if (!isSuperAdmin) {
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("id")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (data) return res.status(403).json({ error: "Accès refusé" });
+  }
+  return res.status(404).json({ error: notFoundMessage });
+}
+
 // ─────────────────────────────────────────────────────────────
 // GET /api/v1/contacts
 // Liste des contacts avec filtres
@@ -121,18 +134,39 @@ router.post("/", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
+  const isSuperAdmin = req.user?.role === "super_admin";
 
   try {
-    const [contact, notes, calls, outboundCalls, emails, appointments] = await Promise.all([
-      supabase.from("contacts").select("*").eq("id", id).single(),
-      supabase.from("contact_notes").select("*").eq("contact_id", id).order("created_at", { ascending: false }),
-      supabase.from("calls").select("*").eq("contact_id", id).order("created_at", { ascending: false }),
-      supabase.from("outbound_calls").select("*").eq("contact_id", id).order("created_at", { ascending: false }),
-      supabase.from("emails").select("*").eq("contact_id", id).order("received_at", { ascending: false }),
-      supabase.from("appointments").select("*").eq("contact_id", id).order("date", { ascending: false }),
-    ]);
+    let contactQuery = supabase.from("contacts").select("*").eq("id", id);
+    if (!isSuperAdmin) {
+      contactQuery = contactQuery.eq("company_id", req.user.company_id);
+    }
+    const { data: contact, error: contactError } = await contactQuery.maybeSingle();
+    if (contactError) throw contactError;
+    if (!contact) {
+      return respondTenantMiss(res, id, "Contact introuvable", isSuperAdmin);
+    }
 
-    if (!contact.data) return res.status(404).json({ error: "Contact introuvable" });
+    let notesQuery = supabase.from("contact_notes").select("*").eq("contact_id", id);
+    let callsQuery = supabase.from("calls").select("*").eq("contact_id", id);
+    let outboundCallsQuery = supabase.from("outbound_calls").select("*").eq("contact_id", id);
+    let emailsQuery = supabase.from("emails").select("*").eq("contact_id", id);
+    let appointmentsQuery = supabase.from("appointments").select("*").eq("contact_id", id);
+    if (!isSuperAdmin) {
+      notesQuery = notesQuery.eq("company_id", req.user.company_id);
+      callsQuery = callsQuery.eq("company_id", req.user.company_id);
+      outboundCallsQuery = outboundCallsQuery.eq("company_id", req.user.company_id);
+      emailsQuery = emailsQuery.eq("company_id", req.user.company_id);
+      appointmentsQuery = appointmentsQuery.eq("company_id", req.user.company_id);
+    }
+
+    const [notes, calls, outboundCalls, emails, appointments] = await Promise.all([
+      notesQuery.order("created_at", { ascending: false }),
+      callsQuery.order("created_at", { ascending: false }),
+      outboundCallsQuery.order("created_at", { ascending: false }),
+      emailsQuery.order("received_at", { ascending: false }),
+      appointmentsQuery.order("date", { ascending: false }),
+    ]);
 
     // Hésitations IA liées aux appels de ce contact (source = "call:<call_id>")
     const callIds = (calls.data || []).map((c) => c.id).filter(Boolean);
@@ -142,14 +176,14 @@ router.get("/:id", async (req, res) => {
       const { data: ls } = await supabase
         .from("learning_suggestions")
         .select("*")
-        .eq("company_id", contact.data.company_id)
+        .eq("company_id", contact.company_id)
         .in("source", sources)
         .order("detected_at", { ascending: false });
       learningSuggestions = ls || [];
     }
 
     return res.json({
-      contact: contact.data,
+      contact,
       history: {
         notes: notes.data || [],
         calls: calls.data || [],
@@ -179,20 +213,26 @@ router.get("/:id", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.patch("/:id", async (req, res) => {
   const { id } = req.params;
+  const isSuperAdmin = req.user?.role === "super_admin";
   const updates = { ...req.body, updated_at: new Date() };
   delete updates.id;
   delete updates.created_at;
   delete updates.company_id; // company_id ne change jamais
 
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from("contacts")
       .update(updates)
-      .eq("id", id)
-      .select()
-      .single();
+      .eq("id", id);
+    if (!isSuperAdmin) {
+      query = query.eq("company_id", req.user.company_id);
+    }
+    const { data, error } = await query.select().maybeSingle();
 
     if (error) throw error;
+    if (!data) {
+      return respondTenantMiss(res, id, "Contact introuvable", isSuperAdmin);
+    }
     return res.json({ success: true, contact: data });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -205,10 +245,18 @@ router.patch("/:id", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.delete("/:id", async (req, res) => {
   const { id } = req.params;
+  const isSuperAdmin = req.user?.role === "super_admin";
 
   try {
-    const { error } = await supabase.from("contacts").delete().eq("id", id);
+    let query = supabase.from("contacts").delete().eq("id", id);
+    if (!isSuperAdmin) {
+      query = query.eq("company_id", req.user.company_id);
+    }
+    const { data, error } = await query.select("id").maybeSingle();
     if (error) throw error;
+    if (!data) {
+      return respondTenantMiss(res, id, "Contact introuvable", isSuperAdmin);
+    }
     return res.json({ success: true });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -244,13 +292,27 @@ router.get("/lookup/find", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.post("/:id/notes", async (req, res) => {
   const { id } = req.params;
-  const { company_id, note, next_action, created_by, direction = "manual" } = req.body;
+  const { note, next_action, created_by, direction = "manual" } = req.body;
+  const isSuperAdmin = req.user?.role === "super_admin";
 
   try {
+    let contactQuery = supabase
+      .from("contacts")
+      .select("id, company_id")
+      .eq("id", id);
+    if (!isSuperAdmin) {
+      contactQuery = contactQuery.eq("company_id", req.user.company_id);
+    }
+    const { data: contact, error: contactError } = await contactQuery.maybeSingle();
+    if (contactError) throw contactError;
+    if (!contact) {
+      return respondTenantMiss(res, id, "Contact introuvable", isSuperAdmin);
+    }
+
     const { data, error } = await supabase
       .from("contact_notes")
       .insert({
-        company_id,
+        company_id: contact.company_id,
         contact_id: id,
         direction,
         note,
@@ -263,13 +325,18 @@ router.post("/:id/notes", async (req, res) => {
     if (error) throw error;
 
     // Mettre à jour le contact (last_interaction_at + next_action)
-    await supabase
+    let updateContactQuery = supabase
       .from("contacts")
       .update({
         last_interaction_at: new Date(),
         next_action: next_action || undefined,
       })
       .eq("id", id);
+    if (!isSuperAdmin) {
+      updateContactQuery = updateContactQuery.eq("company_id", req.user.company_id);
+    }
+    const { error: updateContactError } = await updateContactQuery;
+    if (updateContactError) throw updateContactError;
 
     return res.json({ success: true, note: data });
   } catch (err) {

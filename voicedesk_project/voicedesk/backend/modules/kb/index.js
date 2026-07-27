@@ -34,12 +34,35 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
 });
 
+async function respondTenantMiss(res, table, id, notFoundMessage, isSuperAdmin) {
+  if (!isSuperAdmin) {
+    const { data, error } = await supabase
+      .from(table)
+      .select("id")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (data) return res.status(403).json({ error: "Accès refusé" });
+  }
+  return res.status(404).json({ error: notFoundMessage });
+}
+
 // ─────────────────────────────────────────────────────────────
 // POST /upload
 // multipart: file, company_id
 // ─────────────────────────────────────────────────────────────
 router.post("/sources/upload", upload.single("file"), async (req, res) => {
-  const { company_id, created_by } = req.body;
+  const requestedCompanyId = req.body.company_id;
+  if (
+    req.user.role !== "super_admin" &&
+    requestedCompanyId &&
+    requestedCompanyId !== req.user.company_id
+  ) {
+    return res.status(403).json({ error: "forbidden_cross_tenant" });
+  }
+  const company_id =
+    req.user.role === "super_admin" ? requestedCompanyId : req.user.company_id;
+  const created_by = req.user.id;
   const file = req.file;
   if (!company_id || !file) return res.status(400).json({ error: "company_id et file requis" });
 
@@ -341,20 +364,34 @@ router.post("/sources/qa", express.json(), async (req, res) => {
 router.patch("/chunks/:id", express.json(), async (req, res) => {
   const { id } = req.params;
   const { company_id, content } = req.body || {};
+  const isSuperAdmin = req.user?.role === "super_admin";
   if (!company_id || !content) return res.status(400).json({ error: "company_id et content requis" });
   const cleanText = String(content).trim();
   if (cleanText.length < 10)      return res.status(400).json({ error: "Contenu trop court (< 10 caractères)" });
   if (cleanText.length > 50_000)  return res.status(400).json({ error: "Contenu trop long (> 50 000 caractères)" });
 
   // Sanity check : le chunk existe et appartient au bon tenant
-  const { data: chunk, error: cErr } = await supabase
+  let chunkQuery = supabase
     .from("knowledge_chunks")
     .select("id, company_id, source_id, chunk_index")
-    .eq("id", id)
-    .maybeSingle();
+    .eq("id", id);
+  if (!isSuperAdmin) {
+    chunkQuery = chunkQuery.eq("company_id", req.user.company_id);
+  }
+  const { data: chunk, error: cErr } = await chunkQuery.maybeSingle();
   if (cErr)                             return res.status(500).json({ error: cErr.message });
-  if (!chunk)                           return res.status(404).json({ error: "Chunk introuvable" });
-  if (chunk.company_id !== company_id)  return res.status(403).json({ error: "Chunk d'un autre tenant" });
+  if (!chunk) {
+    return respondTenantMiss(
+      res,
+      "knowledge_chunks",
+      id,
+      "Chunk introuvable",
+      isSuperAdmin
+    );
+  }
+  if (!isSuperAdmin && chunk.company_id !== company_id) {
+    return res.status(403).json({ error: "Chunk d'un autre tenant" });
+  }
 
   // Embed nouveau contenu
   let embedding = null;
@@ -367,19 +404,36 @@ router.patch("/chunks/:id", express.json(), async (req, res) => {
   // gpt-tokenizer pour le token_count
   const token_count = gptEncode(cleanText).length;
 
-  const { data: updated, error: uErr } = await supabase
+  let updateQuery = supabase
     .from("knowledge_chunks")
     .update({ content: cleanText, embedding, token_count })
-    .eq("id", id)
+    .eq("id", id);
+  if (!isSuperAdmin) {
+    updateQuery = updateQuery.eq("company_id", req.user.company_id);
+  }
+  const { data: updated, error: uErr } = await updateQuery
     .select("id, chunk_index, content, token_count")
-    .single();
+    .maybeSingle();
   if (uErr) return res.status(500).json({ error: uErr.message });
+  if (!updated) {
+    return respondTenantMiss(
+      res,
+      "knowledge_chunks",
+      id,
+      "Chunk introuvable",
+      isSuperAdmin
+    );
+  }
 
   // Met à jour le timestamp embeddings_ready_at de la source (puisqu'on a re-embeddé)
-  await supabase
+  let sourceUpdateQuery = supabase
     .from("knowledge_sources")
     .update({ embeddings_ready_at: new Date().toISOString() })
     .eq("id", chunk.source_id);
+  if (!isSuperAdmin) {
+    sourceUpdateQuery = sourceUpdateQuery.eq("company_id", req.user.company_id);
+  }
+  await sourceUpdateQuery;
 
   return res.json({ success: true, chunk: updated });
 });
@@ -411,19 +465,34 @@ router.get("/sources", async (req, res) => {
 router.get("/sources/:id", async (req, res) => {
   const { id } = req.params;
   const companyId = req.user?.company_id;
-  const isAdmin = req.user?.role === "super_admin";
-  const query = supabase.from("knowledge_sources").select("*").eq("id", id);
-  if (!isAdmin) query.eq("company_id", companyId);
+  const isSuperAdmin = req.user?.role === "super_admin";
+  let query = supabase.from("knowledge_sources").select("*").eq("id", id);
+  if (!isSuperAdmin) {
+    query = query.eq("company_id", companyId);
+  }
   const { data: source, error } = await query.maybeSingle();
   if (error)   return res.status(500).json({ error: error.message });
-  if (!source) return res.status(404).json({ error: "Source introuvable" });
+  if (!source) {
+    return respondTenantMiss(
+      res,
+      "knowledge_sources",
+      id,
+      "Source introuvable",
+      isSuperAdmin
+    );
+  }
 
-  const { data: chunks } = await supabase
+  let chunksQuery = supabase
     .from("knowledge_chunks")
     .select("id, chunk_index, content, token_count")
-    .eq("source_id", id)
+    .eq("source_id", id);
+  if (!isSuperAdmin) {
+    chunksQuery = chunksQuery.eq("company_id", companyId);
+  }
+  const { data: chunks, error: chunksError } = await chunksQuery
     .order("chunk_index", { ascending: true })
     .limit(50);
+  if (chunksError) return res.status(500).json({ error: chunksError.message });
 
   return res.json({ source, chunks: chunks || [] });
 });
@@ -434,17 +503,28 @@ router.get("/sources/:id", async (req, res) => {
 router.delete("/sources/:id", async (req, res) => {
   const { id } = req.params;
   const companyId = req.user?.company_id;
-  const isAdmin = req.user?.role === "super_admin";
-  const verif = supabase.from("knowledge_sources").select("storage_path").eq("id", id);
-  if (!isAdmin) verif.eq("company_id", companyId);
-  const { data: source } = await verif.maybeSingle();
-  if (!source) return res.status(403).json({ error: "Accès refusé" });
+  const isSuperAdmin = req.user?.role === "super_admin";
 
-  // 1. Delete row → cascade chunks via FK
-  const { error } = await supabase.from("knowledge_sources").delete().eq("id", id);
+  // Delete atomique avec le filtre tenant → cascade chunks via FK
+  let deleteQuery = supabase.from("knowledge_sources").delete().eq("id", id);
+  if (!isSuperAdmin) {
+    deleteQuery = deleteQuery.eq("company_id", companyId);
+  }
+  const { data: source, error } = await deleteQuery
+    .select("storage_path")
+    .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
+  if (!source) {
+    return respondTenantMiss(
+      res,
+      "knowledge_sources",
+      id,
+      "Source introuvable",
+      isSuperAdmin
+    );
+  }
 
-  // 2. Delete storage object (best-effort)
+  // Delete storage object (best-effort)
   if (source?.storage_path) {
     await supabase.storage.from("kb-uploads").remove([source.storage_path]).catch(() => {});
   }
@@ -487,22 +567,39 @@ router.post("/sources/search", express.json(), async (req, res) => {
 router.post("/sources/:id/reembed", express.json(), async (req, res) => {
   const { id } = req.params;
   const { company_id } = req.body;
+  const isSuperAdmin = req.user?.role === "super_admin";
   if (!company_id) return res.status(400).json({ error: "company_id requis" });
 
   // Sanity check : la source existe et appartient bien à la company
-  const { data: source, error: sErr } = await supabase
+  let sourceQuery = supabase
     .from("knowledge_sources")
     .select("id, company_id, chunks_count, status")
-    .eq("id", id)
-    .maybeSingle();
+    .eq("id", id);
+  if (!isSuperAdmin) {
+    sourceQuery = sourceQuery.eq("company_id", req.user.company_id);
+  }
+  const { data: source, error: sErr } = await sourceQuery.maybeSingle();
   if (sErr)                            return res.status(500).json({ error: sErr.message });
-  if (!source)                         return res.status(404).json({ error: "Source introuvable" });
-  if (source.company_id !== company_id) return res.status(403).json({ error: "Source d'un autre tenant" });
+  if (!source) {
+    return respondTenantMiss(
+      res,
+      "knowledge_sources",
+      id,
+      "Source introuvable",
+      isSuperAdmin
+    );
+  }
+  if (!isSuperAdmin && source.company_id !== company_id) {
+    return res.status(403).json({ error: "Source d'un autre tenant" });
+  }
   if (source.status !== "ready")       return res.status(409).json({ error: `Source en status '${source.status}' (doit être 'ready')` });
 
   try {
     const t0 = Date.now();
-    const result = await embedChunksOfSource({ source_id: id, company_id });
+    const result = await embedChunksOfSource({
+      source_id: id,
+      company_id: source.company_id,
+    });
     return res.json({
       success: true,
       embedded_count: result.embedded_count,

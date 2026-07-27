@@ -17,6 +17,19 @@ const supabase = createClient(
 
 const router = express.Router();
 
+async function respondTenantMiss(res, id, isSuperAdmin) {
+  if (!isSuperAdmin) {
+    const { data, error } = await supabase
+      .from("knowledge_base")
+      .select("id")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (data) return res.status(403).json({ error: "Accès refusé" });
+  }
+  return res.status(404).json({ error: "Entrée introuvable" });
+}
+
 const VALID_CATEGORIES = [
   "FAQ", "services", "pricing", "hours", "policies",
   "contact", "team", "products", "shipping", "returns",
@@ -74,14 +87,20 @@ router.get("/", async (req, res) => {
 // Détail d'une entrée
 // ─────────────────────────────────────────────────────────────
 router.get("/:id", async (req, res) => {
+  const isSuperAdmin = req.user?.role === "super_admin";
+
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from("knowledge_base")
       .select("*")
-      .eq("id", req.params.id)
-      .single();
+      .eq("id", req.params.id);
+    if (!isSuperAdmin) {
+      query = query.eq("company_id", req.user.company_id);
+    }
+    const { data, error } = await query.maybeSingle();
 
-    if (error) return res.status(404).json({ error: "Entrée introuvable" });
+    if (error) throw error;
+    if (!data) return respondTenantMiss(res, req.params.id, isSuperAdmin);
     return res.json({ entry: data });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -140,20 +159,24 @@ router.post("/", async (req, res) => {
 // Modifier une entrée
 // ─────────────────────────────────────────────────────────────
 router.patch("/:id", async (req, res) => {
+  const isSuperAdmin = req.user?.role === "super_admin";
   const updates = { ...req.body, updated_at: new Date() };
   delete updates.id;
   delete updates.company_id;
   delete updates.created_at;
 
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from("knowledge_base")
       .update(updates)
-      .eq("id", req.params.id)
-      .select()
-      .single();
+      .eq("id", req.params.id);
+    if (!isSuperAdmin) {
+      query = query.eq("company_id", req.user.company_id);
+    }
+    const { data, error } = await query.select().maybeSingle();
 
     if (error) throw error;
+    if (!data) return respondTenantMiss(res, req.params.id, isSuperAdmin);
     return res.json({ success: true, entry: data });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -165,11 +188,23 @@ router.patch("/:id", async (req, res) => {
 // Désactiver une entrée (soft delete)
 // ─────────────────────────────────────────────────────────────
 router.delete("/:id", async (req, res) => {
-  await supabase
-    .from("knowledge_base")
-    .update({ status: "archived", updated_at: new Date() })
-    .eq("id", req.params.id);
-  return res.json({ success: true });
+  const isSuperAdmin = req.user?.role === "super_admin";
+
+  try {
+    let query = supabase
+      .from("knowledge_base")
+      .update({ status: "archived", updated_at: new Date() })
+      .eq("id", req.params.id);
+    if (!isSuperAdmin) {
+      query = query.eq("company_id", req.user.company_id);
+    }
+    const { data, error } = await query.select("id").maybeSingle();
+    if (error) throw error;
+    if (!data) return respondTenantMiss(res, req.params.id, isSuperAdmin);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────

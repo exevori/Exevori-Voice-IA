@@ -47,6 +47,37 @@ const twilioClient = twilio(
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
+function isSuperAdmin(req) {
+  return req.user?.role === "super_admin";
+}
+
+function hasTenantMismatch(req, requestedCompanyId) {
+  return !isSuperAdmin(req)
+    && requestedCompanyId
+    && requestedCompanyId !== req.user?.company_id;
+}
+
+function getTargetCompanyId(req, requestedCompanyId) {
+  return isSuperAdmin(req)
+    ? requestedCompanyId || null
+    : req.user?.company_id || null;
+}
+
+async function findTenantResource(table, id, req, columns = "*") {
+  const { data, error } = await supabase
+    .from(table)
+    .select(columns)
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) return { status: 500, message: error.message };
+  if (!data) return { status: 404, message: "Ressource introuvable" };
+  if (!isSuperAdmin(req) && data.company_id !== req.user?.company_id) {
+    return { status: 403, message: "Accès interdit à cette entreprise" };
+  }
+  return { status: 200, data };
+}
+
 // Normalise un numéro de téléphone en E.164 (Canada/USA)
 function normalizePhone(raw) {
   if (!raw) return null;
@@ -98,7 +129,11 @@ function isWithinCallHours(startHour = 9, endHour = 20) {
 
 router.post("/campaigns", express.json(), async (req, res) => {
   const { company_id, name, mission_type, script, daily_call_limit, created_by } = req.body || {};
-  if (!company_id || !name || !mission_type) {
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const companyId = getTargetCompanyId(req, company_id);
+  if (!companyId || !name || !mission_type) {
     return res.status(400).json({ error: "company_id, name et mission_type requis" });
   }
   const validTypes = ["prospecting", "follow_up", "rdv_validation", "announcement"];
@@ -108,12 +143,12 @@ router.post("/campaigns", express.json(), async (req, res) => {
   const { data, error } = await supabase
     .from("outbound_campaigns")
     .insert({
-      company_id,
+      company_id: companyId,
       name: String(name).slice(0, 200),
       mission_type,
       script: String(script || "").slice(0, 5000),
       daily_call_limit: Math.min(Math.max(parseInt(daily_call_limit) || 10, 1), 50),
-      created_by: created_by || null,
+      created_by: isSuperAdmin(req) ? created_by || null : req.user?.profile?.id || null,
     })
     .select()
     .single();
@@ -123,12 +158,15 @@ router.post("/campaigns", express.json(), async (req, res) => {
 
 router.get("/campaigns", async (req, res) => {
   const { company_id } = req.query;
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
-  const { data, error } = await supabase
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const companyId = getTargetCompanyId(req, company_id);
+  let query = supabase
     .from("outbound_campaigns")
-    .select("*, outbound_contacts(count)")
-    .eq("company_id", company_id)
-    .order("created_at", { ascending: false });
+    .select("*, outbound_contacts(count)");
+  if (companyId) query = query.eq("company_id", companyId);
+  const { data, error } = await query.order("created_at", { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   const campaigns = (data || []).map(c => ({
     ...c,
@@ -141,20 +179,18 @@ router.get("/campaigns", async (req, res) => {
 router.get("/campaigns/:id", async (req, res) => {
   const { id } = req.params;
   const { company_id } = req.query;
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
-  const { data: campaign, error } = await supabase
-    .from("outbound_campaigns")
-    .select("*")
-    .eq("id", id)
-    .eq("company_id", company_id)
-    .maybeSingle();
-  if (error) return res.status(500).json({ error: error.message });
-  if (!campaign) return res.status(404).json({ error: "Campagne introuvable" });
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const lookup = await findTenantResource("outbound_campaigns", id, req);
+  if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
+  const campaign = lookup.data;
 
   const { data: contacts } = await supabase
     .from("outbound_contacts")
     .select("id, full_name, phone, email, company_name, language, status, call_attempts, last_called_at, outcome, outcome_notes")
     .eq("campaign_id", id)
+    .eq("company_id", campaign.company_id)
     .order("created_at", { ascending: true });
 
   return res.json({ campaign, contacts: contacts || [] });
@@ -163,7 +199,11 @@ router.get("/campaigns/:id", async (req, res) => {
 router.patch("/campaigns/:id", express.json(), async (req, res) => {
   const { id } = req.params;
   const { company_id, name, script, daily_call_limit, status } = req.body || {};
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const lookup = await findTenantResource("outbound_campaigns", id, req, "id, company_id");
+  if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
   const updates = {};
   if (name !== undefined)               updates.name = String(name).slice(0, 200);
   if (script !== undefined)             updates.script = String(script).slice(0, 5000);
@@ -174,33 +214,35 @@ router.patch("/campaigns/:id", express.json(), async (req, res) => {
     .from("outbound_campaigns")
     .update(updates)
     .eq("id", id)
-    .eq("company_id", company_id)
+    .eq("company_id", lookup.data.company_id)
     .select()
-    .single();
+    .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Campagne introuvable" });
   return res.json({ success: true, campaign: data });
 });
 
 router.delete("/campaigns/:id", async (req, res) => {
   const { id } = req.params;
   const { company_id } = req.query;
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
-  const { data: campaign } = await supabase
-    .from("outbound_campaigns")
-    .select("status")
-    .eq("id", id)
-    .eq("company_id", company_id)
-    .maybeSingle();
-  if (!campaign) return res.status(404).json({ error: "Campagne introuvable" });
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const lookup = await findTenantResource("outbound_campaigns", id, req, "id, company_id, status");
+  if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
+  const campaign = lookup.data;
   if (campaign.status === "active") {
     return res.status(409).json({ error: "Impossible de supprimer une campagne active. Mettez-la en pause d'abord." });
   }
-  const { error } = await supabase
+  const { data: deleted, error } = await supabase
     .from("outbound_campaigns")
     .delete()
     .eq("id", id)
-    .eq("company_id", company_id);
+    .eq("company_id", campaign.company_id)
+    .select("id")
+    .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
+  if (!deleted) return res.status(404).json({ error: "Campagne introuvable" });
   return res.json({ success: true });
 });
 
@@ -211,20 +253,34 @@ router.delete("/campaigns/:id", async (req, res) => {
 router.post("/campaigns/:id/contacts", express.json(), async (req, res) => {
   const { id: campaign_id } = req.params;
   const { company_id, full_name, phone, email, company_name, notes, language } = req.body || {};
-  if (!company_id || !full_name || !phone) {
-    return res.status(400).json({ error: "company_id, full_name et phone requis" });
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
   }
+  if (!full_name || !phone) {
+    return res.status(400).json({ error: "full_name et phone requis" });
+  }
+  const campaignLookup = await findTenantResource(
+    "outbound_campaigns",
+    campaign_id,
+    req,
+    "id, company_id"
+  );
+  if (!campaignLookup.data) {
+    return res.status(campaignLookup.status).json({ error: campaignLookup.message });
+  }
+  const companyId = campaignLookup.data.company_id;
   const normalized = normalizePhone(phone);
   if (!normalized) return res.status(400).json({ error: "Numéro de téléphone invalide" });
 
-  if (await isOnDNC(company_id, normalized)) {
+  if (await isOnDNC(companyId, normalized)) {
     return res.status(409).json({ error: `Le numéro ${normalized} est dans la liste DNC` });
   }
 
   const { data, error } = await supabase
     .from("outbound_contacts")
     .insert({
-      company_id, campaign_id,
+      company_id: companyId,
+      campaign_id,
       full_name: String(full_name).slice(0, 200),
       phone: normalized,
       email: email || null,
@@ -244,18 +300,24 @@ router.post("/campaigns/:id/contacts", express.json(), async (req, res) => {
 
 router.post("/campaigns/:id/contacts/import", upload.single("file"), async (req, res) => {
   const { id: campaign_id } = req.params;
-  const { company_id } = req.body;
+  const { company_id } = req.body || {};
   const file = req.file;
-  if (!company_id || !file) return res.status(400).json({ error: "company_id et file requis" });
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  if (!file) return res.status(400).json({ error: "file requis" });
 
   // Vérifier que la campagne appartient bien à la company
-  const { data: campaign } = await supabase
-    .from("outbound_campaigns")
-    .select("id, status")
-    .eq("id", campaign_id)
-    .eq("company_id", company_id)
-    .maybeSingle();
-  if (!campaign) return res.status(404).json({ error: "Campagne introuvable" });
+  const campaignLookup = await findTenantResource(
+    "outbound_campaigns",
+    campaign_id,
+    req,
+    "id, company_id, status"
+  );
+  if (!campaignLookup.data) {
+    return res.status(campaignLookup.status).json({ error: campaignLookup.message });
+  }
+  const companyId = campaignLookup.data.company_id;
 
   let rows = [];
   try {
@@ -351,11 +413,12 @@ router.post("/campaigns/:id/contacts/import", upload.single("file"), async (req,
     if (!phone) { skipped++; errors.push(`Numéro invalide : ${phone_raw}`); continue; }
 
     // Check DNC
-    const onDNC = await isOnDNC(company_id, phone);
+    const onDNC = await isOnDNC(companyId, phone);
     if (onDNC) { dnc_skipped++; continue; }
 
     toInsert.push({
-      company_id, campaign_id,
+      company_id: companyId,
+      campaign_id,
       full_name: full_name.slice(0, 200),
       phone,
       email:        mapField(row, "email", "courriel") || null,
@@ -388,8 +451,23 @@ router.post("/campaigns/:id/contacts/import", upload.single("file"), async (req,
 router.get("/campaigns/:id/contacts", async (req, res) => {
   const { id: campaign_id } = req.params;
   const { company_id, status } = req.query;
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
-  let q = supabase.from("outbound_contacts").select("*").eq("campaign_id", campaign_id).eq("company_id", company_id);
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const campaignLookup = await findTenantResource(
+    "outbound_campaigns",
+    campaign_id,
+    req,
+    "id, company_id"
+  );
+  if (!campaignLookup.data) {
+    return res.status(campaignLookup.status).json({ error: campaignLookup.message });
+  }
+  let q = supabase
+    .from("outbound_contacts")
+    .select("*")
+    .eq("campaign_id", campaign_id)
+    .eq("company_id", campaignLookup.data.company_id);
   if (status) q = q.eq("status", status);
   const { data, error } = await q.order("created_at", { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
@@ -397,12 +475,40 @@ router.get("/campaigns/:id/contacts", async (req, res) => {
 });
 
 router.delete("/campaigns/:id/contacts/:cid", async (req, res) => {
-  const { cid } = req.params;
+  const { id: campaignId, cid } = req.params;
   const { company_id } = req.query;
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
-  const { error } = await supabase.from("outbound_contacts").delete()
-    .eq("id", cid).eq("company_id", company_id);
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const campaignLookup = await findTenantResource(
+    "outbound_campaigns",
+    campaignId,
+    req,
+    "id, company_id"
+  );
+  if (!campaignLookup.data) {
+    return res.status(campaignLookup.status).json({ error: campaignLookup.message });
+  }
+  const contactLookup = await findTenantResource(
+    "outbound_contacts",
+    cid,
+    req,
+    "id, company_id, campaign_id"
+  );
+  if (!contactLookup.data) {
+    return res.status(contactLookup.status).json({ error: contactLookup.message });
+  }
+  if (contactLookup.data.campaign_id !== campaignId) {
+    return res.status(404).json({ error: "Contact introuvable dans cette campagne" });
+  }
+  const { data, error } = await supabase.from("outbound_contacts").delete()
+    .eq("id", cid)
+    .eq("campaign_id", campaignId)
+    .eq("company_id", campaignLookup.data.company_id)
+    .select("id")
+    .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Contact introuvable" });
   return res.json({ success: true });
 });
 
@@ -413,11 +519,13 @@ router.delete("/campaigns/:id/contacts/:cid", async (req, res) => {
 router.post("/campaigns/:id/launch", express.json(), async (req, res) => {
   const { id } = req.params;
   const { company_id } = req.body || {};
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
 
-  const { data: campaign } = await supabase
-    .from("outbound_campaigns").select("*").eq("id", id).eq("company_id", company_id).maybeSingle();
-  if (!campaign) return res.status(404).json({ error: "Campagne introuvable" });
+  const lookup = await findTenantResource("outbound_campaigns", id, req);
+  if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
+  const campaign = lookup.data;
   if (campaign.status === "active") return res.status(409).json({ error: "Campagne déjà active" });
   if (!campaign.script || campaign.script.trim().length < 20) {
     return res.status(400).json({ error: "Le script de la campagne est vide ou trop court (minimum 20 caractères)" });
@@ -432,10 +540,18 @@ router.post("/campaigns/:id/launch", express.json(), async (req, res) => {
   }
 
   // Passer la campagne en active
-  await supabase.from("outbound_campaigns").update({ status: "active", updated_at: new Date().toISOString() }).eq("id", id);
+  const { data: activated, error: activateError } = await supabase
+    .from("outbound_campaigns")
+    .update({ status: "active", updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("company_id", campaign.company_id)
+    .select("id")
+    .maybeSingle();
+  if (activateError) return res.status(500).json({ error: activateError.message });
+  if (!activated) return res.status(404).json({ error: "Campagne introuvable" });
 
   // Lancer les appels en arrière-plan (non bloquant)
-  processOutboundCalls(campaign, company_id).catch(e =>
+  processOutboundCalls(campaign, campaign.company_id).catch(e =>
     console.error(`[OUTBOUND] processOutboundCalls error campaign=${id}:`, e.message)
   );
 
@@ -445,25 +561,45 @@ router.post("/campaigns/:id/launch", express.json(), async (req, res) => {
 router.post("/campaigns/:id/pause", express.json(), async (req, res) => {
   const { id } = req.params;
   const { company_id } = req.body || {};
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
-  await supabase.from("outbound_campaigns").update({ status: "paused", updated_at: new Date().toISOString() })
-    .eq("id", id).eq("company_id", company_id);
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const lookup = await findTenantResource("outbound_campaigns", id, req, "id, company_id");
+  if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
+  const { data, error } = await supabase
+    .from("outbound_campaigns")
+    .update({ status: "paused", updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("company_id", lookup.data.company_id)
+    .select("id")
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Campagne introuvable" });
   return res.json({ success: true });
 });
 
 router.post("/campaigns/:id/resume", express.json(), async (req, res) => {
   const { id } = req.params;
   const { company_id } = req.body || {};
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
-  const { data: campaign } = await supabase
-    .from("outbound_campaigns").select("*").eq("id", id).eq("company_id", company_id).maybeSingle();
-  if (!campaign) return res.status(404).json({ error: "Campagne introuvable" });
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const lookup = await findTenantResource("outbound_campaigns", id, req);
+  if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
+  const campaign = lookup.data;
   if (!isWithinCallHours(campaign.call_hours_start, campaign.call_hours_end)) {
     return res.status(400).json({ error: "Hors des heures d'appel autorisées" });
   }
-  await supabase.from("outbound_campaigns").update({ status: "active", updated_at: new Date().toISOString() })
-    .eq("id", id).eq("company_id", company_id);
-  processOutboundCalls(campaign, company_id).catch(e =>
+  const { data: resumed, error: resumeError } = await supabase
+    .from("outbound_campaigns")
+    .update({ status: "active", updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("company_id", campaign.company_id)
+    .select("id")
+    .maybeSingle();
+  if (resumeError) return res.status(500).json({ error: resumeError.message });
+  if (!resumed) return res.status(404).json({ error: "Campagne introuvable" });
+  processOutboundCalls(campaign, campaign.company_id).catch(e =>
     console.error(`[OUTBOUND] resume error:`, e.message)
   );
   return res.json({ success: true });
@@ -640,20 +776,28 @@ router.post("/webhooks/call-status", express.urlencoded({ extended: false }), as
 
 router.get("/dnc", async (req, res) => {
   const { company_id } = req.query;
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
-  const { data, error } = await supabase.from("dnc_list").select("*")
-    .eq("company_id", company_id).order("added_at", { ascending: false });
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const companyId = getTargetCompanyId(req, company_id);
+  let query = supabase.from("dnc_list").select("*");
+  if (companyId) query = query.eq("company_id", companyId);
+  const { data, error } = await query.order("added_at", { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ dnc: data || [] });
 });
 
 router.post("/dnc", express.json(), async (req, res) => {
   const { company_id, phone, reason } = req.body || {};
-  if (!company_id || !phone) return res.status(400).json({ error: "company_id et phone requis" });
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const companyId = getTargetCompanyId(req, company_id);
+  if (!companyId || !phone) return res.status(400).json({ error: "company_id et phone requis" });
   const normalized = normalizePhone(phone);
   if (!normalized) return res.status(400).json({ error: "Numéro invalide" });
   const { data, error } = await supabase.from("dnc_list")
-    .upsert({ company_id, phone: normalized, reason: reason || null }, { onConflict: "company_id,phone" })
+    .upsert({ company_id: companyId, phone: normalized, reason: reason || null }, { onConflict: "company_id,phone" })
     .select().single();
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ success: true, entry: data });
@@ -662,9 +806,20 @@ router.post("/dnc", express.json(), async (req, res) => {
 router.delete("/dnc/:id", async (req, res) => {
   const { id } = req.params;
   const { company_id } = req.query;
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
-  const { error } = await supabase.from("dnc_list").delete().eq("id", id).eq("company_id", company_id);
+  if (hasTenantMismatch(req, company_id)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const lookup = await findTenantResource("dnc_list", id, req, "id, company_id");
+  if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
+  const { data, error } = await supabase
+    .from("dnc_list")
+    .delete()
+    .eq("id", id)
+    .eq("company_id", lookup.data.company_id)
+    .select("id")
+    .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "Entrée DNC introuvable" });
   return res.json({ success: true });
 });
 

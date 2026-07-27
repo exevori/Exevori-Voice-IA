@@ -15,22 +15,37 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const EL_KEY   = process.env.ELEVENLABS_API_KEY;
 const EL_BASE  = "https://api.elevenlabs.io";
 
+async function respondTenantMiss(res, id, isSuperAdmin) {
+  if (!isSuperAdmin) {
+    const { data, error } = await supabase
+      .from("calls")
+      .select("id")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (data) return res.status(403).json({ error: "Accès refusé" });
+  }
+  return res.status(404).json({ error: "Appel introuvable" });
+}
+
 // GET /api/v1/calls/:id/recording
 // Proxy streaming MP3 depuis ElevenLabs → client
 router.get("/:id/recording", async (req, res) => {
   const { id }      = req.params;
-  const companyId   = req.user?.company_id;
+  const isSuperAdmin = req.user?.role === "super_admin";
 
-  if (!EL_KEY) return res.status(503).json({ error: "ELEVENLABS_API_KEY non configuré" });
-
-  const { data: call, error } = await supabase
+  let callQuery = supabase
     .from("calls")
     .select("id, company_id, external_id, caller_name")
-    .eq("id", id)
-    .eq("company_id", companyId) // isolation tenant
-    .single();
+    .eq("id", id);
+  if (!isSuperAdmin) {
+    callQuery = callQuery.eq("company_id", req.user.company_id);
+  }
+  const { data: call, error } = await callQuery.maybeSingle();
 
-  if (error || !call) return res.status(404).json({ error: "Appel introuvable" });
+  if (error) return res.status(500).json({ error: error.message });
+  if (!call) return respondTenantMiss(res, id, isSuperAdmin);
+  if (!EL_KEY) return res.status(503).json({ error: "ELEVENLABS_API_KEY non configuré" });
   if (!call.external_id) return res.status(404).json({ error: "no_recording", message: "Aucun enregistrement pour cet appel" });
 
   let elRes;
