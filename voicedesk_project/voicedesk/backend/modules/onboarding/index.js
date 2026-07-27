@@ -424,11 +424,6 @@ router.post("/step/5", express.json(), async (req, res) => {
   if (!process.env.ELEVENLABS_MASTER_AGENT_ID) missing.push("ELEVENLABS_MASTER_AGENT_ID");
   if (missing.length) return res.status(503).json({ error: `Variables manquantes : ${missing.join(", ")}` });
 
-  await supabase.from("onboarding_progress").update({
-    provisioning_status:     "in_progress",
-    provisioning_started_at: new Date().toISOString(),
-  }).eq("company_id", company_id);
-
   try {
     const result = await provisionNewClient({
       companyId:     company_id,
@@ -438,18 +433,22 @@ router.post("/step/5", express.json(), async (req, res) => {
       areaCode:      area_code,
     });
 
-    if (!result.success) {
-      await supabase.from("onboarding_progress").update({
-        provisioning_status: "failed",
-        provisioning_error:  result.error,
-      }).eq("company_id", company_id);
-      return res.status(500).json({ error: result.error, log: result.log });
+    if (
+      !result.success
+      && ["provisioning_in_progress", "provisioning_retry_required"]
+        .includes(result.code)
+    ) {
+      return res.status(409).json({
+        error: result.error,
+        code: result.code,
+        retry_after_seconds: result.retry_after_seconds,
+        log: result.log,
+      });
     }
 
-    await supabase.from("onboarding_progress").update({
-      provisioning_status: "done",
-      provisioning_error:  null,
-    }).eq("company_id", company_id);
+    if (!result.success) {
+      return res.status(500).json({ error: result.error, log: result.log });
+    }
 
     return res.json({
       success:      true,
@@ -459,10 +458,6 @@ router.post("/step/5", express.json(), async (req, res) => {
     });
 
   } catch (err) {
-    await supabase.from("onboarding_progress").update({
-      provisioning_status: "failed",
-      provisioning_error:  err.message,
-    }).eq("company_id", company_id);
     return res.status(500).json({ error: err.message });
   }
 });
