@@ -14,6 +14,10 @@
 import twilio from "twilio";
 import { createClient } from "@supabase/supabase-js";
 import { encryptPassword } from "../../lib/crypto.js";
+import {
+  hasConsentTerminationCapability,
+  prefixRecordingConsentFr,
+} from "../privacy/consent.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -30,13 +34,35 @@ const ELEVENLABS_API   = "https://api.elevenlabs.io";
 const ELEVENLABS_KEY   = process.env.ELEVENLABS_API_KEY;
 // ID de l'agent maître Léa — template utilisé pour créer les agents clients
 const ELEVENLABS_MASTER_AGENT_ID = process.env.ELEVENLABS_MASTER_AGENT_ID;
-// URL du post-call webhook pour TOUS les clients
-const POSTCALL_WEBHOOK_URL = process.env.APP_PUBLIC_URL
-  ? `${process.env.APP_PUBLIC_URL}/api/voice/call-complete`
-  : null;
+const ELEVENLABS_CUSTOM_LLM_SECRET =
+  process.env.ELEVENLABS_CUSTOM_LLM_SECRET;
 
 const PROVISIONING_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
 const ALLOWED_PAYMENT_STATUSES = new Set(["active", "active_paid", "trial"]);
+
+function getCustomLlmConfig(agent) {
+  return (
+    agent?.conversation_config?.agent?.llm?.custom_llm
+    || agent?.conversation_config?.agent?.prompt?.llm?.custom_llm
+    || null
+  );
+}
+
+function hasCustomLlmCredential(customLlm) {
+  if (!customLlm || typeof customLlm !== "object") return false;
+  const credential = customLlm.api_key;
+  return (
+    (typeof credential === "string" && credential.trim().length > 0)
+    || (
+      credential
+      && typeof credential === "object"
+      && (
+        typeof credential.secret_id === "string"
+        || typeof credential.env_var_label === "string"
+      )
+    )
+  );
+}
 
 async function acquireProvisioningLock(companyId) {
   const now = new Date();
@@ -367,6 +393,12 @@ export async function provisionNewClient({ companyId, assistantName, voiceId, sy
     }
     log.push(`Abonnement vérifié : ${sub.payment_status}`);
 
+    if (!ELEVENLABS_CUSTOM_LLM_SECRET) {
+      throw new Error(
+        "ELEVENLABS_CUSTOM_LLM_SECRET requis avant le provisioning"
+      );
+    }
+
     // Valider le chiffrement avant tout achat de ressource externe.
     const encryptedAuthToken = encryptPassword(process.env.TWILIO_AUTH_TOKEN);
 
@@ -387,6 +419,32 @@ export async function provisionNewClient({ companyId, assistantName, voiceId, sy
     }
     lockStartedAt = lock.startedAt;
     log.push("Verrou de provisioning acquis");
+
+    if (
+      !ELEVENLABS_KEY
+      || !ELEVENLABS_MASTER_AGENT_ID
+      || !process.env.TWILIO_ACCOUNT_SID
+      || !process.env.TWILIO_AUTH_TOKEN
+    ) {
+      throw new Error("Configuration fournisseurs de provisioning incomplète");
+    }
+
+    // Vérifier le template avant tout achat. Sa duplication conservera les
+    // outils, le RAG, le workflow et la référence au secret Custom LLM.
+    const masterConfig = await elevenLabsGet(
+      `/v1/convai/agents/${ELEVENLABS_MASTER_AGENT_ID}`
+    );
+    if (!hasCustomLlmCredential(getCustomLlmConfig(masterConfig))) {
+      throw new Error(
+        "Agent maître : authentification Custom LLM absente"
+      );
+    }
+    if (!hasConsentTerminationCapability(masterConfig)) {
+      throw new Error(
+        "Agent maître : outil de fin d'appel obligatoire absent"
+      );
+    }
+    log.push("Agent maître ElevenLabs vérifié");
 
     // ── ÉTAPE 1 : Acheter un numéro Twilio ──────────────────
     log.push("Recherche d'un numéro Twilio disponible...");
@@ -426,21 +484,31 @@ export async function provisionNewClient({ companyId, assistantName, voiceId, sy
     // ── ÉTAPE 2 : Créer un agent ElevenLabs ────────────────
     log.push("Création de l'agent ElevenLabs...");
 
-    // Récupérer la config de l'agent maître
-    const masterConfig = await elevenLabsGet(`/v1/convai/agents/${ELEVENLABS_MASTER_AGENT_ID}`);
-
-    // Créer un nouvel agent basé sur le maître
+    // Dupliquer le maître via l'API officielle afin de préserver exactement
+    // workflow, outils, RAG, secrets et réglages non représentés dans ce code.
     lockStartedAt = await renewProvisioningLock(companyId, lockStartedAt);
-    const newAgent = await elevenLabsPost("/v1/convai/agents/create", {
-      name: `VoiceDesk — ${assistantName}`,
+    const newAgent = await elevenLabsPost(
+      `/v1/convai/agents/${ELEVENLABS_MASTER_AGENT_ID}/duplicate`,
+      { name: `VoiceDesk — ${assistantName}` }
+    );
+    results.elevenLabsAgentId = newAgent.agent_id;
+    lockStartedAt = await renewProvisioningLock(companyId, lockStartedAt);
+
+    // Personnaliser uniquement les champs propres au client. La duplication
+    // conserve les réglages du maître qui ne sont pas modifiés ici.
+    await elevenLabsPatch(`/v1/convai/agents/${newAgent.agent_id}`, {
       conversation_config: {
         ...masterConfig.conversation_config,
         agent: {
           ...masterConfig.conversation_config?.agent,
           prompt: {
+            ...masterConfig.conversation_config?.agent?.prompt,
             prompt: systemPrompt || masterConfig.conversation_config?.agent?.prompt?.prompt || "",
           },
-          first_message: `Bonjour, je suis ${assistantName}. Comment puis-je vous aider aujourd'hui ?`,
+          first_message: prefixRecordingConsentFr(
+            `Je suis ${assistantName}. Comment puis-je vous aider aujourd'hui ?`
+          ),
+          disable_first_message_interruptions: true,
           language: "fr",
         },
         tts: {
@@ -448,17 +516,8 @@ export async function provisionNewClient({ companyId, assistantName, voiceId, sy
           voice_id: voiceId || masterConfig.conversation_config?.tts?.voice_id,
         },
       },
-      platform_settings: {
-        ...masterConfig.platform_settings,
-        // Post-call webhook pour ce client — transmet company_id via meta
-        webhook: POSTCALL_WEBHOOK_URL ? {
-          url: POSTCALL_WEBHOOK_URL,
-          headers: { "x-company-id": companyId },
-        } : undefined,
-      },
     });
 
-    results.elevenLabsAgentId = newAgent.agent_id;
     lockStartedAt = await renewProvisioningLock(companyId, lockStartedAt);
     log.push(`Agent ElevenLabs créé : ${newAgent.agent_id}`);
 
@@ -689,8 +748,7 @@ async function elevenLabsGet(path) {
     headers: { "xi-api-key": ELEVENLABS_KEY },
   });
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`ElevenLabs GET ${path} → ${res.status}: ${body}`);
+    throw new Error(`ElevenLabs GET impossible (${res.status})`);
   }
   return res.json();
 }
@@ -702,8 +760,7 @@ async function elevenLabsPost(path, body) {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`ElevenLabs POST ${path} → ${res.status}: ${text}`);
+    throw new Error(`ElevenLabs POST impossible (${res.status})`);
   }
   return res.json();
 }
@@ -715,8 +772,7 @@ async function elevenLabsPatch(path, body) {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`ElevenLabs PATCH ${path} → ${res.status}: ${text}`);
+    throw new Error(`ElevenLabs PATCH impossible (${res.status})`);
   }
   return res.json();
 }
@@ -728,8 +784,7 @@ async function elDelete(path) {
   });
   if (res.status === 404 || res.status === 204) return null;
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`ElevenLabs DELETE ${path} → ${res.status}: ${text}`);
+    throw new Error(`ElevenLabs DELETE impossible (${res.status})`);
   }
 
   const text = await res.text();

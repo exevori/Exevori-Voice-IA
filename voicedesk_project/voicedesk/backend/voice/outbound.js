@@ -14,6 +14,10 @@ import fastifyFormBody from "@fastify/formbody";
 import twilio from "twilio";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
+import {
+  escapeXmlAttribute,
+  prefixRecordingConsentFr,
+} from "../modules/privacy/consent.js";
 
 dotenv.config();
 
@@ -108,7 +112,7 @@ fastify.post("/outbound/call", async (request, reply) => {
       .update({ twilio_call_sid: call.sid, called_at: new Date() })
       .eq("id", outboundCall.id);
 
-    console.log(`[OUTBOUND] Call started: ${call.sid} → ${contact.phone}`);
+    console.log("[OUTBOUND] Call started");
 
     return reply.send({
       success: true,
@@ -117,9 +121,9 @@ fastify.post("/outbound/call", async (request, reply) => {
       contact_name: contact.full_name,
     });
 
-  } catch (err) {
-    console.error("[OUTBOUND] Error:", err);
-    return reply.code(500).send({ error: err.message });
+  } catch {
+    console.error("[OUTBOUND] Call start failed");
+    return reply.code(500).send({ error: "call_start_failed" });
   }
 });
 
@@ -137,8 +141,11 @@ fastify.all("/twiml/outbound", async (request, reply) => {
     .eq("id", callDbId)
     .single();
 
-  const welcomeGreeting = outboundCall?.opening_script_used ||
-    "Bonjour, je vous appelle au sujet de votre dossier.";
+  const welcomeGreeting = prefixRecordingConsentFr(
+    outboundCall?.opening_script_used ||
+      "Bonjour, je vous appelle au sujet de votre dossier."
+  );
+  const safeWelcomeGreeting = escapeXmlAttribute(welcomeGreeting);
 
   reply.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
     <Response>
@@ -150,7 +157,8 @@ fastify.all("/twiml/outbound", async (request, reply) => {
           elevenlabsTextNormalization="on"
           language="fr-CA"
           transcriptionLanguage="fr-CA"
-          welcomeGreeting="${welcomeGreeting}"
+          welcomeGreeting="${safeWelcomeGreeting}"
+          welcomeGreetingInterruptible="false"
         >
           <Parameter name="callDbId" value="${callDbId}" />
           <Parameter name="companyId" value="${companyId}" />
@@ -199,7 +207,7 @@ fastify.register(async function (fastify) {
           .update({ answered_at: new Date(), status: "in_progress" })
           .eq("id", callDbId);
 
-        console.log(`[OUTBOUND] Connected: ${callSid} — ${outboundCall?.contact_name}`);
+        console.log("[OUTBOUND] Connected");
       }
 
       if (message.type === "prompt" && message.last) {
@@ -236,7 +244,7 @@ fastify.register(async function (fastify) {
       }
 
       if (message.type === "interrupt") {
-        console.log(`[OUTBOUND] Interrupted: ${ws.callSid}`);
+        console.log("[OUTBOUND] Interrupted");
       }
     });
 
@@ -294,9 +302,9 @@ fastify.register(async function (fastify) {
           created_by: "lea_ai",
         });
 
-        console.log(`[OUTBOUND] Saved: ${ws.callSid} — ${duration}s — ${analysis?.outcome}`);
-      } catch (err) {
-        console.error(`[OUTBOUND] Error saving ${ws.callSid}:`, err);
+        console.log(`[OUTBOUND] Saved duration_seconds=${duration}`);
+      } catch {
+        console.error("[OUTBOUND] Save failed");
       }
 
       sessions.delete(ws.callSid);
@@ -460,8 +468,8 @@ async function callAIGateway({ task, userText, conversation, kbContext, language
     if (!response.ok) throw new Error(`AI Gateway ${response.status}`);
     const data = await response.json();
     return data.response || data.text || data.summary || data.script || "";
-  } catch (err) {
-    console.error("[AI Gateway] Error:", err);
+  } catch {
+    console.error("[AI Gateway] Request failed");
     return language === "en-US"
       ? "I'm having a technical issue. Could you hold on?"
       : "J'ai un petit problème technique. Pouvez-vous patienter un instant?";

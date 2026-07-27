@@ -52,8 +52,11 @@ function providerConfig(name) {
  *
  * @param {Array<{role,content}>} messages
  * @param {(token:string)=>void} onToken
- * @param {object} opts {temperature, max_tokens, model, signal, provider}
- * @returns {Promise<{text:string, firstTokenMs:number, totalMs:number, provider:string, reasoningChars:number}>}
+ * @param {object} opts {temperature, max_tokens, model, signal, provider,
+ * tools, tool_choice, parallel_tool_calls, onToolCallDelta, fetchImpl}
+ * @returns {Promise<{text:string, firstTokenMs:number, totalMs:number,
+ * provider:string, reasoningChars:number, toolCalls:Array,
+ * finishReason:string}>}
  */
 export async function streamChat(messages, onToken, opts = {}) {
   const primary  = opts.provider || process.env.LLM_PROVIDER || "fireworks";
@@ -77,14 +80,27 @@ async function streamChatSingle(providerName, messages, onToken, opts) {
     stream: true,
     temperature: opts.temperature ?? 0.6,
     max_tokens: opts.max_tokens ?? 200,
+    ...(Array.isArray(opts.tools) && opts.tools.length
+      ? { tools: opts.tools }
+      : {}),
+    ...(opts.tool_choice !== undefined
+      ? { tool_choice: opts.tool_choice }
+      : {}),
+    ...(opts.parallel_tool_calls !== undefined
+      ? { parallel_tool_calls: opts.parallel_tool_calls }
+      : {}),
   };
 
   const startMs = Date.now();
   let firstTokenMs = null;
   let fullText = "";
   let reasoningChars = 0;
+  let finishReason = "stop";
+  const toolCalls = [];
 
-  const res = await fetch(cfg.url, {
+  const fetchImpl = opts.fetchImpl || globalThis.fetch;
+  if (typeof fetchImpl !== "function") throw new Error("fetch unavailable");
+  const res = await fetchImpl(cfg.url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -110,7 +126,11 @@ async function streamChatSingle(providerName, messages, onToken, opts) {
     if (payload === "[DONE]") return;
     try {
       const json = JSON.parse(payload);
-      const delta = json.choices?.[0]?.delta || {};
+      const choice = json.choices?.[0] || {};
+      const delta = choice.delta || {};
+      if (typeof choice.finish_reason === "string") {
+        finishReason = choice.finish_reason;
+      }
       // DeepSeek/Fireworks émet du reasoning_content (silenced — Léa ne doit pas
       // parler son raisonnement). Groq Llama n'en émet pas.
       if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
@@ -120,6 +140,36 @@ async function streamChatSingle(providerName, messages, onToken, opts) {
         if (firstTokenMs === null) firstTokenMs = Date.now() - startMs;
         fullText += delta.content;
         try { onToken(delta.content); } catch (_) {}
+      }
+      if (Array.isArray(delta.tool_calls) && delta.tool_calls.length) {
+        if (firstTokenMs === null) firstTokenMs = Date.now() - startMs;
+        for (const toolCallDelta of delta.tool_calls) {
+          const index = Number.isInteger(toolCallDelta?.index)
+            ? toolCallDelta.index
+            : 0;
+          const current = toolCalls[index] || {
+            index,
+            id: "",
+            type: "function",
+            function: { name: "", arguments: "" },
+          };
+          if (typeof toolCallDelta?.id === "string") {
+            current.id += toolCallDelta.id;
+          }
+          if (typeof toolCallDelta?.type === "string") {
+            current.type = toolCallDelta.type;
+          }
+          if (typeof toolCallDelta?.function?.name === "string") {
+            current.function.name += toolCallDelta.function.name;
+          }
+          if (typeof toolCallDelta?.function?.arguments === "string") {
+            current.function.arguments += toolCallDelta.function.arguments;
+          }
+          toolCalls[index] = current;
+        }
+        try {
+          opts.onToolCallDelta?.(delta.tool_calls);
+        } catch (_) {}
       }
     } catch (_) {
       // ignore malformed SSE chunk
@@ -145,5 +195,7 @@ async function streamChatSingle(providerName, messages, onToken, opts) {
     totalMs: Date.now() - startMs,
     reasoningChars,
     provider: providerName,
+    toolCalls: toolCalls.filter(Boolean),
+    finishReason,
   };
 }

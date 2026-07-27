@@ -36,7 +36,7 @@ router.get("/:id/recording", async (req, res) => {
 
   let callQuery = supabase
     .from("calls")
-    .select("id, company_id, external_id, caller_name")
+    .select("id, company_id, elevenlabs_conversation_id, caller_name")
     .eq("id", id);
   if (!isSuperAdmin) {
     callQuery = callQuery.eq("company_id", req.user.company_id);
@@ -46,11 +46,11 @@ router.get("/:id/recording", async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   if (!call) return respondTenantMiss(res, id, isSuperAdmin);
   if (!EL_KEY) return res.status(503).json({ error: "ELEVENLABS_API_KEY non configuré" });
-  if (!call.external_id) return res.status(404).json({ error: "no_recording", message: "Aucun enregistrement pour cet appel" });
+  if (!call.elevenlabs_conversation_id) return res.status(404).json({ error: "no_recording", message: "Aucun enregistrement pour cet appel" });
 
   let elRes;
   try {
-    elRes = await fetch(`${EL_BASE}/v1/convai/conversations/${call.external_id}/audio`, {
+    elRes = await fetch(`${EL_BASE}/v1/convai/conversations/${encodeURIComponent(call.elevenlabs_conversation_id)}/audio`, {
       headers: { "xi-api-key": EL_KEY },
     });
   } catch {

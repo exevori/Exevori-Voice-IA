@@ -7,6 +7,10 @@
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import {
+  prefixRecordingConsentEn,
+  prefixRecordingConsentFr,
+} from "../privacy/consent.js";
 
 dotenv.config();
 
@@ -155,11 +159,20 @@ router.post("/", async (req, res) => {
       .maybeSingle();
 
     // Générer les prompts système par défaut si non fournis
-    const defaultGreetingFR = greeting_inbound_fr ||
-      `Bonjour, vous avez rejoint ${companyName}. Je suis ${assistant_name}, comment puis-je vous aider?`;
+    const defaultGreetingFR = prefixRecordingConsentFr(
+      greeting_inbound_fr ||
+      `Vous avez rejoint ${companyName}. Je suis ${assistant_name}, comment puis-je vous aider?`
+    );
 
-    const defaultGreetingEN = greeting_inbound_en ||
-      `Hello, you've reached ${companyName}. This is ${assistant_name}, how may I help you?`;
+    const defaultGreetingEN = prefixRecordingConsentEn(
+      greeting_inbound_en ||
+      `You've reached ${companyName}. This is ${assistant_name}, how may I help you?`
+    );
+
+    const defaultGreetingOutboundFR = prefixRecordingConsentFr(
+      greeting_outbound_fr ||
+      `Je suis ${assistant_name} de ${companyName}.`
+    );
 
     const pronounFR = assistant_gender === "masculine" ? "il" : assistant_gender === "neutral" ? "iel" : "elle";
     const pronounEN = assistant_gender === "masculine" ? "he" : assistant_gender === "neutral" ? "they" : "she";
@@ -210,7 +223,7 @@ Suggest scheduling a meeting if relevant.`;
         language_primary: "fr-CA",
         greeting_inbound_fr: defaultGreetingFR,
         greeting_inbound_en: defaultGreetingEN,
-        greeting_outbound_fr: greeting_outbound_fr || `Bonjour, je suis ${assistant_name} de ${companyName}.`,
+        greeting_outbound_fr: defaultGreetingOutboundFR,
         voicemail_message_fr: voicemail_message_fr || `Bonjour, vous avez un message de ${companyName}. N'hésitez pas à nous rappeler.`,
         signature_email_fr: signature_email_fr || `${assistant_name}\n${companyName}`,
         email_from: email_from || `${assistant_name.toLowerCase().replace(/\s+/g, "-")}@${companyName.toLowerCase().replace(/\s+/g, "-")}.ca`,

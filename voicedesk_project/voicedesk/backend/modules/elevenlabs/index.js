@@ -1,7 +1,7 @@
 // ============================================================
 // EXEVORI VOICE IA — ELEVENLABS CONVERSATIONAL AI (Custom LLM)
 //
-// Endpoint public (sans JWT — ElevenLabs ne peut pas s'authentifier autrement) :
+// Endpoint sans JWT, protégé par un secret partagé configuré dans ElevenLabs :
 //   POST /api/v1/elevenlabs/llm
 //
 // Format reçu d'ElevenLabs : compatible OpenAI Chat Completions
@@ -12,6 +12,7 @@
 //   }
 //
 // Headers ElevenLabs (selon l'agent configuré) :
+//   x-elevenlabs-custom-llm-secret → secret partagé obligatoire
 //   x-elevenlabs-agent-id
 //   x-elevenlabs-call-id
 //   x-elevenlabs-called-number    → numéro Twilio appelé (→ PME)
@@ -26,11 +27,27 @@
 // ============================================================
 
 import express from "express";
-import { findCompanyByTwilioNumber, supabase } from "../voice/lifecycle.js";
+import { supabase } from "../voice/lifecycle.js";
 import { searchSimilarChunks } from "../kb/rag.js";
 import { streamChat } from "../voice/llm.js";
+import {
+  findConsentTerminationToolName,
+  isRecordingConsentRefusal,
+  prefixConsentSystemRuleFr,
+} from "../privacy/consent.js";
+import { createCustomLlmAuthMiddleware } from "./customLlmAuth.js";
+import {
+  extractCustomLlmTenantHints,
+  resolveElevenLabsCompany,
+} from "./tenantResolver.js";
+
+export {
+  createCustomLlmAuthMiddleware,
+  verifyCustomLlmSecret,
+} from "./customLlmAuth.js";
 
 const router = express.Router();
+const requireCustomLlmAuth = createCustomLlmAuthMiddleware();
 
 function extractLastUserText(messages) {
   const arr = Array.isArray(messages) ? messages : [];
@@ -38,40 +55,41 @@ function extractLastUserText(messages) {
   return lastUser?.content?.trim() || "";
 }
 
-async function resolveCompany(toNumber) {
-  if (toNumber) {
-    const { data: pn } = await supabase
-      .from("phone_numbers")
-      .select("company_id")
-      .eq("phone_number", toNumber)
-      .eq("status", "active")
-      .single();
-    if (pn?.company_id) {
-      console.log(`[elevenlabs] tenant via phone_numbers: ${toNumber} → ${pn.company_id}`);
-      return { company_id: pn.company_id };
-    }
+function normalizeConversationMessage(message) {
+  if (!message || typeof message !== "object") return null;
+  if (
+    !["assistant", "user", "tool"].includes(message.role)
+  ) {
+    return null;
   }
-  if (toNumber) {
-    const { data: tc } = await supabase
-      .from("twilio_configs")
-      .select("company_id")
-      .eq("phone_number", toNumber)
-      .single();
-    if (tc?.company_id) {
-      console.log(`[elevenlabs] tenant via twilio_configs: ${toNumber} → ${tc.company_id}`);
-      return { company_id: tc.company_id };
-    }
+
+  const normalized = { role: message.role };
+  if (typeof message.content === "string" || message.content === null) {
+    normalized.content = message.content;
   }
-  const defaultId = process.env.ELEVENLABS_DEFAULT_COMPANY_ID;
-  if (defaultId) {
-    const { data: co } = await supabase
-      .from("companies").select("id").eq("id", defaultId).single();
-    if (co) {
-      console.log(`[elevenlabs] fallback ELEVENLABS_DEFAULT_COMPANY_ID (to_number="${toNumber || "none"}")`);
-      return { company_id: defaultId };
-    }
+  if (typeof message.name === "string") normalized.name = message.name;
+  if (typeof message.tool_call_id === "string") {
+    normalized.tool_call_id = message.tool_call_id;
   }
-  return null;
+  if (Array.isArray(message.tool_calls)) {
+    normalized.tool_calls = message.tool_calls
+      .filter(toolCall => toolCall && typeof toolCall === "object")
+      .map(toolCall => ({
+        id: typeof toolCall.id === "string" ? toolCall.id : "",
+        type: "function",
+        function: {
+          name:
+            typeof toolCall.function?.name === "string"
+              ? toolCall.function.name
+              : "",
+          arguments:
+            typeof toolCall.function?.arguments === "string"
+              ? toolCall.function.arguments
+              : "",
+        },
+      }));
+  }
+  return normalized;
 }
 
 async function buildContactContext(fromNumber, companyId) {
@@ -105,52 +123,101 @@ async function buildContactContext(fromNumber, companyId) {
   return lines.join("\n");
 }
 
+function sendForcedConsentTermination(res, body, toolName) {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  const id = `chatcmpl-consent-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+  const created = Math.floor(Date.now() / 1000);
+  const model = body.model || "custom";
+  const writeChunk = (delta, finishReason = null) => {
+    res.write(`data: ${JSON.stringify({
+      id,
+      object: "chat.completion.chunk",
+      created,
+      model,
+      choices: [{
+        index: 0,
+        delta,
+        finish_reason: finishReason,
+      }],
+    })}\n\n`);
+  };
+
+  writeChunk({ role: "assistant" });
+  writeChunk({
+    content:
+      "Je respecte votre choix. Je mets fin à l’appel maintenant.",
+  });
+  writeChunk({
+    tool_calls: [{
+      index: 0,
+      id: `call_consent_${Math.random().toString(36).slice(2, 12)}`,
+      type: "function",
+      function: {
+        name: toolName,
+        arguments: "{}",
+      },
+    }],
+  });
+  writeChunk({}, "tool_calls");
+  res.write("data: [DONE]\n\n");
+  res.end();
+}
+
 const llmHandler = async (req, res) => {
   const t0 = Date.now();
   const body = req.body || {};
   const messages = Array.isArray(body.messages) ? body.messages : [];
-
-  // 1. Numéro appelé → PME
-  const toNumber = String(
-    req.headers["x-elevenlabs-called-number"]
-    || req.headers["x-elevenlabs-to-number"]
-    || ""
-  ).trim();
-  const fromNumber = String(req.headers["x-elevenlabs-caller-number"] || "").trim();
-  const elAgentId = req.headers["x-elevenlabs-agent-id"] || "";
-  const elCallId = req.headers["x-elevenlabs-call-id"] || "";
-
-  // Log forensique : ElevenLabs ne documente pas tous les headers / payload
-  // qu'il envoie. On dump UNE FOIS pour comprendre, puis on raffinera la
-  // logique de résolution multi-tenant.
-  if (!toNumber) {
-    try {
-      const safeBody = { ...body };
-      if (Array.isArray(safeBody.messages)) {
-        safeBody.messages = safeBody.messages.map(m => ({
-          role: m.role,
-          content: typeof m.content === "string" ? m.content.slice(0, 200) : m.content,
-        }));
-      }
-      console.log("[elevenlabs] FORENSIC headers=", JSON.stringify({
-        "x-elevenlabs-called-number": req.headers["x-elevenlabs-called-number"],
-        "x-elevenlabs-caller-number": req.headers["x-elevenlabs-caller-number"],
-        "x-elevenlabs-agent-id":      req.headers["x-elevenlabs-agent-id"],
-        "x-elevenlabs-call-id":       req.headers["x-elevenlabs-call-id"],
-        "x-elevenlabs-conversation-id": req.headers["x-elevenlabs-conversation-id"],
-        "user-agent":                 req.headers["user-agent"],
-        "x-source":                   req.headers["x-source"],
-        "authorization":              req.headers["authorization"] ? "[present]" : undefined,
-      }));
-      console.log("[elevenlabs] FORENSIC body=", JSON.stringify(safeBody).slice(0, 800));
-    } catch (_) {}
+  const lastUserText = extractLastUserText(messages);
+  const userMessageCount = messages.filter(
+    message => message?.role === "user"
+  ).length;
+  if (
+    isRecordingConsentRefusal(lastUserText, {
+      allowBareRefusal: userMessageCount <= 1,
+    })
+  ) {
+    const terminationTool = findConsentTerminationToolName(body.tools);
+    if (!terminationTool) {
+      console.error("[elevenlabs] consent termination tool unavailable");
+      return res.status(503).json({
+        error: { message: "Consent termination unavailable" },
+      });
+    }
+    sendForcedConsentTermination(res, body, terminationTool);
+    console.log("[elevenlabs] consent refusal enforced");
+    return;
   }
 
-  const company = await resolveCompany(toNumber);
+  // 1. Agent et numéro appelé → PME, sans tenant global de secours.
+  const {
+    agentId,
+    calledNumber,
+    callerNumber: fromNumber,
+  } = extractCustomLlmTenantHints(req);
+  let company;
+  try {
+    company = await resolveElevenLabsCompany({
+      supabase,
+      agentId,
+      calledNumber,
+    });
+  } catch {
+    console.warn("[elevenlabs] tenant lookup unavailable");
+    return res.status(503).json({
+      error: { message: "Tenant lookup unavailable" },
+    });
+  }
 
   if (!company) {
-    console.warn(`[elevenlabs] PME introuvable: to_number="${toNumber}" et pas de ELEVENLABS_DEFAULT_COMPANY_ID utilisable`);
-    return res.status(404).json({ error: { message: `Company not configured (to_number=${toNumber || "none"})` } });
+    console.warn("[elevenlabs] tenant resolution failed");
+    return res.status(404).json({ error: { message: "Company not configured" } });
   }
   const companyId = company.company_id;
 
@@ -164,6 +231,7 @@ const llmHandler = async (req, res) => {
   const assistantName = cfg?.assistant_name || "Léa";
   let systemPrompt = cfg?.system_prompt_voice_fr || cfg?.system_prompt_fr
     || `Tu es ${assistantName}, assistante vocale d'une PME québécoise. Réponds en français du Québec, ton chaleureux et professionnel, phrases courtes adaptées à l'audio.`;
+  systemPrompt = prefixConsentSystemRuleFr(systemPrompt);
 
   const contactCtx = await buildContactContext(fromNumber, companyId);
   if (contactCtx) systemPrompt += contactCtx;
@@ -186,8 +254,8 @@ const llmHandler = async (req, res) => {
           `[Source ${i + 1}] ${c.content || c.text_content || ""}`
         ).join("\n\n");
       }
-    } catch (e) {
-      console.warn(`[elevenlabs] RAG error: ${e.message}`);
+    } catch {
+      console.warn("[elevenlabs] RAG lookup failed");
     }
   }
 
@@ -202,7 +270,7 @@ const llmHandler = async (req, res) => {
   }
   const llmMessages = [
     { role: "system", content: systemBlocks.join("\n\n---\n\n") },
-    ...messages.filter(m => m && m.role && m.role !== "system" && typeof m.content === "string"),
+    ...messages.map(normalizeConversationMessage).filter(Boolean),
   ];
 
   // 5. Streaming SSE format OpenAI Chat Completions
@@ -216,7 +284,7 @@ const llmHandler = async (req, res) => {
   const created = Math.floor(Date.now() / 1000);
   const model = body.model || "custom";
 
-  const writeChunk = (delta, finishReason = null) => {
+  const writeChunk = (delta = {}, finishReason = null) => {
     const payload = {
       id: chunkId,
       object: "chat.completion.chunk",
@@ -225,7 +293,7 @@ const llmHandler = async (req, res) => {
       choices: [
         {
           index: 0,
-          delta: delta ? { content: delta } : {},
+          delta,
           finish_reason: finishReason,
         },
       ],
@@ -248,42 +316,52 @@ const llmHandler = async (req, res) => {
 
   try {
     const result = await streamChat(llmMessages, (delta) => {
-      try { writeChunk(delta); } catch (_) {}
+      try { writeChunk({ content: delta }); } catch (_) {}
     }, {
       signal: abortCtrl.signal,
       temperature: 0.4,
       max_tokens: 150,
+      tools: Array.isArray(body.tools) ? body.tools : undefined,
+      tool_choice: body.tool_choice,
+      parallel_tool_calls: body.parallel_tool_calls,
+      onToolCallDelta: toolCalls => {
+        try { writeChunk({ tool_calls: toolCalls }); } catch (_) {}
+      },
     });
 
     // Si LLM n'a rien produit, envoyer un fallback parlé
-    if (!result.text) {
-      writeChunk("Pardon, je n'ai pas saisi. Pouvez-vous reformuler ?");
+    if (!result.text && result.toolCalls.length === 0) {
+      writeChunk({
+        content: "Pardon, je n'ai pas saisi. Pouvez-vous reformuler ?",
+      });
     }
 
-    // Final chunk : finish_reason="stop"
-    writeChunk(null, "stop");
+    const finishReason =
+      result.toolCalls.length > 0 ? "tool_calls" : result.finishReason;
+    writeChunk({}, finishReason || "stop");
     res.write("data: [DONE]\n\n");
     res.end();
 
     console.log(
-      `[elevenlabs] company=${companyId} from=${fromNumber} `
-      + `el_agent=${elAgentId} el_call=${elCallId} rag_chunks=${ragChunks} `
+      `[elevenlabs] completed rag_chunks=${ragChunks} `
       + `first_token_ms=${result.firstTokenMs} total_ms=${result.totalMs} `
       + `pipeline_ms=${Date.now() - t0} provider=${process.env.LLM_PROVIDER || "?"}`
     );
-  } catch (err) {
-    console.error("[elevenlabs] LLM error:", err.message);
+  } catch {
+    console.error("[elevenlabs] LLM request failed");
     try {
-      writeChunk("Désolée, problème technique. Veuillez reformuler.");
-      writeChunk(null, "stop");
+      writeChunk({
+        content: "Désolée, problème technique. Veuillez reformuler.",
+      });
+      writeChunk({}, "stop");
       res.write("data: [DONE]\n\n");
       res.end();
     } catch (_) {}
   }
 };
 
-router.post("/llm",                 express.json({ limit: "1mb" }), llmHandler);
-router.post("/llm/chat/completions", express.json({ limit: "1mb" }), llmHandler);
-router.post("/chat/completions",     express.json({ limit: "1mb" }), llmHandler);
+router.post("/llm", requireCustomLlmAuth, express.json({ limit: "1mb" }), llmHandler);
+router.post("/llm/chat/completions", requireCustomLlmAuth, express.json({ limit: "1mb" }), llmHandler);
+router.post("/chat/completions", requireCustomLlmAuth, express.json({ limit: "1mb" }), llmHandler);
 
 export default router;

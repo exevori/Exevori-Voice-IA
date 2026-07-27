@@ -31,6 +31,11 @@ import { createClient } from "@supabase/supabase-js";
 import twilio from "twilio";
 import dotenv from "dotenv";
 import ExcelJS from "exceljs";
+import {
+  escapeXmlAttribute,
+  prefixRecordingConsentEn,
+  prefixRecordingConsentFr,
+} from "../privacy/consent.js";
 
 dotenv.config();
 
@@ -551,8 +556,8 @@ router.post("/campaigns/:id/launch", express.json(), async (req, res) => {
   if (!activated) return res.status(404).json({ error: "Campagne introuvable" });
 
   // Lancer les appels en arrière-plan (non bloquant)
-  processOutboundCalls(campaign, campaign.company_id).catch(e =>
-    console.error(`[OUTBOUND] processOutboundCalls error campaign=${id}:`, e.message)
+  processOutboundCalls(campaign, campaign.company_id).catch(() =>
+    console.error(`[OUTBOUND] processOutboundCalls failed campaign=${id}`)
   );
 
   return res.json({ success: true, message: "Campagne lancée. Les appels démarrent." });
@@ -599,8 +604,8 @@ router.post("/campaigns/:id/resume", express.json(), async (req, res) => {
     .maybeSingle();
   if (resumeError) return res.status(500).json({ error: resumeError.message });
   if (!resumed) return res.status(404).json({ error: "Campagne introuvable" });
-  processOutboundCalls(campaign, campaign.company_id).catch(e =>
-    console.error(`[OUTBOUND] resume error:`, e.message)
+  processOutboundCalls(campaign, campaign.company_id).catch(() =>
+    console.error("[OUTBOUND] resume failed")
   );
   return res.json({ success: true });
 });
@@ -667,9 +672,9 @@ async function processOutboundCalls(campaign, company_id) {
       });
       await supabase.from("outbound_contacts").update({ call_attempts: contact.call_attempts + 1 }).eq("id", contact.id);
       await supabase.from("outbound_campaigns").update({ calls_made: campaign.calls_made + 1 + todayMade, updated_at: new Date().toISOString() }).eq("id", campaign.id);
-      console.log(`[OUTBOUND] Appel initié → ${contact.phone} (${contact.full_name})`);
+      console.log(`[OUTBOUND] Appel initié pour la campagne ${campaign.id}`);
     } catch (e) {
-      console.error(`[OUTBOUND] Twilio error → ${contact.phone}:`, e.message);
+      console.error(`[OUTBOUND] Échec Twilio pour la campagne ${campaign.id}`);
       await supabase.from("outbound_contacts").update({
         status: "error",
         outcome_notes: e.message,
@@ -709,9 +714,13 @@ router.post("/webhooks/twiml", express.urlencoded({ extended: false }), async (r
   const script = campaign?.script || "";
   const contactName = contact?.full_name || "vous";
   const lang = contact?.language === "en" ? "en-CA" : "fr-CA";
-  const greeting = lang === "fr-CA"
+  const baseGreeting = lang === "fr-CA"
     ? `Bonjour ${contactName}, je suis Léa, une assistante IA qui appelle au nom d'Exevori.`
     : `Hello ${contactName}, I'm Léa, an AI assistant calling on behalf of Exevori.`;
+  const greeting = lang === "fr-CA"
+    ? prefixRecordingConsentFr(baseGreeting)
+    : prefixRecordingConsentEn(baseGreeting);
+  const safeGreeting = escapeXmlAttribute(greeting);
 
   const backendUrl = process.env.PUBLIC_BACKEND_URL || `http://localhost:${process.env.PORT || 8001}`;
 
@@ -721,8 +730,8 @@ router.post("/webhooks/twiml", express.urlencoded({ extended: false }), async (r
   <Connect>
     <ConversationRelay
       url="wss://${backendUrl.replace(/^https?:\/\//, "")}/api/voice/relay/ws"
-      welcomeGreeting="${greeting}"
-      welcomeGreetingInterruptible="true"
+      welcomeGreeting="${safeGreeting}"
+      welcomeGreetingInterruptible="false"
       language="${lang}"
       ttsLanguage="${lang}"
       ttsProvider="ElevenLabs"

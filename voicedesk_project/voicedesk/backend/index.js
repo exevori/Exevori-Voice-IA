@@ -49,11 +49,17 @@ import notificationsRouter from "./modules/notifications/index.js";
 import outboundRouter from "./modules/outbound/index.js";
 import elevenLabsRouter from "./modules/elevenlabs/index.js";
 import postCallRouter from "./modules/post_call/index.js";
+import privacyRouter from "./modules/privacy/index.js";
 
 // Webhooks externes (Gmail Push, Twilio status, Resend, Calendly)
 import webhooksRouter from "./webhooks/index.js";
 import { startEmailPoller } from "./modules/email/email_poller.js";
 import { startWeeklyReportJob, triggerWeeklyReport } from "./modules/notifications/weekly_report_job.js";
+import { startPrivacyRetentionJob } from "./modules/privacy/retention_job.js";
+import {
+  getPrivacyConsentSyncStatus,
+  startPrivacyConsentSync,
+} from "./modules/privacy/consent_sync.js";
 
 dotenv.config();
 
@@ -115,17 +121,29 @@ app.use(
   validateTwilioSignature
 );
 
+// Le secret Custom LLM est validé dans le router AVANT son parseur JSON.
+// Ce montage doit rester avant les parseurs globaux pour éviter de traiter
+// un corps non authentifié.
+app.use("/api/v1/elevenlabs", elevenLabsRouter);
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // ── HEALTH CHECKS (public) ──
 app.get("/health", (req, res) => {
+  const privacyConsentSync = getPrivacyConsentSyncStatus();
   res.json({
     status: "ok",
     service: "voicedesk-backend",
     version: "1.0.0",
     timestamp: new Date().toISOString(),
     uptime_seconds: Math.round(process.uptime()),
+    privacy_consent_sync: {
+      ready: privacyConsentSync.ready,
+      status: privacyConsentSync.status,
+      attempt: privacyConsentSync.attempt,
+      next_retry_at: privacyConsentSync.nextRetryAt,
+    },
   });
 });
 
@@ -140,9 +158,6 @@ app.get("/", (req, res) => {
 
 // ── WEBHOOKS EXTERNES (Gmail, Twilio, Resend, Calendly) - pas d'auth ──
 app.use("/webhooks", webhooksRouter);
-
-// ── ELEVENLABS CUSTOM LLM (public, sans JWT — appelé par ElevenLabs) ──
-app.use("/api/v1/elevenlabs", elevenLabsRouter);
 
 // ── ELEVENLABS POST-CALL WEBHOOK (public, sans JWT) ──
 // Route déjà montée plus haut (avant le json parser, pour HMAC body raw)
@@ -180,6 +195,7 @@ app.use("/api/v1/onboarding",     requireAuth, onboardingRouter);
 app.use("/api/v1/import",         requireAuth, importRouter);
 app.use("/api/v1/notifications",  requireAuth, notificationsRouter);
 app.use("/api/v1/outbound",       requireAuth, enforceTenantOwnership, outboundRouter);
+app.use("/api/v1/privacy",        requireAuth, enforceTenantOwnership, privacyRouter);
 
 // ── ROUTES ADMIN (super_admin uniquement) ──
 app.use("/api/v1/admin", requireAuth, requireRole("super_admin"), adminRouter);
@@ -227,7 +243,17 @@ server.listen(PORT, () => {
   });
 });
 
-startEmailPoller();
-startWeeklyReportJob();
+if (process.env.DISABLE_BACKGROUND_JOBS !== "true") {
+  startEmailPoller();
+  startWeeklyReportJob();
+}
+
+if (process.env.DISABLE_PRIVACY_RETENTION_JOB !== "true") {
+  startPrivacyRetentionJob();
+}
+
+if (process.env.DISABLE_PRIVACY_CONSENT_SYNC !== "true") {
+  void startPrivacyConsentSync({ logger });
+}
 
 export default app;

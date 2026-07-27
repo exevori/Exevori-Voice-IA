@@ -25,10 +25,19 @@ import express from "express";
 import crypto from "crypto";
 import { supabase } from "../voice/lifecycle.js";
 import { streamChat } from "../voice/llm.js";
+import {
+  extractPostCallTenantHints,
+  resolveElevenLabsCompany,
+} from "../elevenlabs/tenantResolver.js";
+import {
+  isPostCallTranscription,
+  normalizeConversationId,
+  reservePostCall,
+  transcriptHasConsentRefusal,
+} from "./idempotency.js";
+import { shouldAcceptElevenLabsWebhookSignature } from "./signaturePolicy.js";
 
 const router = express.Router();
-
-let forensicDone = false;
 
 /**
  * Analyse post-appel via Groq : extrait intent, confidence, outcome, summary, hesitations
@@ -95,8 +104,8 @@ Une hésitation se détecte quand l'assistante dit "je vais transmettre votre qu
           }))
         : [],
     };
-  } catch (e) {
-    console.warn(`[post-call] analyzeCall LLM JSON parse error: ${e.message}`);
+  } catch {
+    console.warn("[post-call] call analysis failed");
     return {
       summary: existingSummary || "",
       intent: "unknown",
@@ -172,24 +181,10 @@ router.post("/", async (req, res) => {
   const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
   const sigStatus = verifyElevenLabsSignature(rawBody, sigHeader, secret);
 
-  if (sigStatus === "bad_signature" || sigStatus === "stale" || sigStatus === "invalid_format") {
-    // Debug temporaire pour comprendre les rejections (à retirer plus tard)
-    const parts = String(sigHeader).split(",").reduce((acc, kv) => {
-      const [k, v] = kv.split("="); if (k && v) acc[k.trim()] = v.trim(); return acc;
-    }, {});
-    if (parts.t && parts.v0) {
-      const payload = `${parts.t}.${rawBody}`;
-      const computed = crypto.createHmac("sha256", secret).update(payload).digest("hex");
-      console.warn(`[post-call] SIG_DEBUG status=${sigStatus} ts=${parts.t} got=${parts.v0.slice(0,16)}... computed=${computed.slice(0,16)}... bodyLen=${rawBody.length} bodyHead=${rawBody.slice(0,80).replace(/\s+/g," ")}`);
-    }
-    console.warn(`[post-call] signature REJECTED: ${sigStatus}`);
-    return res.status(401).json({ success: false, error: `signature ${sigStatus}` });
+  if (!shouldAcceptElevenLabsWebhookSignature(sigStatus)) {
+    console.warn("[post-call] signature rejected");
+    return res.status(401).json({ success: false, error: "invalid signature" });
   }
-  // Cas tolérés (en dev/test local sans header) : "missing" et "no_secret" — on log, on accepte.
-  if (sigStatus !== "ok") {
-    console.warn(`[post-call] signature ${sigStatus} — accepted (dev/test mode)`);
-  }
-
   // Parse JSON manuellement (on a utilisé express.raw pour préserver le body pour HMAC)
   let body = {};
   try {
@@ -198,30 +193,19 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ success: false, error: "invalid JSON" });
   }
 
-  // 1. Forensic log (1 fois pour comprendre la structure réelle)
-  if (!forensicDone) {
-    try {
-      const dump = JSON.stringify(body).slice(0, 4000);
-      console.log("[post-call] FORENSIC body (first 4KB):", dump);
-      forensicDone = true;
-    } catch (_) {}
+  if (!isPostCallTranscription(body)) {
+    return res.status(200).json({ success: true, ignored: true });
   }
 
   try {
     // 2. Extraction des champs (multi-chemins pour robustesse)
     const data = body.data || body;
-    const callerNumber = String(
-      getValue(data, "metadata.phone_call.external_number")
-      || getValue(data, "metadata.phone_call.caller_number")
-      || getValue(data, "metadata.caller_number")
-      || body.caller_number
-      || ""
-    ).trim();
-    const calledNumber = String(
-      getValue(data, "metadata.phone_call.agent_number")
-      || getValue(data, "metadata.phone_call.called_number")
-      || ""
-    ).trim();
+    const {
+      agentId,
+      calledNumber,
+      callerNumber,
+      callSid: resolvedCallSid,
+    } = extractPostCallTenantHints(body);
     const durationSecs = Number(
       getValue(data, "metadata.call_duration_secs")
       || getValue(data, "metadata.duration_secs")
@@ -229,31 +213,140 @@ router.post("/", async (req, res) => {
       || 0
     );
     const transcriptArr = data.transcript || body.transcript || [];
-    const transcriptText = reconstructTranscript(transcriptArr);
-    const summary = String(
-      getValue(data, "analysis.transcript_summary")
-      || getValue(data, "summary")
-      || ""
-    ).trim();
+    const consentRefused = transcriptHasConsentRefusal(transcriptArr);
+    const transcriptText = consentRefused
+      ? ""
+      : reconstructTranscript(transcriptArr);
+    const summary = consentRefused
+      ? ""
+      : String(
+          getValue(data, "analysis.transcript_summary")
+          || getValue(data, "summary")
+          || ""
+        ).trim();
     const twilioCallSid = String(
-      getValue(data, "metadata.phone_call.call_sid")
+      resolvedCallSid
+      || getValue(data, "metadata.phone_call.call_sid")
       || getValue(data, "twilio_call_sid")
       || ""
     ).trim();
-    const conversationId = String(
-      data.conversation_id || body.conversation_id || ""
-    ).trim();
-
-    const companyId = process.env.ELEVENLABS_DEFAULT_COMPANY_ID;
-    if (!companyId) {
-      console.warn("[post-call] ELEVENLABS_DEFAULT_COMPANY_ID manquant — abandon");
-      return res.status(500).json({ success: false, error: "default company not configured" });
+    const conversationId = normalizeConversationId(
+      data.conversation_id ?? body.conversation_id
+    );
+    if (!conversationId) {
+      return res.status(400).json({
+        success: false,
+        error: "invalid conversation_id",
+      });
     }
+
+    const company = await resolveElevenLabsCompany({
+      supabase,
+      agentId,
+      calledNumber,
+    });
+    if (!company) {
+      console.warn("[post-call] tenant resolution failed");
+      return res.status(consentRefused ? 503 : 422).json(
+        consentRefused
+          ? {
+              success: false,
+              error: "privacy cleanup unavailable",
+            }
+          : {
+              success: false,
+              error: "tenant not configured",
+            }
+      );
+    }
+    const companyId = company.company_id;
+
+    // Un refus de consentement prime sur tout le pipeline post-appel.
+    // Aucun appel, contact, résumé, transcript, rendez-vous ou apprentissage
+    // n'est persisté. La RPC atomique ne conserve que les identifiants
+    // techniques nécessaires à leur suppression chez les fournisseurs.
+    if (consentRefused) {
+      const { data: cleanup, error: cleanupError } = await supabase.rpc(
+        "enqueue_consent_refusal_cleanup",
+        {
+          p_company_id: companyId,
+          p_conversation_id: conversationId,
+          p_twilio_call_sid: twilioCallSid || null,
+        }
+      );
+
+      if (cleanupError) {
+        console.error("[post-call] consent-refusal cleanup enqueue failed");
+        return res.status(503).json({
+          success: false,
+          error: "privacy cleanup unavailable",
+        });
+      }
+
+      console.log(
+        "[post-call] consent refusal honored; provider cleanup queued "
+        + `external_deletions=${Number(cleanup?.external_deletions_enqueued) || 0}`
+      );
+      return res.status(200).json({
+        success: true,
+        consent_refused: true,
+        external_cleanup: "queued",
+        external_deletions_enqueued:
+          Number(cleanup?.external_deletions_enqueued) || 0,
+      });
+    }
+
+    // Réserver la conversation avant tout effet secondaire. L'index unique
+    // PostgreSQL arbitre les livraisons simultanées.
+    const callRow = {
+      company_id: companyId,
+      contact_id: null,
+      twilio_call_sid: twilioCallSid || conversationId,
+      elevenlabs_conversation_id: conversationId,
+      caller_phone: callerNumber || null,
+      duration_seconds: Math.max(0, Math.floor(durationSecs)),
+      status: "completed",
+      language_used: "fr-CA",
+      ai_summary: summary || null,
+      ai_transcript: transcriptText || null,
+      ended_at: new Date().toISOString(),
+    };
+    let reservation;
+    try {
+      reservation = await reservePostCall({
+        supabase,
+        companyId,
+        conversationId,
+        callRow,
+      });
+    } catch {
+      console.error("[post-call] primary call persistence failed");
+      return res.status(503).json({
+        success: false,
+        error: "call persistence unavailable",
+      });
+    }
+
+    if (reservation.status === "duplicate") {
+      return res.status(200).json({
+        success: true,
+        duplicate: true,
+        call_id: reservation.callId,
+      });
+    }
+    if (reservation.status === "conflict") {
+      console.warn("[post-call] conversation identity conflict");
+      return res.status(409).json({
+        success: false,
+        error: "conversation conflict",
+      });
+    }
+    const callId = reservation.callId;
 
     // 3. Trouver / créer le contact par téléphone
     let contactId = null;
     if (callerNumber) {
-      const { data: existing } = await supabase
+      const { data: existing, error: contactLookupError } = await supabase
         .from("contacts")
         .select("id")
         .eq("company_id", companyId)
@@ -261,12 +354,15 @@ router.post("/", async (req, res) => {
         .limit(1)
         .maybeSingle();
 
-      if (existing) {
+      if (contactLookupError) {
+        console.warn("[post-call] contact lookup failed");
+      } else if (existing) {
         contactId = existing.id;
         // Met à jour last_interaction_at
         await supabase.from("contacts")
           .update({ last_interaction_at: new Date().toISOString() })
-          .eq("id", contactId);
+          .eq("id", contactId)
+          .eq("company_id", companyId);
       } else {
         const { data: created, error: insErr } = await supabase
           .from("contacts")
@@ -281,35 +377,23 @@ router.post("/", async (req, res) => {
           .select("id")
           .single();
         if (insErr) {
-          console.error("[post-call] insert contact error:", insErr.message);
+          console.error("[post-call] contact insert failed");
         } else {
           contactId = created.id;
         }
       }
     }
 
-    // 4. INSERT calls (table existante) — version initiale (intent/conf seront mis à jour après analyse)
-    const callRow = {
-      company_id: companyId,
-      contact_id: contactId,
-      twilio_call_sid: twilioCallSid || conversationId || null,
-      caller_phone: callerNumber || null,
-      duration_seconds: Math.max(0, Math.floor(durationSecs)),
-      status: "completed",
-      language_used: "fr-CA",
-      ai_summary: summary || null,
-      ai_transcript: transcriptText || null,
-      ended_at: new Date().toISOString(),
-    };
-    const { data: callInserted, error: callErr } = await supabase
-      .from("calls")
-      .insert(callRow)
-      .select("id")
-      .single();
-    if (callErr) {
-      console.error("[post-call] insert calls error:", callErr.message);
+    if (contactId) {
+      const { error: callContactError } = await supabase
+        .from("calls")
+        .update({ contact_id: contactId })
+        .eq("id", callId)
+        .eq("company_id", companyId);
+      if (callContactError) {
+        console.warn("[post-call] call contact link failed");
+      }
     }
-    const callId = callInserted?.id || null;
 
     // 4b. Analyse Groq post-call : intent / confidence / outcome / summary fin / hesitations
     let analysis = { summary, intent: null, confidence: null, outcome: null, hesitations: [] };
@@ -321,7 +405,9 @@ router.post("/", async (req, res) => {
           intent: analysis.intent,
           confidence_score: analysis.confidence,
           outcome: analysis.outcome,
-        }).eq("id", callId);
+        })
+          .eq("id", callId)
+          .eq("company_id", companyId);
       }
     }
 
@@ -344,7 +430,7 @@ router.post("/", async (req, res) => {
         .select("id")
         .single();
       if (lsErr) {
-        console.warn("[post-call] insert learning_suggestions error:", lsErr.message);
+        console.warn("[post-call] learning suggestion insert failed");
       } else if (ls?.id) {
         learningInserted.push(ls.id);
       }
@@ -369,16 +455,14 @@ router.post("/", async (req, res) => {
         .select("id")
         .single();
       if (apptErr) {
-        console.error("[post-call] insert appointments error:", apptErr.message);
+        console.error("[post-call] appointment insert failed");
       } else {
         appointmentCreated = appt?.id || null;
       }
     }
 
     console.log(
-      `[post-call] company=${companyId} caller=${callerNumber} duration=${durationSecs}s `
-      + `contact_id=${contactId} call_id=${callId} appointment_id=${appointmentCreated || "—"} `
-      + `intent=${analysis.intent || "—"} confidence=${analysis.confidence ?? "—"} outcome=${analysis.outcome || "—"} `
+      `[post-call] completed duration_seconds=${Math.max(0, Math.floor(durationSecs))} `
       + `hesitations=${(analysis.hesitations || []).length} learning_inserted=${learningInserted.length} `
       + `transcript_len=${transcriptText.length} summary_len=${(analysis.summary || summary).length}`
     );
@@ -394,9 +478,9 @@ router.post("/", async (req, res) => {
       hesitations_detected: (analysis.hesitations || []).length,
       learning_suggestions_created: learningInserted.length,
     });
-  } catch (err) {
-    console.error("[post-call] error:", err.message);
-    return res.status(500).json({ success: false, error: err.message });
+  } catch {
+    console.error("[post-call] processing failed");
+    return res.status(500).json({ success: false, error: "internal error" });
   }
 });
 
