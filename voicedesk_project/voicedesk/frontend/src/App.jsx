@@ -29,6 +29,8 @@ import OnboardingSuccess from "./pages/OnboardingSuccess.jsx";
 import Signup from "./pages/Signup.jsx";
 import Landing from "./pages/Landing.jsx";
 import Monitoring from "./pages/Monitoring.jsx";
+import ForgotPassword from "./pages/ForgotPassword.jsx";
+import ResetPassword from "./pages/ResetPassword.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext.jsx";
 
 import "./styles/global.css";
@@ -58,6 +60,9 @@ function App() {
           <Route path="/landing" element={<Landing />} />
           <Route path="/signup" element={<Signup />} />
           <Route path="/onboarding/success" element={<OnboardingSuccess />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/reset-password/new" element={<ResetPassword />} />
 
           <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />

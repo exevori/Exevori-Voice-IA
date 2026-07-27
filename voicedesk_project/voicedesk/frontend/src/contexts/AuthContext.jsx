@@ -7,7 +7,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { createClient } from "@supabase/supabase-js";
 import { initLanguageFromProfile } from "../i18n";
 
-const supabase = createClient(
+export const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
@@ -20,6 +20,7 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null);
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
   const [impersonatedCompany, setImpersonatedCompany] = useState(() => {
     try {
       const raw = localStorage.getItem(IMPERSONATE_KEY);
@@ -38,7 +39,11 @@ export function AuthProvider({ children }) {
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setIsPasswordRecovery(true);
+      }
+
       if (session) {
         setUser(session.user);
         setToken(session.access_token);
@@ -47,6 +52,7 @@ export function AuthProvider({ children }) {
         setUser(null);
         setProfile(null);
         setToken(null);
+        setIsPasswordRecovery(false);
         setImpersonatedCompany(null);
         try { localStorage.removeItem(IMPERSONATE_KEY); } catch {}
         setLoading(false);
@@ -85,9 +91,14 @@ export function AuthProvider({ children }) {
     setUser(null);
     setProfile(null);
     setToken(null);
+    setIsPasswordRecovery(false);
     setImpersonatedCompany(null);
     try { localStorage.removeItem(IMPERSONATE_KEY); } catch {}
   };
+
+  const clearPasswordRecovery = useCallback(() => {
+    setIsPasswordRecovery(false);
+  }, []);
 
   // === IMPERSONATION (super_admin only) ===
   const impersonateCompany = useCallback((company) => {
@@ -112,8 +123,10 @@ export function AuthProvider({ children }) {
         profile,
         token,
         loading,
+        isPasswordRecovery,
         signIn,
         signOut,
+        clearPasswordRecovery,
         impersonatedCompany,
         impersonateCompany,
         effectiveCompanyId,

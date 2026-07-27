@@ -3,7 +3,7 @@
 // ============================================================
 
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Mail, Lock, ArrowRight, AlertCircle } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext.jsx";
@@ -150,13 +150,13 @@ export default function Login() {
           </Button>
 
           <div className="text-center">
-            <a
-              href="/reset-password"
+            <Link
+              to="/forgot-password"
               data-testid="login-forgot-link"
               className="text-xs text-text-secondary transition-colors hover:text-brand"
             >
               {t("auth.login.forgotPassword")}
-            </a>
+            </Link>
           </div>
         </form>
       </div>
