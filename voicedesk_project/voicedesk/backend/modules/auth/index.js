@@ -10,6 +10,7 @@ import { Resend } from "resend";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import { buildInvitationEmail, buildPasswordResetEmail } from "../../../frontend/src/utils/auth-helpers.js";
+import { requireAuth, requireRole } from "../../middleware/auth.js";
 
 dotenv.config();
 
@@ -75,34 +76,38 @@ router.post("/register", async (req, res) => {
     userId = auth.user.id;
 
     // 3. Profil
-    await supabase.from("profiles").insert({
+    const { error: pErr } = await supabase.from("profiles").insert({
       user_id: userId, company_id: companyId,
       full_name: contact_name, email: contact_email,
       role: "company_admin", status: "active",
     });
+    if (pErr) throw new Error(`Profil : ${pErr.message}`);
 
     // 4. Subscription trial 14 jours
     const trialEnd = new Date();
     trialEnd.setDate(trialEnd.getDate() + 14);
-    await supabase.from("subscriptions").insert({
+    const { error: sErr } = await supabase.from("subscriptions").insert({
       company_id: companyId, plan_name: plan,
       monthly_price: PLAN_PRICES[plan] || 159,
       payment_status: "trial",
       trial_ends_at: trialEnd.toISOString(),
     });
+    if (sErr) throw new Error(`Abonnement : ${sErr.message}`);
 
     // 5. assistant_configs vide
-    await supabase.from("assistant_configs").insert({
+    const { error: cfgErr } = await supabase.from("assistant_configs").insert({
       company_id: companyId, assistant_name: "Léa",
-      tone: "professional", language: "fr-CA",
-      confidence_threshold: 80, created_at: new Date().toISOString(),
+      tone: "professional", language_primary: "fr-CA",
+      created_at: new Date().toISOString(),
     });
+    if (cfgErr) throw new Error(`Configuration assistante : ${cfgErr.message}`);
 
     // 6. onboarding_progress
-    await supabase.from("onboarding_progress").insert({
+    const { error: oErr } = await supabase.from("onboarding_progress").insert({
       company_id: companyId, current_step: 1,
       completed_steps: [], provisioning_status: "idle",
     });
+    if (oErr) throw new Error(`Onboarding : ${oErr.message}`);
 
     // 7. Email de bienvenue (non bloquant)
     try {
@@ -140,7 +145,7 @@ router.post("/register", async (req, res) => {
   }
 });
 
-router.post("/invite", async (req, res) => {
+router.post("/invite", requireAuth, requireRole("super_admin"), async (req, res) => {
   const {
     company_name, contact_name, contact_email, phone, city,
     sector, plan, sent_by
@@ -232,7 +237,7 @@ router.post("/invite", async (req, res) => {
 // POST /api/v1/auth/invite/resend
 // Renvoyer une invitation
 // ─────────────────────────────────────────────────────────────
-router.post("/invite/resend", async (req, res) => {
+router.post("/invite/resend", requireAuth, requireRole("super_admin"), async (req, res) => {
   const { invitation_id } = req.body;
 
   try {
