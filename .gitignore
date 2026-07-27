@@ -77,6 +77,8 @@ agenthub/agents/youtube/db
 .cache/
 
 memory/test_credentials.md
+.task1-*
+.qa-credentials
 
 # Mobile development
 android-sdk/
