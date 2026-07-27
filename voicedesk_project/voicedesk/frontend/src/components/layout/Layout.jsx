@@ -7,8 +7,8 @@ import React from "react";
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
-  LayoutDashboard, Phone, Mail, Calendar, Users, BookOpen,
-  Settings, LifeBuoy, BarChart3, Brain, LogOut,
+  LayoutDashboard, Phone, Calendar, Users, BookOpen, CreditCard,
+  Settings, LifeBuoy, Brain, LogOut,
 } from "lucide-react";
 import LanguageSwitcher from "../common/LanguageSwitcher.jsx";
 import NotificationBell from "../common/NotificationBell.jsx";
@@ -19,14 +19,12 @@ import { cn } from "../../lib/utils";
 const NAV_ITEMS = [
   { path: "/dashboard", icon: LayoutDashboard, key: "dashboard" },
   { path: "/calls",     icon: Phone,           key: "calls" },
-  { path: "/outbound",  icon: Phone,           key: "outbound" },
-  { path: "/emails",    icon: Mail,            key: "emails" },
   { path: "/crm",       icon: Users,           key: "crm" },
   { path: "/calendar",  icon: Calendar,        key: "calendar" },
   { path: "/knowledge", icon: BookOpen,        key: "knowledge" },
-  { path: "/analytics", icon: BarChart3,       key: "analytics", role: "company_admin" },
-  { path: "/config",    icon: Settings,        key: "config" },
+  { path: "/billing",   icon: CreditCard,      key: "billing" },
   { path: "/support",   icon: LifeBuoy,        key: "support" },
+  { path: "/config",    icon: Settings,        key: "config" },
 ];
 
 const ADMIN_NAV_ITEMS = [
