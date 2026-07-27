@@ -17,6 +17,10 @@ import dotenv from "dotenv";
 import { logger, requestLogger } from "./lib/logger.js";
 import { requireAuth, requireRole } from "./middleware/auth.js";
 import { enforceTenantOwnership } from "./middleware/enforceTenantOwnership.js";
+import { validateTwilioSignature } from "./middleware/validateTwilioSignature.js";
+import { validateStripeSignature } from "./middleware/validateStripeSignature.js";
+import { validateElevenLabsSignature } from "./middleware/validateElevenLabsSignature.js";
+import { validateCalendlySignature } from "./middleware/validateCalendlySignature.js";
 
 // Modules backend (15)
 import authRouter from "./modules/auth/index.js";
@@ -78,6 +82,7 @@ app.use("/api", rateLimit({
 // On route uniquement /webhooks/stripe → billingRouter pour éviter le doublon
 app.post("/webhooks/stripe",
   express.raw({ type: "application/json" }),
+  validateStripeSignature,
   (req, res, next) => {
     req.url = "/webhook-stripe"; // mappe vers la route interne du billing module
     billingRouter(req, res, next);
@@ -88,6 +93,7 @@ app.post("/webhooks/stripe",
 // Le body brut est nécessaire pour vérifier la signature ElevenLabs-Signature
 app.post("/api/voice/call-complete",
   express.raw({ type: "*/*", limit: "2mb" }),
+  validateElevenLabsSignature,
   (req, res, next) => {
     req.url = "/"; // mappe vers la route interne du post_call module
     postCallRouter(req, res, next);
@@ -95,6 +101,20 @@ app.post("/api/voice/call-complete",
 );
 
 // ── JSON parser pour le reste ──
+// Webhook Calendly public : corps brut requis pour la signature HMAC-SHA256.
+// Le traitement metier complet de Calendly reste reserve a la Tache 11.
+app.post("/webhooks/calendly",
+  express.raw({ type: "application/json", limit: "2mb" }),
+  validateCalendlySignature
+);
+
+// Les callbacks Twilio sont des formulaires signes avec HMAC-SHA1.
+app.use(
+  "/webhooks/twilio",
+  express.urlencoded({ extended: false, limit: "100kb" }),
+  validateTwilioSignature
+);
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
