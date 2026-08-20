@@ -4,12 +4,14 @@
 // Détail contact via Sheet slide-in (3 tabs)
 // ============================================================
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 import {
-  Users, Search, FlameKindling, Snowflake, UserPlus, ShoppingBag, Sun,
+  Users, Snowflake, UserPlus, ShoppingBag,
   Phone, Mail, MessageSquare, Calendar as CalendarIcon, Tag, Activity,
-  ChevronDown, Plus, Upload, Eye, MoreHorizontal, Sparkles, Pencil, Trash2,
+  Plus, Upload, Eye, Sparkles, Pencil, Archive, GitMerge, PhoneCall,
+  CalendarPlus, ShieldCheck, AlertTriangle, Loader2,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { Badge } from "../components/ui/badge.jsx";
@@ -26,11 +28,11 @@ const API = import.meta.env.VITE_API_URL || "";
 
 // ─── Status meta ────────────────────────────────────────────────
 const STATUS_META = {
-  hot:      { label: "Chaud",   icon: FlameKindling, dot: "bg-brand-red",    variant: "red" },
-  warm:     { label: "Tiède",   icon: Sun,           dot: "bg-brand-orange", variant: "orange" },
-  customer: { label: "Client",  icon: ShoppingBag,   dot: "bg-brand-green",  variant: "green" },
-  new:      { label: "Nouveau", icon: UserPlus,      dot: "bg-brand",        variant: "default" },
-  cold:     { label: "Froid",   icon: Snowflake,     dot: "bg-white/30",     variant: "ghost" },
+  new:       { label: "Nouveau",  icon: UserPlus,    dot: "bg-brand",        variant: "default" },
+  qualified: { label: "Qualifié", icon: Sparkles,    dot: "bg-brand-purple", variant: "purple" },
+  client:    { label: "Client",   icon: ShoppingBag, dot: "bg-brand-green",  variant: "green" },
+  lost:      { label: "Perdu",    icon: Snowflake,   dot: "bg-brand-red",    variant: "red" },
+  archived:  { label: "Archivé",  icon: Archive,     dot: "bg-white/30",     variant: "ghost" },
 };
 
 // ────────────────────────────────────────────────────────────────
@@ -38,7 +40,8 @@ const STATUS_META = {
 // ────────────────────────────────────────────────────────────────
 export default function Contacts() {
   const { t, i18n } = useTranslation();
-  const { token, effectiveCompanyId } = useAuth();
+  const navigate = useNavigate();
+  const { token, effectiveCompanyId, profile } = useAuth();
 
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -49,31 +52,100 @@ export default function Contacts() {
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [toast, setToast] = useState(null);
+  const [mergeSelection, setMergeSelection] = useState(null);
+  const loadSequenceRef = useRef(0);
+  const loadControllerRef = useRef(null);
+  const canMerge = ["company_admin", "super_admin"].includes(profile?.role);
 
   useEffect(() => {
-    if (!token || !effectiveCompanyId) { setLoading(false); return; }
+    loadControllerRef.current?.abort();
+    loadSequenceRef.current += 1;
+    setContacts([]);
+    setSelected(null);
+    setFormContact(null);
+    setShowForm(false);
+    setShowImport(false);
+    setMergeSelection(null);
+    setToast(null);
+
+    if (!token || !effectiveCompanyId) {
+      setLoading(false);
+      return undefined;
+    }
     load();
+    return () => {
+      loadControllerRef.current?.abort();
+      loadSequenceRef.current += 1;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, effectiveCompanyId]);
 
   async function load() {
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    const sequence = ++loadSequenceRef.current;
+    loadControllerRef.current = controller;
     setLoading(true);
     try {
-      const res = await fetch(`${API}/api/v1/contacts?company_id=${effectiveCompanyId}&limit=200`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const d = await res.json();
-      setContacts(d.contacts || []);
+      const pageSize = 200;
+      const fetchPage = async (offset) => {
+        const params = new URLSearchParams({
+          company_id: effectiveCompanyId,
+          limit: String(pageSize),
+          offset: String(offset),
+          include_archived: "true",
+        });
+        const response = await fetch(`${API}/api/v1/contacts?${params}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          throw new Error(errorBody.error || `HTTP ${response.status}`);
+        }
+        return response.json();
+      };
+
+      const firstPage = await fetchPage(0);
+      const total = Number(firstPage.total) || 0;
+      const offsets = [];
+      for (let offset = pageSize; offset < total; offset += pageSize) {
+        offsets.push(offset);
+      }
+
+      const remainingPages = [];
+      for (let index = 0; index < offsets.length; index += 5) {
+        const batch = await Promise.all(
+          offsets.slice(index, index + 5).map(fetchPage)
+        );
+        remainingPages.push(...batch);
+      }
+
+      const uniqueContacts = new Map();
+      for (const contact of [
+        ...(firstPage.contacts || []),
+        ...remainingPages.flatMap(page => page.contacts || []),
+      ]) {
+        if (contact?.id && contact.status !== "anonymized") {
+          uniqueContacts.set(contact.id, contact);
+        }
+      }
+      if (sequence !== loadSequenceRef.current) return;
+      setContacts([...uniqueContacts.values()]);
     } catch (e) {
+      if (e.name === "AbortError" || sequence !== loadSequenceRef.current) return;
       console.error("[Contacts] load error:", e);
+      setToast({ type: "error", msg: e.message || "Impossible de charger les contacts" });
     } finally {
-      setLoading(false);
+      if (sequence === loadSequenceRef.current) setLoading(false);
+      if (loadControllerRef.current === controller) loadControllerRef.current = null;
     }
   }
 
   const filtered = useMemo(() => {
-    let list = contacts;
+    let list = contacts.filter((contact) => contact.status !== "anonymized");
     if (statusFilter) list = list.filter((c) => c.status === statusFilter);
+    else list = list.filter((contact) => contact.status !== "archived");
     if (search.trim()) {
       const q = search.toLowerCase().trim();
       list = list.filter((c) =>
@@ -86,17 +158,17 @@ export default function Contacts() {
 
   // Counts par status pour FilterBar
   const statusCounts = useMemo(() => {
-    const c = { hot: 0, warm: 0, customer: 0, new: 0, cold: 0 };
+    const c = { new: 0, qualified: 0, client: 0, lost: 0, archived: 0 };
     contacts.forEach((ct) => { if (c[ct.status] != null) c[ct.status]++; });
     return c;
   }, [contacts]);
 
   const statusOptions = [
-    { value: "hot",      label: STATUS_META.hot.label,      color: STATUS_META.hot.dot,      count: statusCounts.hot },
-    { value: "warm",     label: STATUS_META.warm.label,     color: STATUS_META.warm.dot,     count: statusCounts.warm },
-    { value: "customer", label: STATUS_META.customer.label, color: STATUS_META.customer.dot, count: statusCounts.customer },
-    { value: "new",      label: STATUS_META.new.label,      color: STATUS_META.new.dot,      count: statusCounts.new },
-    { value: "cold",     label: STATUS_META.cold.label,     color: STATUS_META.cold.dot,     count: statusCounts.cold },
+    { value: "new",       label: STATUS_META.new.label,       color: STATUS_META.new.dot,       count: statusCounts.new },
+    { value: "qualified", label: STATUS_META.qualified.label, color: STATUS_META.qualified.dot, count: statusCounts.qualified },
+    { value: "client",    label: STATUS_META.client.label,    color: STATUS_META.client.dot,    count: statusCounts.client },
+    { value: "lost",      label: STATUS_META.lost.label,      color: STATUS_META.lost.dot,      count: statusCounts.lost },
+    { value: "archived",  label: STATUS_META.archived.label,  color: STATUS_META.archived.dot,  count: statusCounts.archived },
   ];
 
   // ─── Columns ─────────────────────────────────────────────────
@@ -143,16 +215,38 @@ export default function Contacts() {
         : <span className="text-text-tertiary">—</span>,
     },
     {
-      key: "urgency",
-      header: t("contacts.col.urgency", "Urgence"),
-      width: "100px",
-      render: (r) => <UrgencyPill urgency={r.urgency} />,
+      key: "next_action_date",
+      header: t("contacts.col.nextAction", "Prochaine action"),
+      width: "150px",
+      render: (r) => (
+        <div className="max-w-[170px]">
+          <div className="text-xs text-text-secondary">{formatDateTime(r.next_action_date, i18n.language)}</div>
+          {r.next_action_note && <div className="truncate text-[10px] text-text-tertiary" title={r.next_action_note}>{r.next_action_note}</div>}
+        </div>
+      ),
     },
     {
       key: "last_interaction_at",
       header: t("contacts.col.last", "Dernier contact"),
       width: "140px",
       render: (r) => <span className="text-xs text-text-tertiary">{formatRelative(r.last_interaction_at, i18n.language)}</span>,
+    },
+    {
+      key: "actions",
+      header: <span className="sr-only">{t("common.actions", "Actions")}</span>,
+      width: "52px",
+      sortable: false,
+      render: (r) => (
+        <RowActionButton
+          type="button"
+          onClick={() => setSelected(r.id)}
+          data-testid={`view-${r.id}`}
+          aria-label={t("contacts.openContact", "Ouvrir la fiche de {{name}}", { name: r.full_name })}
+          className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-purple"
+        >
+          <Eye size={14} />
+        </RowActionButton>
+      ),
     },
   ], [t, i18n.language]);
 
@@ -168,7 +262,7 @@ export default function Contacts() {
             {t("contacts.title", "Contacts")}
           </h1>
           <p className="mt-1 text-sm text-text-secondary">
-            {t("contacts.subtitle", "Tous vos contacts en un coup d'œil — chauds, tièdes, clients et nouveaux")}
+            {t("contacts.subtitle", "Suivez chaque relation, du premier échange jusqu'au client — sans perdre la prochaine action.")}
           </p>
         </div>
 
@@ -211,11 +305,6 @@ export default function Contacts() {
         rowKey="id"
         loading={loading}
         onRowClick={(row) => setSelected(row.id)}
-        rowActions={(row) => (
-          <RowActionButton onClick={() => setSelected(row.id)} data-testid={`view-${row.id}`}>
-            <Eye size={14} />
-          </RowActionButton>
-        )}
         emptyState={{
           icon: Users,
           title: t("contacts.empty.title", "Aucun contact"),
@@ -233,21 +322,67 @@ export default function Contacts() {
         token={token}
         t={t}
         lang={i18n.language}
+        canMerge={canMerge}
+        onVoiceCall={(contact) => navigate(`/outbound?contact_id=${encodeURIComponent(contact.id)}`)}
+        onBookAppointment={(contact) => navigate(`/calendar?contact_id=${encodeURIComponent(contact.id)}`)}
+        onMerge={(primary, duplicate) => {
+          setSelected(null);
+          setMergeSelection({ primary, duplicate });
+        }}
         onEdit={(c) => { setSelected(null); setFormContact(c); setShowForm(true); }}
-        onDelete={async (c) => {
-          if (!window.confirm(t("contacts.confirmDelete", "Supprimer définitivement {{name}} ?", { name: c.full_name }))) return;
+        onArchive={async (c) => {
+          if (!window.confirm(t("contacts.confirmArchive", "Archiver {{name}} ? Son historique sera conservé.", { name: c.full_name }))) return;
           try {
             const res = await fetch(`${API}/api/v1/contacts/${c.id}`, {
               method: "DELETE",
               headers: { Authorization: `Bearer ${token}` },
             });
-            if (!res.ok) throw new Error(await res.text());
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
             setSelected(null);
-            setContacts((arr) => arr.filter((x) => x.id !== c.id));
-            setToast({ type: "success", msg: t("contacts.deleted", "Contact supprimé") });
+            setContacts((arr) => arr.map((item) => (
+              item.id === c.id
+                ? {
+                    ...item,
+                    ...(body.contact || {}),
+                    status: "archived",
+                    next_action: null,
+                    next_action_date: null,
+                    next_action_note: null,
+                  }
+                : item
+            )));
+            setToast({ type: "success", msg: t("contacts.archived", "Contact archivé") });
           } catch (e) {
             setToast({ type: "error", msg: e.message });
           }
+        }}
+      />
+
+      <MergeContactsSheet
+        selection={mergeSelection}
+        open={Boolean(mergeSelection)}
+        token={token}
+        onClose={() => setMergeSelection(null)}
+        onMerged={(result) => {
+          const primary = result.contact || mergeSelection?.primary;
+          const mergedId = result.merged_contact_id || mergeSelection?.duplicate?.id;
+          setContacts((items) => items.map((item) => {
+            if (item.id === primary?.id) return { ...item, ...primary };
+            if (item.id === mergedId) {
+              return {
+                ...item,
+                status: "archived",
+                merged_into_contact_id: primary?.id || null,
+                next_action: null,
+                next_action_date: null,
+                next_action_note: null,
+              };
+            }
+            return item;
+          }));
+          setMergeSelection(null);
+          setToast({ type: "success", msg: t("contacts.duplicates.merged", "Contacts fusionnés avec succès") });
         }}
       />
 
@@ -294,6 +429,7 @@ export default function Contacts() {
 
       {/* Import CSV Wizard */}
       <ImportWizard
+        key={effectiveCompanyId || "no-company"}
         open={showImport}
         onClose={() => setShowImport(false)}
         companyId={effectiveCompanyId}
@@ -320,27 +456,96 @@ export default function Contacts() {
 // ────────────────────────────────────────────────────────────────
 //  DÉTAIL CONTACT — SHEET avec 3 tabs
 // ────────────────────────────────────────────────────────────────
-function ContactDetailSheet({ contactId, open, onClose, token, t, lang, onEdit, onDelete }) {
+function ContactDetailSheet({
+  contactId,
+  open,
+  onClose,
+  token,
+  t,
+  lang,
+  canMerge,
+  onEdit,
+  onArchive,
+  onMerge,
+  onVoiceCall,
+  onBookAppointment,
+}) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [duplicates, setDuplicates] = useState([]);
+  const [duplicatesLoading, setDuplicatesLoading] = useState(false);
+  const [duplicatesError, setDuplicatesError] = useState(null);
 
   useEffect(() => {
     if (!contactId || !token) return;
+    const controller = new AbortController();
+    setDetail(null);
+    setDuplicates([]);
+    setLoadError(null);
+    setDuplicatesError(null);
     setLoading(true);
-    fetch(`${API}/api/v1/contacts/${contactId}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((d) => setDetail(d))
-      .catch(() => setDetail(null))
-      .finally(() => setLoading(false));
+    setDuplicatesLoading(true);
+
+    const headers = { Authorization: `Bearer ${token}` };
+    const loadDetail = async () => {
+      const response = await fetch(`${API}/api/v1/contacts/${contactId}`, {
+        headers,
+        signal: controller.signal,
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      setDetail(body);
+    };
+    const loadDuplicates = async () => {
+      try {
+        const response = await fetch(`${API}/api/v1/contacts/${contactId}/duplicates`, {
+          headers,
+          signal: controller.signal,
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        setDuplicates(Array.isArray(body.duplicates) ? body.duplicates : []);
+      } catch (error) {
+        if (error.name !== "AbortError") setDuplicatesError(error.message);
+      } finally {
+        if (!controller.signal.aborted) setDuplicatesLoading(false);
+      }
+    };
+
+    loadDetail()
+      .catch((error) => {
+        if (error.name !== "AbortError") setLoadError(error.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    loadDuplicates();
+
+    return () => controller.abort();
   }, [contactId, token]);
 
   const c = detail?.contact;
-  const meta = c && STATUS_META[c.status];
+  const archived = c?.status === "archived";
+  const voiceCallDisabled = !c?.phone || c?.call_consent !== true || archived;
+  const voiceCallTitle = archived
+    ? t("contacts.quick.voiceArchived", "Un contact archivé ne peut pas être appelé.")
+    : !c?.phone
+      ? t("contacts.quick.voiceNoPhone", "Ajoutez un téléphone E.164 pour appeler.")
+      : c?.call_consent !== true
+        ? t("contacts.quick.voiceNoConsent", "Un accord explicite aux appels est requis.")
+        : t("contacts.quick.voice", "Préparer un appel sortant avec Voice IA");
+  const emailActionDisabled = archived || c?.email_consent !== true;
+  const emailActionTitle = archived
+    ? t("contacts.quick.emailArchived", "Un contact archivé ne peut pas être contacté par courriel.")
+    : c?.email_consent === false
+      ? t("contacts.quick.emailDenied", "Ce contact a refusé les communications par courriel.")
+      : t("contacts.quick.emailUnknown", "Un accord explicite aux courriels est requis.");
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent data-testid="contact-detail-sheet" className="overflow-y-auto">
-        {loading || !c ? (
+        {loading ? (
           <>
             <SheetHeader>
               <SheetTitle className="sr-only">{t("contacts.detail.loading", "Chargement du contact")}</SheetTitle>
@@ -349,6 +554,17 @@ function ContactDetailSheet({ contactId, open, onClose, token, t, lang, onEdit, 
               <div className="h-16 w-16 rounded-full bg-white/5 animate-pulse" />
               <div className="h-4 w-2/3 rounded bg-white/5 animate-pulse" />
               <div className="h-3 w-1/2 rounded bg-white/5 animate-pulse" />
+            </div>
+          </>
+        ) : loadError || !c ? (
+          <>
+            <SheetHeader>
+              <SheetTitle>{t("contacts.detail.errorTitle", "Contact indisponible")}</SheetTitle>
+              <SheetDescription>{loadError || t("contacts.detail.error", "Impossible de charger cette fiche.")}</SheetDescription>
+            </SheetHeader>
+            <div className="flex items-start gap-2 p-6 text-sm text-red-300" role="alert" data-testid="contact-detail-error">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              {loadError || t("contacts.detail.error", "Impossible de charger cette fiche.")}
             </div>
           </>
         ) : (
@@ -369,35 +585,83 @@ function ContactDetailSheet({ contactId, open, onClose, token, t, lang, onEdit, 
               </div>
 
               {/* Quick contact actions */}
-              <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border">
-                {c.phone && (
-                  <Button size="sm" variant="secondary" asChild data-testid="detail-call">
-                    <a href={`tel:${c.phone}`}><Phone size={12} /> {c.phone}</a>
-                  </Button>
-                )}
-                {c.email && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={voiceCallDisabled}
+                  onClick={() => onVoiceCall?.(c)}
+                  title={voiceCallTitle}
+                  data-testid="quick-voice-call"
+                >
+                  <PhoneCall size={12} /> {t("contacts.quick.voice", "Appeler avec Voice IA")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={c.status === "archived"}
+                  onClick={() => onBookAppointment?.(c)}
+                  title={c.status === "archived" ? t("contacts.quick.appointmentArchived", "Un contact archivé ne peut pas prendre de rendez-vous.") : undefined}
+                  data-testid="quick-book-appointment"
+                >
+                  <CalendarPlus size={12} /> {t("contacts.quick.appointment", "Prendre un RDV")}
+                </Button>
+                {c.email && !emailActionDisabled && (
                   <Button size="sm" variant="secondary" asChild data-testid="detail-email">
                     <a href={`mailto:${c.email}`}><Mail size={12} /> Courriel</a>
                   </Button>
                 )}
+                {c.email && emailActionDisabled && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled
+                    title={emailActionTitle}
+                    data-testid="detail-email"
+                  >
+                    <Mail size={12} /> Courriel
+                  </Button>
+                )}
                 <div className="ml-auto flex items-center gap-1.5">
-                  <Button size="sm" variant="ghost" onClick={() => onEdit && onEdit(c)} data-testid="detail-edit">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onEdit?.(c)}
+                    disabled={c.status === "archived"}
+                    data-testid="detail-edit"
+                  >
                     <Pencil size={12} /> {t("common.edit", "Modifier")}
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => onDelete && onDelete(c)}
-                    className="text-red-300 hover:text-red-200 hover:bg-brand-red/10"
-                    data-testid="detail-delete"
+                    onClick={() => onArchive?.(c)}
+                    disabled={c.status === "archived"}
+                    title={t("contacts.archive", "Archiver")}
+                    aria-label={t("contacts.archive", "Archiver")}
+                    data-testid="detail-archive"
                   >
-                    <Trash2 size={12} />
+                    <Archive size={12} />
                   </Button>
                 </div>
               </div>
+              {voiceCallDisabled && (
+                <p className="mt-2 text-[10px] text-text-tertiary" data-testid="quick-voice-disabled-reason">
+                  {voiceCallTitle}
+                </p>
+              )}
             </SheetHeader>
 
             <div className="px-6 py-4">
+              <DuplicateCandidates
+                contact={c}
+                duplicates={duplicates}
+                loading={duplicatesLoading}
+                error={duplicatesError}
+                canMerge={canMerge}
+                onMerge={(duplicate) => onMerge?.(c, duplicate)}
+                t={t}
+              />
               <Tabs defaultValue="ai" data-testid="detail-tabs">
                 <TabsList className="w-full grid grid-cols-4">
                   <TabsTrigger value="ai" data-testid="tab-ai">
@@ -465,6 +729,189 @@ function ContactDetailSheet({ contactId, open, onClose, token, t, lang, onEdit, 
       </SheetContent>
     </Sheet>
   );
+}
+
+function DuplicateCandidates({ duplicates, loading, error, canMerge, onMerge, t }) {
+  if (loading) {
+    return (
+      <section className="mb-4 flex items-center gap-2 rounded-lg border border-border bg-white/3 px-3 py-2 text-xs text-text-secondary" data-testid="contact-duplicates">
+        <Loader2 size={13} className="animate-spin" />
+        {t("contacts.duplicates.loading", "Recherche de doublons potentiels…")}
+      </section>
+    );
+  }
+
+  if (error) {
+    return (
+      <section className="mb-4 flex items-start gap-2 rounded-lg border border-brand-orange/30 bg-brand-orange/10 px-3 py-2 text-xs text-amber-100" data-testid="contact-duplicates" role="status">
+        <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+        {t("contacts.duplicates.unavailable", "La recherche de doublons est temporairement indisponible.")}
+      </section>
+    );
+  }
+
+  if (!duplicates.length) return null;
+
+  return (
+    <section className="mb-4 space-y-2 rounded-xl border border-brand-orange/30 bg-brand-orange/8 p-3" data-testid="contact-duplicates">
+      <div className="flex items-center gap-2">
+        <GitMerge size={14} className="text-brand-orange" />
+        <h3 className="text-xs font-semibold text-text-primary">
+          {t("contacts.duplicates.title", "Doublons potentiels")}
+        </h3>
+        <Badge variant="orange" className="ml-auto text-[10px]">{duplicates.length}</Badge>
+      </div>
+      <p className="text-[10px] text-text-tertiary">
+        {canMerge
+          ? t("contacts.duplicates.review", "Vérifiez les deux fiches avant de choisir celle à conserver.")
+          : t("contacts.duplicates.adminOnly", "Seul un administrateur de l’entreprise peut fusionner des fiches.")}
+      </p>
+      <ul className="space-y-2">
+        {duplicates.map((duplicate) => (
+          <li key={duplicate.id} className="rounded-lg border border-border bg-bg-card p-3" data-testid={`contact-duplicate-${duplicate.id}`}>
+            <div className="flex items-start gap-3">
+              <Avatar name={duplicate.full_name} status={duplicate.status} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs font-medium text-text-primary">{duplicate.full_name || "Contact sans nom"}</div>
+                <div className="mt-0.5 truncate text-[10px] text-text-secondary">
+                  {[duplicate.company, duplicate.phone, duplicate.email].filter(Boolean).join(" · ") || "—"}
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {(duplicate.match_reasons || []).map((reason) => (
+                    <Badge key={reason} variant="orange" className="text-[10px]">{duplicateReasonLabel(reason)}</Badge>
+                  ))}
+                  {duplicate.similarity_score != null && (
+                    <Badge variant="ghost" className="text-[10px]">{formatSimilarity(duplicate.similarity_score)}</Badge>
+                  )}
+                </div>
+              </div>
+              {canMerge && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => onMerge(duplicate)}
+                  data-testid={`merge-contact-${duplicate.id}`}
+                >
+                  <GitMerge size={12} /> {t("contacts.duplicates.merge", "Fusionner")}
+                </Button>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function MergeContactsSheet({ selection, open, token, onClose, onMerged }) {
+  const [merging, setMerging] = useState(false);
+  const [error, setError] = useState(null);
+  const primary = selection?.primary;
+  const duplicate = selection?.duplicate;
+
+  useEffect(() => {
+    setMerging(false);
+    setError(null);
+  }, [primary?.id, duplicate?.id]);
+
+  const merge = async () => {
+    if (!primary?.id || !duplicate?.id || merging) return;
+    setMerging(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API}/api/v1/contacts/${primary.id}/merge`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ duplicate_contact_id: duplicate.id }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      onMerged?.(body);
+    } catch (mergeError) {
+      setError(mergeError.message || "La fusion a échoué.");
+    } finally {
+      setMerging(false);
+    }
+  };
+
+  return (
+    <Sheet open={open} onOpenChange={(nextOpen) => !nextOpen && !merging && onClose()}>
+      <SheetContent data-testid="merge-contacts-sheet" className="overflow-y-auto sm:max-w-lg">
+        <SheetHeader>
+          <SheetTitle>Confirmer la fusion</SheetTitle>
+          <SheetDescription>
+            Les interactions seront rattachées à la fiche conservée. La fiche doublon sera archivée, jamais supprimée.
+          </SheetDescription>
+        </SheetHeader>
+        <div className="space-y-4 px-6 py-5">
+          <MergeContactCard label="Fiche conservée" contact={primary} tone="keep" testId="merge-primary" />
+          <div className="flex justify-center text-text-tertiary"><GitMerge size={18} /></div>
+          <MergeContactCard label="Fiche archivée après fusion" contact={duplicate} tone="archive" testId="merge-duplicate" />
+
+          <div className="flex items-start gap-2 rounded-lg border border-brand-orange/30 bg-brand-orange/10 px-3 py-2.5 text-xs text-amber-100">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            Vérifiez le sens de la fusion : cette opération regroupe l’historique et ne peut pas être annulée depuis l’interface.
+          </div>
+
+          {error && (
+            <div className="flex items-start gap-2 rounded-lg border border-brand-red/30 bg-brand-red/10 px-3 py-2 text-sm text-red-300" role="alert" data-testid="merge-error">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {error}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 border-t border-border pt-4">
+            <Button variant="secondary" onClick={onClose} disabled={merging} data-testid="cancel-merge">
+              Annuler
+            </Button>
+            <Button onClick={merge} disabled={!primary || !duplicate || merging} data-testid="confirm-merge">
+              {merging ? <><Loader2 size={14} className="animate-spin" /> Fusion…</> : <><GitMerge size={14} /> Confirmer la fusion</>}
+            </Button>
+          </div>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function MergeContactCard({ label, contact, tone, testId }) {
+  return (
+    <section className={cn(
+      "rounded-xl border p-4",
+      tone === "keep"
+        ? "border-brand-green/30 bg-brand-green/8"
+        : "border-border bg-white/3",
+    )} data-testid={testId}>
+      <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+        {tone === "keep" ? <ShieldCheck size={12} className="text-brand-green" /> : <Archive size={12} />}
+        {label}
+      </div>
+      <div className="text-sm font-semibold text-text-primary">{contact?.full_name || "—"}</div>
+      <dl className="mt-2 space-y-1 text-xs text-text-secondary">
+        <div><dt className="inline text-text-tertiary">Téléphone : </dt><dd className="inline font-mono">{contact?.phone || "—"}</dd></div>
+        <div><dt className="inline text-text-tertiary">Courriel : </dt><dd className="inline">{contact?.email || "—"}</dd></div>
+        <div><dt className="inline text-text-tertiary">Entreprise : </dt><dd className="inline">{contact?.company || "—"}</dd></div>
+      </dl>
+    </section>
+  );
+}
+
+function duplicateReasonLabel(reason) {
+  return {
+    phone: "Même téléphone",
+    email: "Même courriel",
+    name_company: "Nom et entreprise proches",
+    name_company_fuzzy: "Nom et entreprise proches",
+  }[reason] || reason;
+}
+
+function formatSimilarity(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "";
+  const percent = numeric <= 1 ? numeric * 100 : numeric;
+  return `${Math.round(percent)} % similaire`;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -593,24 +1040,31 @@ function HumanNotesZone({ contact: c, token, onUpdate, t }) {
   const [value, setValue] = useState(c?.notes || "");
   const [saving, setSaving] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const readOnly = c?.status === "archived";
 
-  useEffect(() => { setValue(c?.notes || ""); }, [c?.id]);
+  useEffect(() => {
+    setValue(c?.notes || "");
+    setSaveError(null);
+  }, [c?.id, c?.notes]);
 
   const save = async () => {
-    if (saving) return;
+    if (saving || readOnly) return;
     setSaving(true);
+    setSaveError(null);
     try {
       const r = await fetch(`${API}/api/v1/contacts/${c.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ notes: value }),
       });
-      if (r.ok) {
-        const d = await r.json();
-        onUpdate?.(d.contact || { notes: value });
-        setSavedFlash(true);
-        setTimeout(() => setSavedFlash(false), 1500);
-      }
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      onUpdate?.(d.contact || { notes: value });
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 1500);
+    } catch (error) {
+      setSaveError(error.message || t("contacts.ai.saveError", "Impossible d’enregistrer la note."));
     } finally {
       setSaving(false);
     }
@@ -645,15 +1099,27 @@ function HumanNotesZone({ contact: c, token, onUpdate, t }) {
         onChange={(e) => setValue(e.target.value)}
         placeholder={t("contacts.ai.human_placeholder", "Notes éditables sur ce contact (rappels, contexte, préférences)…")}
         rows={5}
-        className="w-full rounded-md border border-border bg-bg-elev px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:border-brand-green focus:outline-none resize-y"
+        disabled={readOnly}
+        aria-label={t("contacts.ai.human_title", "Notes humaines")}
+        aria-describedby={readOnly ? "archived-contact-notes-hint" : undefined}
+        className="w-full rounded-md border border-border bg-bg-elev px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:border-brand-green focus:outline-none resize-y disabled:cursor-not-allowed disabled:opacity-60"
       />
+
+      {readOnly && (
+        <p id="archived-contact-notes-hint" className="mt-2 text-xs text-text-tertiary">
+          {t("contacts.ai.archivedReadOnly", "Ce contact est archivé : ses notes sont conservées en lecture seule.")}
+        </p>
+      )}
+
+      {saveError && <p className="mt-2 text-xs text-red-300" role="alert" data-testid="ai-human-error">{saveError}</p>}
 
       <div className="mt-2 flex items-center justify-end">
         <Button
           size="sm"
           variant="secondary"
           onClick={save}
-          disabled={!dirty || saving}
+          disabled={readOnly || !dirty || saving}
+          title={readOnly ? t("contacts.ai.archivedReadOnly", "Ce contact est archivé : ses notes sont conservées en lecture seule.") : undefined}
           data-testid="ai-human-save"
         >
           {saving ? t("common.saving", "Enregistrement…") : t("common.save", "Enregistrer")}
@@ -664,14 +1130,26 @@ function HumanNotesZone({ contact: c, token, onUpdate, t }) {
 }
 
 function HesitationsZone({ suggestions, token, onResolved, t, lang }) {
+  const [handlingId, setHandlingId] = useState(null);
+  const [handleError, setHandleError] = useState(null);
   const handle = async (id, action) => {
+    setHandlingId(id);
+    setHandleError(null);
     const path = action === "approve" ? "approve" : "reject";
-    const r = await fetch(`${API}/api/v1/learning/suggestions/${id}/${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({}),
-    });
-    if (r.ok) onResolved?.(id);
+    try {
+      const r = await fetch(`${API}/api/v1/learning/suggestions/${id}/${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({}),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+      onResolved?.(id);
+    } catch (error) {
+      setHandleError(error.message || t("contacts.ai.actionError", "Impossible de traiter cette suggestion."));
+    } finally {
+      setHandlingId(null);
+    }
   };
 
   return (
@@ -739,6 +1217,7 @@ function HesitationsZone({ suggestions, token, onResolved, t, lang }) {
                   variant="ghost"
                   className="text-red-300 hover:text-red-200 hover:bg-brand-red/10"
                   onClick={() => handle(s.id, "reject")}
+                  disabled={handlingId === s.id}
                   data-testid={`hesitation-reject-${s.id}`}
                 >
                   {t("contacts.ai.reject", "Refuser")}
@@ -747,6 +1226,7 @@ function HesitationsZone({ suggestions, token, onResolved, t, lang }) {
                   size="sm"
                   variant="secondary"
                   onClick={() => handle(s.id, "approve")}
+                  disabled={handlingId === s.id}
                   data-testid={`hesitation-approve-${s.id}`}
                 >
                   {t("contacts.ai.approve", "Approuver")}
@@ -756,6 +1236,7 @@ function HesitationsZone({ suggestions, token, onResolved, t, lang }) {
           ))}
         </ul>
       )}
+      {handleError && <p className="mt-2 text-xs text-red-300" role="alert" data-testid="hesitations-error">{handleError}</p>}
     </section>
   );
 }
@@ -771,36 +1252,74 @@ function InfoTab({ contact: c, t, lang }) {
     { label: t("contacts.field.source", "Source"),      value: c.source,        icon: Sparkles },
     { label: t("contacts.field.need", "Besoin"),        value: c.main_need,     icon: MessageSquare },
     { label: t("contacts.field.budget", "Budget"),      value: c.budget,        icon: Tag },
-    { label: t("contacts.field.next", "Prochaine action"), value: c.next_action, icon: Activity },
+    { label: t("contacts.field.nextDate", "Date de prochaine action"), value: formatDateTime(c.next_action_date, lang), icon: CalendarIcon },
+    { label: t("contacts.field.nextNote", "Prochaine action"), value: c.next_action_note, icon: Activity },
     { label: t("contacts.field.created", "Créé le"),    value: formatDate(c.created_at, lang) },
     { label: t("contacts.field.last", "Dernier contact"), value: formatRelative(c.last_interaction_at, lang) },
   ];
   return (
-    <dl className="space-y-2.5">
-      {rows.map((r) => (
-        <div key={r.label} className="flex items-center gap-3 rounded-lg border border-border bg-white/3 px-3 py-2.5">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-white/5 text-text-tertiary shrink-0">
-            {r.icon ? <r.icon size={13} /> : <span className="text-[10px]">·</span>}
+    <div className="space-y-4">
+      <dl className="space-y-2.5">
+        {rows.map((r) => (
+          <div key={r.label} className="flex items-center gap-3 rounded-lg border border-border bg-white/3 px-3 py-2.5">
+            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-white/5 text-text-tertiary shrink-0">
+              {r.icon ? <r.icon size={13} /> : <span className="text-[10px]">·</span>}
+            </div>
+            <div className="flex-1 min-w-0">
+              <dt className="text-[10px] uppercase tracking-wider text-text-tertiary">{r.label}</dt>
+              <dd className={cn("mt-0.5 text-sm text-text-primary truncate", r.mono && "font-mono")}>
+                {r.value || <span className="text-text-tertiary">—</span>}
+              </dd>
+            </div>
           </div>
-          <div className="flex-1 min-w-0">
-            <dt className="text-[10px] uppercase tracking-wider text-text-tertiary">{r.label}</dt>
-            <dd className={cn("mt-0.5 text-sm text-text-primary truncate", r.mono && "font-mono")}>
-              {r.value || <span className="text-text-tertiary">—</span>}
-            </dd>
+        ))}
+        {c.tags?.length > 0 && (
+          <div className="rounded-lg border border-border bg-white/3 px-3 py-2.5">
+            <div className="text-[10px] uppercase tracking-wider text-text-tertiary mb-2">
+              {t("contacts.field.tags", "Tags")}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {c.tags.map((tg) => <Badge key={tg} variant="purple"><Tag size={9} />{tg}</Badge>)}
+            </div>
           </div>
-        </div>
-      ))}
-      {c.tags?.length > 0 && (
-        <div className="rounded-lg border border-border bg-white/3 px-3 py-2.5">
-          <div className="text-[10px] uppercase tracking-wider text-text-tertiary mb-2">
-            {t("contacts.field.tags", "Tags")}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {c.tags.map((tg) => <Badge key={tg} variant="purple"><Tag size={9} />{tg}</Badge>)}
-          </div>
-        </div>
-      )}
-    </dl>
+        )}
+      </dl>
+      <ConsentSummary contact={c} t={t} lang={lang} />
+    </div>
+  );
+}
+
+function ConsentSummary({ contact, t, lang }) {
+  const consents = [
+    { key: "email", label: t("contacts.consent.email", "Courriel"), value: contact.email_consent, at: contact.email_consent_at },
+    { key: "sms", label: t("contacts.consent.sms", "SMS"), value: contact.sms_consent, at: contact.sms_consent_at },
+    { key: "call", label: t("contacts.consent.call", "Appels"), value: contact.call_consent, at: contact.call_consent_at },
+  ];
+  return (
+    <section className="rounded-xl border border-border bg-white/3 p-3" data-testid="contact-consents">
+      <div className="mb-3 flex items-center gap-2">
+        <ShieldCheck size={14} className="text-brand-purple" />
+        <h4 className="text-xs font-semibold text-text-primary">{t("contacts.consent.title", "Consentements de communication")}</h4>
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        {consents.map((consent) => {
+          const state = consent.value === true
+            ? { label: t("contacts.consent.granted", "Accord"), variant: "green" }
+            : consent.value === false
+              ? { label: t("contacts.consent.denied", "Refus"), variant: "red" }
+              : { label: t("contacts.consent.unset", "Non renseigné"), variant: "ghost" };
+          return (
+            <div key={consent.key} className="rounded-lg border border-border bg-bg-card p-2.5" data-testid={`consent-${consent.key}`}>
+              <div className="text-[10px] uppercase tracking-wider text-text-tertiary">{consent.label}</div>
+              <Badge variant={state.variant} className="mt-1.5">{state.label}</Badge>
+              <div className="mt-1 text-[10px] text-text-tertiary">
+                {consent.at ? formatDateTime(consent.at, lang) : t("contacts.consent.noTimestamp", "Aucune décision enregistrée")}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -953,7 +1472,20 @@ function formatRelative(iso, lang) {
 function formatDate(iso, lang) {
   if (!iso) return "—";
   const locale = lang?.startsWith("fr") ? "fr-CA" : "en-CA";
-  return new Intl.DateTimeFormat(locale, { dateStyle: "long" }).format(new Date(iso));
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(locale, { dateStyle: "long" }).format(date);
+}
+
+function formatDateTime(iso, lang) {
+  if (!iso) return "—";
+  const locale = lang?.startsWith("fr") ? "fr-CA" : "en-CA";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
 }
 
 
@@ -967,7 +1499,7 @@ function Toast({ toast, onClose }) {
   }, [toast, onClose]);
   return (
     <div
-      role="status"
+      role={toast.type === "error" ? "alert" : "status"}
       data-testid="toast"
       className={cn(
         "fixed bottom-6 right-6 z-50 max-w-sm rounded-lg border px-4 py-3 text-sm shadow-xl animate-fade-in",

@@ -86,24 +86,49 @@ async function findTenantResource(table, id, req, columns = "*") {
 // Normalise un numéro de téléphone en E.164 (Canada/USA)
 function normalizePhone(raw) {
   if (!raw) return null;
-  const digits = String(raw).replace(/\D/g, "");
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  if (digits.startsWith("+")) return raw.replace(/\s/g, "");
-  return null;
+  let normalized = String(raw).trim().replace(/[()\s.-]/g, "");
+  if (normalized.startsWith("00")) {
+    normalized = `+${normalized.slice(2)}`;
+  } else if (!normalized.startsWith("+")) {
+    const digits = normalized.replace(/\D/g, "");
+    if (digits.length === 10) normalized = `+1${digits}`;
+    else if (digits.length === 11 && digits.startsWith("1")) normalized = `+${digits}`;
+    else return null;
+  }
+  return /^\+[1-9]\d{7,14}$/.test(normalized) ? normalized : null;
 }
 
-// Vérifie si un numéro est dans la liste DNC
-async function isOnDNC(company_id, phone) {
+// Vérifie la DNC sans jamais transformer une panne de stockage en autorisation.
+async function checkDNC(company_id, phone) {
   const normalized = normalizePhone(phone);
-  if (!normalized) return false;
-  const { data } = await supabase
+  if (!normalized) return { blocked: true, error: "invalid_phone" };
+  const { data, error } = await supabase
     .from("dnc_list")
     .select("id")
     .eq("company_id", company_id)
     .eq("phone", normalized)
     .maybeSingle();
-  return !!data;
+  if (error) return { blocked: true, error: error.message };
+  return { blocked: Boolean(data), error: null };
+}
+
+// Un appel sortant exige un accord CRM explicite et encore valide au moment d'appeler.
+async function checkOutboundConsent(company_id, phone) {
+  const normalized = normalizePhone(phone);
+  if (!normalized) return { allowed: false, error: "invalid_phone" };
+  const { data, error } = await supabase
+    .from("contacts")
+    .select("id")
+    .eq("company_id", company_id)
+    .eq("phone", normalized)
+    .eq("call_consent", true)
+    .neq("status", "archived")
+    .neq("status", "anonymized")
+    .is("merged_into_contact_id", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) return { allowed: false, error: error.message };
+  return { allowed: Boolean(data), error: null };
 }
 
 // Compte les appels déjà faits aujourd'hui pour cette campagne
@@ -277,7 +302,11 @@ router.post("/campaigns/:id/contacts", express.json(), async (req, res) => {
   const normalized = normalizePhone(phone);
   if (!normalized) return res.status(400).json({ error: "Numéro de téléphone invalide" });
 
-  if (await isOnDNC(companyId, normalized)) {
+  const dncCheck = await checkDNC(companyId, normalized);
+  if (dncCheck.error) {
+    return res.status(503).json({ error: "Vérification DNC indisponible" });
+  }
+  if (dncCheck.blocked) {
     return res.status(409).json({ error: `Le numéro ${normalized} est dans la liste DNC` });
   }
 
@@ -418,8 +447,11 @@ router.post("/campaigns/:id/contacts/import", upload.single("file"), async (req,
     if (!phone) { skipped++; errors.push(`Numéro invalide : ${phone_raw}`); continue; }
 
     // Check DNC
-    const onDNC = await isOnDNC(companyId, phone);
-    if (onDNC) { dnc_skipped++; continue; }
+    const dncCheck = await checkDNC(companyId, phone);
+    if (dncCheck.error) {
+      return res.status(503).json({ error: "Vérification DNC indisponible" });
+    }
+    if (dncCheck.blocked) { dnc_skipped++; continue; }
 
     toInsert.push({
       company_id: companyId,
@@ -620,9 +652,15 @@ async function processOutboundCalls(campaign, company_id) {
 
   while (true) {
     // Re-vérifier le status de la campagne (peut avoir été mise en pause)
-    const { data: fresh } = await supabase
+    const { data: fresh, error: freshError } = await supabase
       .from("outbound_campaigns").select("status, daily_call_limit, call_hours_start, call_hours_end")
-      .eq("id", campaign.id).maybeSingle();
+      .eq("id", campaign.id)
+      .eq("company_id", company_id)
+      .maybeSingle();
+    if (freshError) {
+      console.error(`[OUTBOUND] Impossible de vérifier la campagne ${campaign.id}`);
+      break;
+    }
     if (!fresh || fresh.status !== "active") break;
     if (!isWithinCallHours(fresh.call_hours_start, fresh.call_hours_end)) break;
 
@@ -630,32 +668,82 @@ async function processOutboundCalls(campaign, company_id) {
     const todayMade = await callsMadeToday(campaign.id);
     if (todayMade >= fresh.daily_call_limit) {
       await supabase.from("outbound_campaigns").update({ status: "paused", updated_at: new Date().toISOString() })
-        .eq("id", campaign.id);
+        .eq("id", campaign.id)
+        .eq("company_id", company_id);
       console.log(`[OUTBOUND] Limite quotidienne atteinte pour campagne ${campaign.id}`);
       break;
     }
 
     // Prendre le prochain contact pending
-    const { data: contact } = await supabase
+    const { data: contact, error: contactError } = await supabase
       .from("outbound_contacts")
       .select("*")
       .eq("campaign_id", campaign.id)
+      .eq("company_id", company_id)
       .eq("status", "pending")
       .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle();
 
+    if (contactError) {
+      console.error(`[OUTBOUND] Impossible de charger le prochain contact de la campagne ${campaign.id}`);
+      break;
+    }
+
     if (!contact) {
       // Plus de contacts à appeler
       await supabase.from("outbound_campaigns").update({ status: "completed", updated_at: new Date().toISOString() })
-        .eq("id", campaign.id);
+        .eq("id", campaign.id)
+        .eq("company_id", company_id);
       console.log(`[OUTBOUND] Campagne ${campaign.id} terminée — tous les contacts traités`);
       break;
     }
 
-    // Marquer le contact comme "calling"
-    await supabase.from("outbound_contacts").update({ status: "calling", last_called_at: new Date().toISOString() })
-      .eq("id", contact.id);
+    // Revalider DNC + consentement juste avant l'appel. Toute erreur bloque l'appel.
+    const dncCheck = await checkDNC(company_id, contact.phone);
+    const consentCheck = dncCheck.error || dncCheck.blocked
+      ? { allowed: false, error: null }
+      : await checkOutboundConsent(company_id, contact.phone);
+    const cannotCallReason = dncCheck.error
+      ? "Vérification DNC indisponible"
+      : dncCheck.blocked
+        ? "Numéro inscrit sur la liste DNC"
+        : consentCheck.error
+          ? "Vérification du consentement indisponible"
+          : !consentCheck.allowed
+            ? "Consentement explicite aux appels requis"
+            : null;
+
+    if (cannotCallReason) {
+      const { error: blockError } = await supabase
+        .from("outbound_contacts")
+        .update({
+          status: dncCheck.blocked && !dncCheck.error ? "dnc" : "error",
+          outcome_notes: cannotCallReason,
+        })
+        .eq("id", contact.id)
+        .eq("company_id", company_id);
+      if (blockError) {
+        console.error(`[OUTBOUND] Impossible de bloquer le contact ${contact.id}`);
+        break;
+      }
+      continue;
+    }
+
+    // Marquer le contact comme "calling" seulement après les gardes de conformité.
+    const { data: claimedContact, error: callingError } = await supabase
+      .from("outbound_contacts")
+      .update({ status: "calling", last_called_at: new Date().toISOString() })
+      .eq("id", contact.id)
+      .eq("company_id", company_id)
+      .eq("status", "pending")
+      .select("id")
+      .maybeSingle();
+    if (callingError) {
+      console.error(`[OUTBOUND] Impossible de verrouiller le contact ${contact.id}`);
+      break;
+    }
+    if (!claimedContact) continue;
 
     // Initier l'appel Twilio
     try {
@@ -670,8 +758,12 @@ async function processOutboundCalls(campaign, company_id) {
         machineDetection: "Enable",
         timeout: 30,
       });
-      await supabase.from("outbound_contacts").update({ call_attempts: contact.call_attempts + 1 }).eq("id", contact.id);
-      await supabase.from("outbound_campaigns").update({ calls_made: campaign.calls_made + 1 + todayMade, updated_at: new Date().toISOString() }).eq("id", campaign.id);
+      await supabase.from("outbound_contacts").update({ call_attempts: contact.call_attempts + 1 })
+        .eq("id", contact.id)
+        .eq("company_id", company_id);
+      await supabase.from("outbound_campaigns").update({ calls_made: campaign.calls_made + 1 + todayMade, updated_at: new Date().toISOString() })
+        .eq("id", campaign.id)
+        .eq("company_id", company_id);
       console.log(`[OUTBOUND] Appel initié pour la campagne ${campaign.id}`);
     } catch (e) {
       console.error(`[OUTBOUND] Échec Twilio pour la campagne ${campaign.id}`);
@@ -679,7 +771,9 @@ async function processOutboundCalls(campaign, company_id) {
         status: "error",
         outcome_notes: e.message,
         call_attempts: contact.call_attempts + 1,
-      }).eq("id", contact.id);
+      })
+        .eq("id", contact.id)
+        .eq("company_id", company_id);
     }
 
     // Attendre avant le prochain appel
@@ -806,7 +900,12 @@ router.post("/dnc", express.json(), async (req, res) => {
   const normalized = normalizePhone(phone);
   if (!normalized) return res.status(400).json({ error: "Numéro invalide" });
   const { data, error } = await supabase.from("dnc_list")
-    .upsert({ company_id: companyId, phone: normalized, reason: reason || null }, { onConflict: "company_id,phone" })
+    .upsert({
+      company_id: companyId,
+      phone: normalized,
+      reason: reason || null,
+      source: "manual",
+    }, { onConflict: "company_id,phone" })
     .select().single();
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ success: true, entry: data });
@@ -818,8 +917,34 @@ router.delete("/dnc/:id", async (req, res) => {
   if (hasTenantMismatch(req, company_id)) {
     return res.status(403).json({ error: "Accès interdit à cette entreprise" });
   }
-  const lookup = await findTenantResource("dnc_list", id, req, "id, company_id");
+  const lookup = await findTenantResource(
+    "dnc_list",
+    id,
+    req,
+    "id, company_id, phone, source"
+  );
   if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
+
+  const { data: refusedContact, error: consentError } = await supabase
+    .from("contacts")
+    .select("id")
+    .eq("company_id", lookup.data.company_id)
+    .eq("phone", lookup.data.phone)
+    .eq("call_consent", false)
+    .neq("status", "anonymized")
+    .is("merged_into_contact_id", null)
+    .limit(1)
+    .maybeSingle();
+  if (consentError) {
+    return res.status(503).json({ error: "Vérification du consentement indisponible" });
+  }
+  if (refusedContact) {
+    return res.status(409).json({
+      error: "call_consent_revoked",
+      message: "Réautorisez d’abord les appels dans la fiche CRM.",
+    });
+  }
+
   const { data, error } = await supabase
     .from("dnc_list")
     .delete()

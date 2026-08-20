@@ -7,7 +7,7 @@
 import React, { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  Upload, FileText, ChevronRight, ChevronLeft, Check, X,
+  Upload, ChevronRight, ChevronLeft, Check, X,
   AlertTriangle, Loader2, CheckCircle2, Users, Sparkles, RefreshCw,
 } from "lucide-react";
 import { Button } from "../ui/button.jsx";
@@ -26,11 +26,18 @@ const FIELD_OPTIONS = [
   { value: "email",        label: "Courriel" },
   { value: "phone",        label: "Téléphone" },
   { value: "company",      label: "Entreprise" },
-  { value: "status",       label: "Statut (new/cold/warm/hot/customer)" },
+  { value: "status",       label: "Pipeline (new/qualified/client/lost/archived)" },
   { value: "urgency",      label: "Urgence (low/normal/high)" },
   { value: "main_need",    label: "Besoin principal" },
   { value: "budget",       label: "Budget" },
-  { value: "next_action",  label: "Prochaine action" },
+  { value: "next_action_date", label: "Date de prochaine action" },
+  { value: "next_action_note", label: "Note de prochaine action" },
+  { value: "email_consent", label: "Consentement courriel (oui/non/inconnu)" },
+  { value: "email_consent_at", label: "Date du consentement courriel" },
+  { value: "sms_consent", label: "Consentement SMS (oui/non/inconnu)" },
+  { value: "sms_consent_at", label: "Date du consentement SMS" },
+  { value: "call_consent", label: "Consentement appels (oui/non/inconnu)" },
+  { value: "call_consent_at", label: "Date du consentement appels" },
   { value: "tags",         label: "Tags (séparés par , ; ou |)" },
   { value: "notes",        label: "Notes" },
 ];
@@ -46,14 +53,26 @@ export default function ImportWizard({ open, onClose, companyId, token, onImport
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
   const [defaultStatus, setDefaultStatus] = useState("new");
-  const [duplicateAction, setDuplicateAction] = useState("skip"); // skip | overwrite | create
+  const [duplicateAction, setDuplicateAction] = useState("skip"); // skip | overwrite
   const fileInputRef = useRef();
+  const notifiedResultRef = useRef(null);
 
   const reset = () => {
     setStep(1); setFile(null); setPreview(null); setMapping({});
     setError(null); setResult(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
-  const handleClose = () => { reset(); onClose(); };
+  const notifyImported = (importResult) => {
+    if (!importResult || notifiedResultRef.current === importResult) return;
+    notifiedResultRef.current = importResult;
+    onImported?.(importResult);
+  };
+  const handleClose = () => {
+    if (loading) return;
+    notifyImported(result);
+    reset();
+    onClose();
+  };
 
   const handleFile = async (f) => {
     if (!f) return;
@@ -122,17 +141,16 @@ export default function ImportWizard({ open, onClose, companyId, token, onImport
   };
 
   const handleFinish = () => {
-    onImported && onImported(result);
     handleClose();
   };
 
-  // Validation : au moins une colonne mappée vers full_name OU email OU phone
+  // Le backend CRM exige un téléphone E.164 pour chaque contact actif.
   const mappedFields = useMemo(() => new Set(Object.values(mapping || {})), [mapping]);
-  const canImport = mappedFields.has("full_name") || mappedFields.has("email") || mappedFields.has("phone");
+  const canImport = mappedFields.has("phone");
 
   return (
-    <Sheet open={open} onOpenChange={(o) => !o && handleClose()}>
-      <SheetContent data-testid="import-wizard" className="overflow-y-auto sm:max-w-xl">
+    <Sheet open={open} onOpenChange={(o) => !o && !loading && handleClose()}>
+      <SheetContent data-testid="import-wizard" className="overflow-y-auto sm:max-w-xl" aria-busy={loading}>
         <SheetHeader>
           <SheetTitle data-testid="wizard-title">
             {t("import.title", "Importer des contacts depuis un CSV")}
@@ -171,7 +189,7 @@ export default function ImportWizard({ open, onClose, companyId, token, onImport
 
         <div className="px-6 py-5">
           {error && (
-            <div className="mb-4 flex items-start gap-2 rounded-lg border border-brand-red/30 bg-brand-red/10 px-3 py-2.5 text-sm text-red-300" data-testid="wizard-error">
+            <div className="mb-4 flex items-start gap-2 rounded-lg border border-brand-red/30 bg-brand-red/10 px-3 py-2.5 text-sm text-red-300" data-testid="wizard-error" role="alert">
               <AlertTriangle size={14} className="mt-0.5 shrink-0" />
               <span>{error}</span>
             </div>
@@ -204,15 +222,35 @@ export default function ImportWizard({ open, onClose, companyId, token, onImport
 // ─── Step 1 : Upload ────────────────────────────────────────────
 function UploadStep({ onPick, fileInputRef, loading, t }) {
   const [dragging, setDragging] = useState(false);
+  const openPicker = () => {
+    if (!loading) fileInputRef.current?.click();
+  };
   return (
     <div className="space-y-4" data-testid="step-upload">
       <div
-        onClick={() => fileInputRef.current?.click()}
+        role="button"
+        tabIndex={loading ? -1 : 0}
+        aria-disabled={loading}
+        aria-label={t("import.pickFile", "Choisir un fichier CSV à importer")}
+        onClick={openPicker}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openPicker();
+          }
+        }}
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
-        onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) onPick(f); }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          if (loading) return;
+          const f = e.dataTransfer.files[0];
+          if (f) onPick(f);
+        }}
         className={cn(
-          "flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 cursor-pointer transition-all",
+          "flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-purple",
+          loading && "cursor-wait opacity-70",
           dragging
             ? "border-brand-purple bg-brand-purple/10"
             : "border-border bg-bg-card hover:border-brand-purple/40 hover:bg-white/3"
@@ -234,6 +272,8 @@ function UploadStep({ onPick, fileInputRef, loading, t }) {
           accept=".csv,text/csv"
           className="hidden"
           onChange={(e) => onPick(e.target.files[0])}
+          disabled={loading}
+          aria-label={t("import.pickFile", "Choisir un fichier CSV à importer")}
           data-testid="file-input"
         />
       </div>
@@ -244,7 +284,7 @@ function UploadStep({ onPick, fileInputRef, loading, t }) {
           <span className="font-medium text-text-primary">{t("import.tip.title", "Conseil")}</span>
         </div>
         <p className="mt-1 text-xs text-text-tertiary">
-          {t("import.tip.body", "Votre CSV doit comporter une ligne d'en-tête (Nom, Email, Téléphone, etc.). Le mappage sera auto-détecté et modifiable.")}
+          {t("import.tip.body", "Votre CSV doit comporter une ligne d'en-tête et un téléphone E.164 compact par contact (ex. +14185551234). Le mappage sera auto-détecté et modifiable.")}
         </p>
       </div>
     </div>
@@ -314,6 +354,7 @@ function MappingStep({
                     onValueChange={(v) => setMap(h, v)}
                     options={FIELD_OPTIONS}
                     placeholder={null}
+                    aria-label={t("import.mapping.columnLabel", "Mapper la colonne {{column}}", { column: h })}
                     testId={`select-${h}`}
                   />
                 </div>
@@ -326,19 +367,20 @@ function MappingStep({
       {/* Options globales */}
       <div className="grid grid-cols-2 gap-3 pt-2">
         <div>
-          <label className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">
+          <label htmlFor="import-default-status" className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">
             {t("import.mapping.defaultStatus", "Statut par défaut")}
           </label>
           <div className="mt-1.5">
             <Select
+              id="import-default-status"
               value={defaultStatus}
               onValueChange={setDefaultStatus}
               options={[
                 { value: "new",      label: "Nouveau" },
-                { value: "cold",     label: "Froid" },
-                { value: "warm",     label: "Tiède" },
-                { value: "hot",      label: "Chaud" },
-                { value: "customer", label: "Client" },
+                { value: "qualified", label: "Qualifié" },
+                { value: "client",    label: "Client" },
+                { value: "lost",      label: "Perdu" },
+                { value: "archived",  label: "Archivé" },
               ]}
               placeholder={null}
               testId="default-status"
@@ -346,17 +388,17 @@ function MappingStep({
           </div>
         </div>
         <div>
-          <label className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">
+          <label htmlFor="import-duplicate-action" className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary">
             {t("import.mapping.duplicates", "Si doublon")}
           </label>
           <div className="mt-1.5">
             <Select
+              id="import-duplicate-action"
               value={duplicateAction}
               onValueChange={setDuplicateAction}
               options={[
                 { value: "skip",      label: "Ignorer" },
-                { value: "overwrite", label: "Écraser le contact existant" },
-                { value: "create",    label: "Créer un nouveau contact" },
+                { value: "overwrite", label: "Mettre à jour le contact existant" },
               ]}
               placeholder={null}
               testId="duplicate-action"
@@ -369,7 +411,7 @@ function MappingStep({
         <div className="flex items-start gap-2 rounded-lg border border-brand-orange/30 bg-brand-orange/10 px-3 py-2 text-xs text-amber-200">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
           <span>
-            {t("import.mapping.needId", "Au moins une colonne doit être mappée à : Nom complet, Courriel ou Téléphone.")}
+            {t("import.mapping.needPhone", "Une colonne Téléphone est obligatoire. Chaque valeur doit être au format E.164 compact (ex. +14185551234).")}
           </span>
         </div>
       )}
