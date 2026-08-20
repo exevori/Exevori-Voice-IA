@@ -19,6 +19,17 @@ import express from "express";
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import {
+  buildConfiguredSubscriptionPlanUpdate,
+  configuredStripePriceIds,
+  createBillingOverviewHandler,
+  createBillingPortalHandler,
+  getConfiguredStripePriceId,
+  mapStripeSubscriptionStatus,
+  parseStripePriceConfiguration,
+  resolveStripeBillingPeriod,
+  resolveVerifiedCheckoutStatus,
+} from "./overview.js";
 
 dotenv.config();
 
@@ -55,6 +66,13 @@ function requireSuperAdmin(req, res, next) {
   return next();
 }
 
+function requireBillingManager(req, res, next) {
+  if (!["company_admin", "super_admin"].includes(req.user?.role)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  return next();
+}
+
 async function getCompany(companyId, columns = "id") {
   const { data, error } = await supabase
     .from("companies")
@@ -83,21 +101,24 @@ async function getSubscription(companyId, columns = "*") {
 // Même chiffre dans toutes les devises (79 = 79$ CAD = 79$ USD = 79€)
 // CA : + TPS/TVQ + installation 319$ | US/EU/Monde : sans taxe, sans installation
 import {
-  PLANS as SHARED_PLANS,
-  TAXES_CA,
+  PLANS as PLAN_PRICES,
   EU_COUNTRIES,
   INSTALLATION_FEE,
-  INSTALLATION_FEE_COUNTRIES,
   getPricingForCountry,
 } from "../../../shared/constants.js";
 
-const PLANS = {
-  solo:          { label: "Solo",          price: 79,  minutes: 150,   overage_rate: 0.35 },
-  demarrage:     { label: "Démarrage",     price: 159, minutes: 400,   overage_rate: 0.30 },
-  essentiel:     { label: "Essentiel",     price: 319, minutes: 1000,  overage_rate: 0.25 },
-  professionnel: { label: "Professionnel", price: 529, minutes: 2500,  overage_rate: 0.20 },
-  entreprise:    { label: "Entreprise",    price: 949, minutes: 6000,  overage_rate: 0.15 },
-};
+const STRIPE_PRICE_CONFIGURATION = parseStripePriceConfiguration(
+  process.env.STRIPE_PRICE_IDS_JSON,
+  PLAN_PRICES
+);
+const STRIPE_PORTAL_PRICE_IDS = configuredStripePriceIds(
+  STRIPE_PRICE_CONFIGURATION
+);
+const STRIPE_PORTAL_CONFIGURATION_ID =
+  /^bpc_[A-Za-z0-9]+$/.test(process.env.STRIPE_PORTAL_CONFIGURATION_ID || "")
+    ? process.env.STRIPE_PORTAL_CONFIGURATION_ID
+    : null;
+const STRIPE_TAX_ENABLED = process.env.STRIPE_TAX_ENABLED === "true";
 
 // Devise Stripe selon pays
 function currencyForCountry(country) {
@@ -107,12 +128,34 @@ function currencyForCountry(country) {
   return "usd";
 }
 
+function normalizeBillingCountry(value) {
+  const country = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return /^[A-Z]{2}$/.test(country) ? country : "CA";
+}
+
+const billingOverviewHandler = createBillingOverviewHandler({
+  supabase,
+  stripe,
+  plans: PLAN_PRICES,
+  resolveCurrency: currencyForCountry,
+  portalConfigurationId: STRIPE_PORTAL_CONFIGURATION_ID,
+  portalPlanPriceIds: STRIPE_PORTAL_PRICE_IDS,
+});
+
+const billingPortalHandler = createBillingPortalHandler({
+  supabase,
+  stripe,
+  frontendUrl: process.env.FRONTEND_URL,
+  portalConfigurationId: STRIPE_PORTAL_CONFIGURATION_ID,
+  portalPlanPriceIds: STRIPE_PORTAL_PRICE_IDS,
+});
+
 // ─────────────────────────────────────────────────────────────
 // POST /api/v1/billing/checkout
 // Créer une session Stripe Checkout pour s'abonner
 // ─────────────────────────────────────────────────────────────
-router.post("/checkout", async (req, res) => {
-  const { company_id, plan_name, billing_cycle = "monthly", country: countryOverride } = req.body;
+router.post("/checkout", requireBillingManager, async (req, res) => {
+  const { company_id, plan_name, billing_cycle = "monthly" } = req.body;
 
   if (hasTenantMismatch(req, company_id)) {
     return res.status(403).json({ error: "forbidden" });
@@ -129,15 +172,19 @@ router.post("/checkout", async (req, res) => {
     const company = await getCompany(companyId, "*");
     if (!company) return res.status(404).json({ error: "company introuvable" });
 
-    const plan = PLANS[plan_name];
+    const plan = PLAN_PRICES[plan_name];
     if (!plan) return res.status(400).json({ error: "plan invalide" });
+    if (!["monthly", "annual"].includes(billing_cycle)) {
+      return res.status(400).json({ error: "cycle de facturation invalide" });
+    }
+
+    const billingCountry = normalizeBillingCountry(company.billing_country);
 
     // Récupérer ou créer le customer Stripe
     const sub = await getSubscription(companyId);
 
     let customerId = sub?.stripe_customer_id;
     if (!customerId) {
-      const billingCountry = countryOverride || company.billing_country || "CA";
       const customer = await stripe.customers.create({
         email: company.contact_email,
         name: company.contact_name,
@@ -153,27 +200,27 @@ router.post("/checkout", async (req, res) => {
 
     // ── MULTI-DEVISE ──
     // Même chiffre dans toutes les devises (79$ CAD = 79$ USD = 79€)
-    const billingCountry = countryOverride || company.billing_country || "CA";
     const stripeCurrency = currencyForCountry(billingCountry);
     const isCanada = billingCountry === "CA";
 
     // Calcul prix avec remise annuelle
     const basePrice = billing_cycle === "annual"
-      ? Math.round(plan.price * 12 * 0.80)
+      ? plan.price_annual
       : plan.price;
-
-    // Stripe Checkout Session
-    const session = await stripe.checkout.sessions.create({
-      customer: customerId,
-      mode: "subscription",
-      payment_method_types: ["card"],
-      line_items: [
-        {
+    const configuredPriceId = getConfiguredStripePriceId(
+      STRIPE_PRICE_CONFIGURATION,
+      plan_name,
+      stripeCurrency,
+      billing_cycle
+    );
+    const subscriptionLineItem = configuredPriceId
+      ? { price: configuredPriceId, quantity: 1 }
+      : {
           price_data: {
             currency: stripeCurrency,
             product_data: {
               name: `VoiceDesk IA — ${plan.label}`,
-              description: `${plan.minutes} minutes incluses/mois`,
+              description: `${plan.minutes_included} minutes incluses/mois`,
             },
             unit_amount: basePrice * 100,
             recurring: {
@@ -181,7 +228,14 @@ router.post("/checkout", async (req, res) => {
             },
           },
           quantity: 1,
-        },
+        };
+
+    // Stripe Checkout Session
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      mode: "subscription",
+      line_items: [
+        subscriptionLineItem,
         // ── FRAIS D'INSTALLATION : CANADA UNIQUEMENT ──
         ...(isCanada ? [{
           price_data: {
@@ -196,9 +250,12 @@ router.post("/checkout", async (req, res) => {
         }] : []),
       ],
       // ── TAXES AUTOMATIQUES (TPS/TVQ au Canada via Stripe Tax) ──
-      automatic_tax: { enabled: isCanada },
+      ...(isCanada && STRIPE_TAX_ENABLED
+        ? { automatic_tax: { enabled: true } }
+        : {}),
+      metadata: { company_id: companyId, plan_name, billing_cycle },
       subscription_data: {
-        metadata: { company_id: companyId, plan_name },
+        metadata: { company_id: companyId, plan_name, billing_cycle },
         trial_period_days: 14,
       },
       success_url: `${process.env.FRONTEND_URL}/onboarding/success?session_id={CHECKOUT_SESSION_ID}`,
@@ -218,127 +275,19 @@ router.post("/checkout", async (req, res) => {
 // POST /api/v1/billing/portal
 // Rediriger vers Customer Portal Stripe (client gère sa carte)
 // ─────────────────────────────────────────────────────────────
-router.post("/portal", async (req, res) => {
-  const { company_id } = req.body;
-
-  if (hasTenantMismatch(req, company_id)) {
-    return res.status(403).json({ error: "forbidden" });
-  }
-
-  const companyId = getTargetCompanyId(req, company_id);
-  if (!companyId) {
-    return res.status(isSuperAdmin(req) ? 400 : 403).json({
-      error: isSuperAdmin(req) ? "company_id requis" : "forbidden",
-    });
-  }
-
-  try {
-    const company = await getCompany(companyId);
-    if (!company) return res.status(404).json({ error: "company introuvable" });
-
-    const sub = await getSubscription(companyId, "stripe_customer_id");
-
-    if (!sub?.stripe_customer_id) {
-      return res.status(404).json({ error: "Pas de compte Stripe pour ce client" });
-    }
-
-    const portalSession = await stripe.billingPortal.sessions.create({
-      customer: sub.stripe_customer_id,
-      return_url: `${process.env.FRONTEND_URL}/config/billing`,
-      locale: "fr-CA",
-    });
-
-    return res.json({ portal_url: portalSession.url });
-  } catch (err) {
-    console.error("[BILLING] Portal error:", err);
-    return res.status(500).json({ error: err.message });
-  }
-});
+router.post("/portal", billingPortalHandler);
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/v1/billing/me
 // Consultation par le client de son propre abonnement
 // ─────────────────────────────────────────────────────────────
-router.get("/me", async (req, res) => {
-  const { company_id } = req.query;
-
-  if (hasTenantMismatch(req, company_id)) {
-    return res.status(403).json({ error: "forbidden" });
-  }
-
-  const companyId = getTargetCompanyId(req, company_id);
-  if (!companyId) {
-    return res.status(isSuperAdmin(req) ? 400 : 403).json({
-      error: isSuperAdmin(req) ? "company_id requis" : "forbidden",
-    });
-  }
-
-  try {
-    const company = await getCompany(companyId);
-    if (!company) return res.status(404).json({ error: "company introuvable" });
-
-    const [sub, currentUsage, invoices, paymentMethods] = await Promise.all([
-      supabase.from("subscriptions").select("*").eq("company_id", companyId).maybeSingle(),
-      getCurrentPeriodUsage(companyId),
-      supabase.from("invoices").select("*").eq("company_id", companyId)
-        .order("created_at", { ascending: false }).limit(12),
-      supabase.from("payment_methods").select("*").eq("company_id", companyId),
-    ]);
-
-    if (sub.error) throw sub.error;
-    if (invoices.error) throw invoices.error;
-    if (paymentMethods.error) throw paymentMethods.error;
-
-    const subscription = sub.data;
-    if (!subscription) {
-      return res.status(404).json({ error: "abonnement introuvable" });
-    }
-
-    const plan = PLANS[subscription.plan_name];
-    const minutesUsed = currentUsage.voice_minutes || 0;
-    const minutesIncluded = subscription.minutes_included || plan?.minutes || 0;
-    const minutesOverage = Math.max(0, minutesUsed - minutesIncluded);
-    const overageRate = subscription.overage_rate_usd || plan?.overage_rate || 0;
-    const estimatedOverageCost = minutesOverage * overageRate;
-
-    return res.json({
-      subscription: {
-        plan_name: subscription.plan_name,
-        plan_label: plan?.label,
-        monthly_price: subscription.monthly_price,
-        billing_cycle: subscription.billing_cycle,
-        payment_status: subscription.payment_status,
-        overage_policy: subscription.overage_policy,
-        current_period_start: subscription.current_period_start,
-        current_period_end: subscription.current_period_end,
-        trial_ends_at: subscription.trial_ends_at,
-        next_payment_date: subscription.next_payment_date,
-      },
-      usage: {
-        minutes_used: minutesUsed,
-        minutes_included: minutesIncluded,
-        minutes_remaining: Math.max(0, minutesIncluded - minutesUsed),
-        minutes_overage: minutesOverage,
-        usage_percentage: minutesIncluded > 0 ? Math.round((minutesUsed / minutesIncluded) * 100) : 0,
-        overage_rate_per_minute: overageRate,
-        estimated_overage_cost: estimatedOverageCost,
-        ai_tokens_used: currentUsage.ai_tokens || 0,
-        emails_sent: currentUsage.email_sends || 0,
-      },
-      invoices: invoices.data || [],
-      payment_methods: paymentMethods.data || [],
-    });
-  } catch (err) {
-    console.error("[BILLING] Me error:", err);
-    return res.status(500).json({ error: err.message });
-  }
-});
+router.get("/me", billingOverviewHandler);
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/v1/billing/overage-policy
 // Le client choisit : pay_as_you_go OU block_at_limit
 // ─────────────────────────────────────────────────────────────
-router.post("/overage-policy", async (req, res) => {
+router.post("/overage-policy", requireBillingManager, async (req, res) => {
   const { company_id, overage_policy } = req.body;
 
   if (hasTenantMismatch(req, company_id)) {
@@ -383,71 +332,9 @@ router.post("/overage-policy", async (req, res) => {
 // POST /api/v1/billing/change-plan
 // Le client demande de changer de forfait
 // ─────────────────────────────────────────────────────────────
-router.post("/change-plan", async (req, res) => {
-  const { company_id, new_plan } = req.body;
-
-  if (hasTenantMismatch(req, company_id)) {
-    return res.status(403).json({ error: "forbidden" });
-  }
-
-  const companyId = getTargetCompanyId(req, company_id);
-  if (!companyId) {
-    return res.status(isSuperAdmin(req) ? 400 : 403).json({
-      error: isSuperAdmin(req) ? "company_id requis" : "forbidden",
-    });
-  }
-
-  if (!PLANS[new_plan]) return res.status(400).json({ error: "plan invalide" });
-
-  try {
-    const company = await getCompany(companyId);
-    if (!company) return res.status(404).json({ error: "company introuvable" });
-
-    const sub = await getSubscription(companyId);
-    if (!sub) return res.status(404).json({ error: "abonnement introuvable" });
-
-    if (sub.stripe_subscription_id) {
-      // Mettre à jour Stripe (prorata automatique)
-      const stripeSub = await stripe.subscriptions.retrieve(sub.stripe_subscription_id);
-      await stripe.subscriptions.update(sub.stripe_subscription_id, {
-        items: [{
-          id: stripeSub.items.data[0].id,
-          price_data: {
-            currency: stripeCurrency,
-            product: stripeSub.items.data[0].price.product,
-            unit_amount: PLANS[new_plan].price * 100,
-            recurring: { interval: "month" },
-          },
-        }],
-        proration_behavior: "create_prorations",
-      });
-    }
-
-    // Mettre à jour Supabase
-    const { data: updatedSubscription, error } = await supabase
-      .from("subscriptions")
-      .update({
-        plan_name: new_plan,
-        plan_label: PLANS[new_plan].label,
-        monthly_price: PLANS[new_plan].price,
-        minutes_included: PLANS[new_plan].minutes,
-        overage_rate_usd: PLANS[new_plan].overage_rate,
-        updated_at: new Date(),
-      })
-      .eq("company_id", companyId)
-      .select("company_id")
-      .maybeSingle();
-
-    if (error) throw error;
-    if (!updatedSubscription) {
-      return res.status(404).json({ error: "abonnement introuvable" });
-    }
-
-    return res.json({ success: true, new_plan, label: PLANS[new_plan].label });
-  } catch (err) {
-    console.error("[BILLING] Change plan error:", err);
-    return res.status(500).json({ error: err.message });
-  }
+router.post("/change-plan", requireBillingManager, (req, res) => {
+  req.body = { ...req.body, action: "subscription_update" };
+  return billingPortalHandler(req, res);
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -660,38 +547,85 @@ async function handleCheckoutCompleted(session) {
   const companyId = session.metadata?.company_id;
   if (!companyId) return;
 
-  await supabase
+  const checkoutStatus =
+    session.payment_status === "paid"
+      ? "active_paid"
+      : session.payment_status === "no_payment_required"
+        ? "trial"
+        : "pending_payment";
+
+  const { data: updatedSubscription, error: subscriptionError } = await supabase
     .from("subscriptions")
     .update({
-      stripe_customer_id: session.customer,
-      stripe_subscription_id: session.subscription,
-      payment_status: "active_paid",
+      stripe_customer_id: session.customer?.id || session.customer,
+      stripe_subscription_id: session.subscription?.id || session.subscription,
+      payment_status: checkoutStatus,
     })
-    .eq("company_id", companyId);
+    .eq("company_id", companyId)
+    .select("company_id")
+    .maybeSingle();
+  if (subscriptionError || !updatedSubscription) {
+    throw new Error("checkout_subscription_sync_failed");
+  }
 
-  await supabase.from("companies").update({ status: "active" }).eq("id", companyId);
+  if (checkoutStatus === "active_paid") {
+    const { error: companyError } = await supabase
+      .from("companies")
+      .update({ status: "active" })
+      .eq("id", companyId);
+    if (companyError) throw new Error("checkout_company_sync_failed");
+  }
 }
 
 async function handleSubscriptionUpdate(subscription) {
   const companyId = subscription.metadata?.company_id;
   if (!companyId) return;
 
-  const planName = subscription.metadata?.plan_name;
-  const status = mapStripeStatus(subscription.status);
+  const status = mapStripeSubscriptionStatus(
+    subscription.status,
+    "pending_payment"
+  );
+  const period = resolveStripeBillingPeriod(subscription);
+  const planUpdate = buildConfiguredSubscriptionPlanUpdate({
+    configuration: STRIPE_PRICE_CONFIGURATION,
+    plans: PLAN_PRICES,
+    subscription,
+  });
 
-  await supabase
+  const { data: updatedSubscription, error } = await supabase
     .from("subscriptions")
     .update({
       stripe_subscription_id: subscription.id,
       payment_status: status,
-      current_period_start: new Date(subscription.current_period_start * 1000).toISOString().split("T")[0],
-      current_period_end: new Date(subscription.current_period_end * 1000).toISOString().split("T")[0],
-      next_payment_date: new Date(subscription.current_period_end * 1000).toISOString().split("T")[0],
+      ...(period.start
+        ? { current_period_start: period.start.slice(0, 10) }
+        : {}),
+      ...(period.end
+        ? {
+            current_period_end: period.end.slice(0, 10),
+            next_payment_date: period.end.slice(0, 10),
+          }
+        : {}),
       trial_ends_at: subscription.trial_end
         ? new Date(subscription.trial_end * 1000).toISOString()
         : null,
+      ...planUpdate,
     })
-    .eq("company_id", companyId);
+    .eq("company_id", companyId)
+    .select("company_id")
+    .maybeSingle();
+  if (error || !updatedSubscription) {
+    throw new Error("subscription_update_sync_failed");
+  }
+
+  if (status === "active_paid") {
+    const { error: companyError } = await supabase
+      .from("companies")
+      .update({ status: "active" })
+      .eq("id", companyId)
+      .eq("status", "trial");
+    if (companyError) throw new Error("subscription_company_sync_failed");
+  }
 }
 
 async function handleSubscriptionDeleted(subscription) {
@@ -783,37 +717,6 @@ async function handlePaymentMethodAttached(paymentMethod) {
   });
 }
 
-function mapStripeStatus(stripeStatus) {
-  const map = {
-    "active": "active_paid",
-    "trialing": "trial",
-    "past_due": "overdue",
-    "canceled": "cancelled",
-    "incomplete": "pending_payment",
-    "incomplete_expired": "cancelled",
-    "unpaid": "overdue",
-  };
-  return map[stripeStatus] || "pending_payment";
-}
-
-async function getCurrentPeriodUsage(companyId) {
-  const now = new Date();
-  const periodStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-
-  const { data } = await supabase
-    .from("usage_records")
-    .select("resource_type, quantity")
-    .eq("company_id", companyId)
-    .eq("period_start", periodStart);
-
-  const result = { voice_minutes: 0, ai_tokens: 0, email_sends: 0, sms_sends: 0 };
-  (data || []).forEach(r => {
-    result[r.resource_type] = parseFloat(r.quantity);
-  });
-  return result;
-}
-
-
 // ─────────────────────────────────────────────────────────────
 // GET /api/v1/billing/pricing?country=CA
 // Grille de prix selon le pays du client
@@ -827,11 +730,11 @@ router.get("/pricing", async (req, res) => {
 
   try {
     const pricing = {};
-    for (const planKey of Object.keys(PLANS)) {
+    for (const planKey of Object.keys(PLAN_PRICES)) {
       pricing[planKey] = getPricingForCountry(planKey, country, billing_cycle);
-      pricing[planKey].label = PLANS[planKey].label;
-      pricing[planKey].minutes_included = PLANS[planKey].minutes;
-      pricing[planKey].overage_rate = PLANS[planKey].overage_rate;
+      pricing[planKey].label = PLAN_PRICES[planKey].label;
+      pricing[planKey].minutes_included = PLAN_PRICES[planKey].minutes_included;
+      pricing[planKey].overage_rate = PLAN_PRICES[planKey].overage_rate;
     }
 
     const isCanada = country === "CA";
@@ -849,7 +752,14 @@ router.get("/pricing", async (req, res) => {
           : "No installation fee",
       },
       taxes: isCanada
-        ? { tps: "5%", tvq: "9,975%", note: "Taxes canadiennes ajoutées à la facturation" }
+        ? {
+            tps: "5%",
+            tvq: "9,975%",
+            collection_enabled: STRIPE_TAX_ENABLED,
+            note: STRIPE_TAX_ENABLED
+              ? "Taxes canadiennes ajoutées à la facturation"
+              : "Collecte Stripe Tax à configurer avant la production",
+          }
         : null,
     });
   } catch (err) {
@@ -882,10 +792,11 @@ router.get("/verify-session", async (req, res) => {
       expand: ["subscription", "customer"],
     });
 
-    if (session.payment_status !== "paid" && session.status !== "complete") {
-      return res.json({
+    const verifiedPaymentStatus = resolveVerifiedCheckoutStatus(session);
+    if (!verifiedPaymentStatus) {
+      return res.status(409).json({
         success: false,
-        error: `Paiement non confirmé (status: ${session.payment_status})`,
+        error: "abonnement Stripe non actif",
       });
     }
 
@@ -893,37 +804,50 @@ router.get("/verify-session", async (req, res) => {
                       session.subscription?.metadata?.company_id;
 
     if (!companyId) {
-      // On retourne quand même success — le webhook Stripe mettra à jour la DB
       console.warn("[verify-session] company_id absent du metadata Stripe");
-      return res.json({ success: true, warning: "company_id absent — mise à jour via webhook" });
+      return res.status(202).json({
+        success: false,
+        pending: true,
+        error: "synchronisation Stripe en cours",
+      });
     }
 
     // Mettre à jour la subscription en DB
-    await supabase.from("subscriptions").update({
-      payment_status:      "active",
+    const { data: updatedSubscription, error: subscriptionUpdateError } =
+      await supabase.from("subscriptions").update({
+      payment_status:      verifiedPaymentStatus,
       stripe_customer_id:  session.customer?.id || session.customer,
       stripe_subscription_id: session.subscription?.id || session.subscription,
-      activated_at:        new Date().toISOString(),
-    }).eq("company_id", companyId);
+    })
+        .eq("company_id", companyId)
+        .select("company_id")
+        .maybeSingle();
+    if (subscriptionUpdateError) throw new Error("subscription_sync_failed");
+    if (!updatedSubscription) {
+      return res.status(409).json({ error: "abonnement introuvable" });
+    }
 
-    // Activer la company si encore en trial
-    await supabase.from("companies").update({
-      status: "active",
-    }).eq("id", companyId).eq("status", "trial");
+    if (verifiedPaymentStatus === "active_paid") {
+      const { error: companyUpdateError } = await supabase
+        .from("companies")
+        .update({ status: "active" })
+        .eq("id", companyId)
+        .eq("status", "trial");
+      if (companyUpdateError) throw new Error("company_sync_failed");
+    }
 
     console.log(`[verify-session] Paiement confirmé pour company ${companyId}`);
 
     return res.json({
       success:    true,
-      company_id: companyId,
       plan:       session.metadata?.plan_name || session.subscription?.metadata?.plan_name,
     });
 
   } catch (err) {
     console.error("[verify-session] Erreur:", err.message);
-    return res.status(500).json({ error: err.message });
+    return res.status(503).json({ error: "billing_verification_failed" });
   }
 });
 
 export default router;
-export { PLANS };
+export { PLAN_PRICES, PLAN_PRICES as PLANS };

@@ -31,6 +31,7 @@ import Landing from "./pages/Landing.jsx";
 import Monitoring from "./pages/Monitoring.jsx";
 import ForgotPassword from "./pages/ForgotPassword.jsx";
 import ResetPassword from "./pages/ResetPassword.jsx";
+import Billing from "./pages/Billing.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext.jsx";
 
 import "./styles/global.css";
@@ -81,6 +82,7 @@ function App() {
             <Route path="config" element={<Settings />} />
             <Route path="outbound" element={<Outbound />} />
             <Route path="calendar" element={<CalendarPage />} />
+            <Route path="billing" element={<Billing />} />
             <Route path="support" element={<Tickets />} />
             <Route path="tickets" element={<Tickets />} />
             <Route path="onboarding" element={<OnboardingPage />} />
