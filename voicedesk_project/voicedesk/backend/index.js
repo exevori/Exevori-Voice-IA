@@ -47,8 +47,17 @@ import onboardingRouter from "./modules/onboarding/index.js";
 import importRouter from "./modules/import/index.js";
 import notificationsRouter from "./modules/notifications/index.js";
 import outboundRouter from "./modules/outbound/index.js";
+import {
+  getOutboundWorkerStatus,
+  startOutboundWorker,
+} from "./modules/outbound/worker.js";
 import elevenLabsRouter from "./modules/elevenlabs/index.js";
+import { getCustomLlmAuthStatus } from "./modules/elevenlabs/customLlmAuth.js";
 import postCallRouter from "./modules/post_call/index.js";
+import {
+  getPostCallWorkerStatus,
+  startPostCallWorker,
+} from "./modules/post_call/worker.js";
 import privacyRouter from "./modules/privacy/index.js";
 
 // Webhooks externes (Gmail Push, Twilio status, Resend, Calendly)
@@ -66,6 +75,28 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || "development";
+const trustProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS, 10);
+if (Number.isInteger(trustProxyHops) && trustProxyHops > 0) {
+  // Valeur numérique uniquement : ne jamais faire confiance à une chaîne
+  // X-Forwarded-For arbitraire avec `app.set("trust proxy", true)`.
+  app.set("trust proxy", trustProxyHops);
+}
+const m2mIngressLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Math.max(
+    500,
+    Number.parseInt(process.env.M2M_INGRESS_RATE_LIMIT_PER_MINUTE, 10) || 3_000
+  ),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "machine_ingress_rate_limited" },
+});
+const highVolumeMachinePaths = new Set([
+  "/api/voice/call-complete",
+  "/api/v1/elevenlabs/llm",
+  "/api/v1/elevenlabs/llm/chat/completions",
+  "/api/v1/elevenlabs/chat/completions",
+]);
 
 // ── MIDDLEWARE GLOBAL ──
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
@@ -80,6 +111,8 @@ app.use("/api", rateLimit({
   max: 200,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: req => req.method === "POST"
+    && highVolumeMachinePaths.has(req.originalUrl?.split("?")[0]),
   message: { error: "rate_limited", message: "Trop de requêtes" },
 }));
 
@@ -98,6 +131,7 @@ app.post("/webhooks/stripe",
 // ── WEBHOOK ELEVENLABS POST-CALL (raw body, AVANT json parser, pour HMAC) ──
 // Le body brut est nécessaire pour vérifier la signature ElevenLabs-Signature
 app.post("/api/voice/call-complete",
+  m2mIngressLimiter,
   express.raw({ type: "*/*", limit: "2mb" }),
   validateElevenLabsSignature,
   (req, res, next) => {
@@ -124,7 +158,7 @@ app.use(
 // Le secret Custom LLM est validé dans le router AVANT son parseur JSON.
 // Ce montage doit rester avant les parseurs globaux pour éviter de traiter
 // un corps non authentifié.
-app.use("/api/v1/elevenlabs", elevenLabsRouter);
+app.use("/api/v1/elevenlabs", m2mIngressLimiter, elevenLabsRouter);
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -132,8 +166,17 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 // ── HEALTH CHECKS (public) ──
 app.get("/health", (req, res) => {
   const privacyConsentSync = getPrivacyConsentSyncStatus();
-  res.json({
-    status: "ok",
+  const outboundWorker = getOutboundWorkerStatus();
+  const postCallWorker = getPostCallWorkerStatus();
+  const customLlmAuth = getCustomLlmAuthStatus();
+  const outboundWorkerRequired = process.env.DISABLE_OUTBOUND_WORKER !== "true";
+  const postCallWorkerRequired =
+    process.env.DISABLE_POST_CALL_WORKER !== "true";
+  const ready = (!outboundWorkerRequired || outboundWorker.ready)
+    && (!postCallWorkerRequired || postCallWorker.ready)
+    && customLlmAuth.ready;
+  res.status(ready ? 200 : 503).json({
+    status: ready ? "ok" : "degraded",
     service: "voicedesk-backend",
     version: "1.0.0",
     timestamp: new Date().toISOString(),
@@ -144,6 +187,9 @@ app.get("/health", (req, res) => {
       attempt: privacyConsentSync.attempt,
       next_retry_at: privacyConsentSync.nextRetryAt,
     },
+    outbound_worker: outboundWorker,
+    post_call_worker: postCallWorker,
+    custom_llm_auth: customLlmAuth,
   });
 });
 
@@ -218,6 +264,7 @@ app.use((req, res) => {
 // ── Error handler ──
 app.use((err, req, res, next) => {
   logger.error("Server error", { error: err.message, path: req.path });
+  if (res.headersSent) return next(err);
   res.status(err.status || 500).json({
     error: err.code || "internal_error",
     message: NODE_ENV === "production" ? "Erreur serveur" : err.message,
@@ -227,20 +274,12 @@ app.use((err, req, res, next) => {
 // ── HTTP server ──
 const server = http.createServer(app);
 
-// (Phase 8B/8C ConversationRelay + Phase 8D Media Streams supprimés le 18 juin
-//  — Twilio appelle désormais ElevenLabs en direct, plus aucun WS audio local.)
+// Les anciens WebSockets audio locaux ont été supprimés : Twilio est désormais
+// relié nativement à ElevenLabs et aucun flux audio ne transite par ce serveur.
 
 server.on("upgrade", (req, socket, head) => {
   // Aucun WebSocket interne actuellement exposé — toute requête Upgrade est rejetée.
   socket.destroy();
-});
-
-server.listen(PORT, () => {
-  logger.info("VoiceDesk backend started", {
-    port: PORT,
-    env: NODE_ENV,
-    modules: 16,
-  });
 });
 
 if (process.env.DISABLE_BACKGROUND_JOBS !== "true") {
@@ -255,5 +294,33 @@ if (process.env.DISABLE_PRIVACY_RETENTION_JOB !== "true") {
 if (process.env.DISABLE_PRIVACY_CONSENT_SYNC !== "true") {
   void startPrivacyConsentSync({ logger });
 }
+
+if (process.env.DISABLE_OUTBOUND_WORKER !== "true") {
+  try {
+    startOutboundWorker();
+  } catch (error) {
+    logger.error("Outbound worker did not start", {
+      error_code: error?.code || "outbound_worker_start_failed",
+    });
+  }
+}
+
+if (process.env.DISABLE_POST_CALL_WORKER !== "true") {
+  try {
+    startPostCallWorker();
+  } catch (error) {
+    logger.error("Post-call worker did not start", {
+      error_code: error?.code || "post_call_worker_start_failed",
+    });
+  }
+}
+
+server.listen(PORT, () => {
+  logger.info("VoiceDesk backend started", {
+    port: PORT,
+    env: NODE_ENV,
+    modules: 17,
+  });
+});
 
 export default app;

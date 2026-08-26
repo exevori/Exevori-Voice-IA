@@ -565,7 +565,7 @@ netlify deploy --prod
 
 ### Voice servers → Fly.io (containers séparés)
 
-Idem que backend mais services voice-inbound et voice-outbound.
+Le service voice-inbound reste séparé. Les appels sortants utilisent désormais la file durable du backend; ne pas déployer l'ancien service voice-outbound.
 
 ## Étape 10.3 — Monitoring
 

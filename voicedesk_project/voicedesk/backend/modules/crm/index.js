@@ -263,7 +263,10 @@ async function respondTenantMiss(supabase, res, id, notFoundMessage, req) {
 
 async function loadTenantContact(supabase, req, id, columns = "*") {
   let query = supabase.from("contacts").select(columns).eq("id", id);
-  if (!isSuperAdmin(req)) query = query.eq("company_id", req.user?.company_id);
+  const requestedCompanyId = isSuperAdmin(req)
+    ? req.query?.company_id || req.body?.company_id || null
+    : req.user?.company_id;
+  if (requestedCompanyId) query = query.eq("company_id", requestedCompanyId);
   return query.maybeSingle();
 }
 

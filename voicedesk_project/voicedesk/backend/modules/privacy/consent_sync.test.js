@@ -714,17 +714,21 @@ test("le health check expose la readiness du consentement sans identifiant", () 
   assert.ok(serverSource.includes("next_retry_at:"));
 });
 
-test("provisioning et annonces sortantes verrouillent le premier message", () => {
+test("provisioning et appels sortants imposent l'annonce de consentement", () => {
   const provisioning = fs.readFileSync(
     new URL("../onboarding/provision_service.js", import.meta.url),
     "utf8"
   );
-  const moduleOutbound = fs.readFileSync(
-    new URL("../outbound/index.js", import.meta.url),
+  const outboundWorker = fs.readFileSync(
+    new URL("../outbound/worker.js", import.meta.url),
     "utf8"
   );
-  const voiceOutbound = fs.readFileSync(
-    new URL("../../voice/outbound.js", import.meta.url),
+  const legacyVoiceOutbound = new URL(
+    "../../voice/outbound.js",
+    import.meta.url
+  );
+  const postCall = fs.readFileSync(
+    new URL("../post_call/index.js", import.meta.url),
     "utf8"
   );
 
@@ -742,7 +746,21 @@ test("provisioning et annonces sortantes verrouillent le premier message", () =>
   assert.ok(provisioning.includes("...masterConfig.conversation_config"));
   assert.equal(provisioning.includes("platform_settings.webhook"), false);
   assert.equal(provisioning.includes("POSTCALL_WEBHOOK_URL"), false);
-  assert.ok(moduleOutbound.includes('welcomeGreetingInterruptible="false"'));
-  assert.ok(voiceOutbound.includes('welcomeGreetingInterruptible="false"'));
-  assert.ok(voiceOutbound.includes("prefixRecordingConsentFr("));
+  assert.ok(outboundWorker.includes("prefixRecordingConsentFr("));
+  assert.ok(outboundWorker.includes("prefixRecordingConsentEn("));
+  assert.ok(outboundWorker.includes("conversation_config_override"));
+  assert.ok(outboundWorker.includes("agent: { first_message: greeting }"));
+  assert.equal(fs.existsSync(legacyVoiceOutbound), false);
+  const refusalDetection = postCall.indexOf(
+    "const consentRefused = transcriptHasConsentRefusal(transcript)"
+  );
+  const refusalCleanup = postCall.indexOf(
+    '"enqueue_consent_refusal_cleanup"'
+  );
+  const durableIngestion = postCall.indexOf(
+    "ingestion = await enqueuePostCallEvent"
+  );
+  assert.ok(refusalDetection >= 0);
+  assert.ok(refusalCleanup > refusalDetection);
+  assert.ok(durableIngestion > refusalCleanup);
 });

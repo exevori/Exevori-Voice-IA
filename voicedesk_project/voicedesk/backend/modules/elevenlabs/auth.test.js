@@ -72,6 +72,67 @@ test("middleware refuse secret absent/invalide et accepte header exact", () => {
   assert.equal(bearer.nextCalled, true);
 });
 
+test("un mapping par agent lie le secret au header d'agent", () => {
+  const middleware = createCustomLlmAuthMiddleware({
+    getExpectedSecret: () => "global-secret",
+    getAgentSecrets: () => JSON.stringify({
+      "agent-a": "agent-a-secret-with-32-characters-aaaa",
+      "agent-b": "agent-b-secret-with-32-characters-bbbb",
+    }),
+  });
+
+  const accepted = invoke(middleware, {
+    "x-elevenlabs-agent-id": "agent-a",
+    "x-elevenlabs-custom-llm-secret": "agent-a-secret-with-32-characters-aaaa",
+  });
+  assert.equal(accepted.nextCalled, true);
+
+  assert.equal(invoke(middleware, {
+    "x-elevenlabs-agent-id": "agent-b",
+    "x-elevenlabs-custom-llm-secret": "agent-a-secret-with-32-characters-aaaa",
+  }).status, 401);
+  assert.equal(invoke(middleware, {
+    "x-elevenlabs-custom-llm-secret": "global-secret",
+  }).status, 401);
+});
+
+test("la production échoue fermée sans secrets distincts par agent", () => {
+  const middleware = createCustomLlmAuthMiddleware({
+    getExpectedSecret: () => "legacy-global-secret",
+    getAgentSecrets: () => "",
+    getNodeEnv: () => "production",
+  });
+  const result = invoke(middleware, {
+    "x-elevenlabs-agent-id": "agent-a",
+    "x-elevenlabs-custom-llm-secret": "legacy-global-secret",
+  });
+  assert.equal(result.status, 503);
+  assert.equal(result.body.error, "custom_llm_per_agent_secrets_required");
+  assert.equal(result.nextCalled, false);
+});
+
+test("un mapping faible, dupliqué ou invalide échoue fermé", () => {
+  for (const raw of [
+    "{",
+    JSON.stringify({ "agent-a": "court" }),
+    JSON.stringify({
+      "agent-a": "same-secret-with-sufficient-length-123",
+      "agent-b": "same-secret-with-sufficient-length-123",
+    }),
+  ]) {
+    const middleware = createCustomLlmAuthMiddleware({
+      getAgentSecrets: () => raw,
+      getNodeEnv: () => "production",
+    });
+    const result = invoke(middleware, {
+      "x-elevenlabs-agent-id": "agent-a",
+      "x-elevenlabs-custom-llm-secret": "same-secret-with-sufficient-length-123",
+    });
+    assert.equal(result.status, 503);
+    assert.equal(result.nextCalled, false);
+  }
+});
+
 test("les trois alias appliquent l'auth avant le parseur JSON", () => {
   const source = fs.readFileSync(new URL("./index.js", import.meta.url), "utf8");
   for (const path of [
@@ -81,11 +142,13 @@ test("les trois alias appliquent l'auth avant le parseur JSON", () => {
   ]) {
     assert.ok(
       source.includes(
-        `router.post("${path}", requireCustomLlmAuth, express.json({ limit: "1mb" }), llmHandler);`
+        `router.post("${path}", requireCustomLlmAuth, customLlmRateLimiter, express.json({ limit: "1mb" }), safeLlmHandler);`
       ),
       `${path} doit authentifier avant de parser`
     );
   }
+  assert.match(source, /Promise\.resolve\(llmHandler\(req, res\)\)\.catch\(next\)/);
+  assert.match(source, /typeof lastUser\?\.content === "string"/);
 });
 
 test("le router Custom LLM est monté avant le parseur JSON global", () => {
@@ -94,7 +157,7 @@ test("le router Custom LLM est monté avant le parseur JSON global", () => {
     "utf8"
   );
   const mountIndex = serverSource.indexOf(
-    'app.use("/api/v1/elevenlabs", elevenLabsRouter);'
+    'app.use("/api/v1/elevenlabs", m2mIngressLimiter, elevenLabsRouter);'
   );
   const globalParserIndex = serverSource.indexOf(
     'app.use(express.json({ limit: "10mb" }));'
@@ -102,4 +165,7 @@ test("le router Custom LLM est monté avant le parseur JSON global", () => {
 
   assert.ok(mountIndex >= 0);
   assert.ok(globalParserIndex > mountIndex);
+  assert.match(serverSource, /highVolumeMachinePaths\.has\(req\.originalUrl\?\.split\("\?"\)\[0\]\)/);
+  assert.doesNotMatch(serverSource, /startsWith\("\/api\/v1\/elevenlabs"\)/);
+  assert.match(serverSource, /app\.post\("\/api\/voice\/call-complete",\s*m2mIngressLimiter/);
 });

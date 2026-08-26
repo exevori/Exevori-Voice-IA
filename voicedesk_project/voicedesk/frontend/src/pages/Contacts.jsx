@@ -23,6 +23,7 @@ import FilterBar from "../components/common/FilterBar.jsx";
 import ContactForm from "../components/contacts/ContactForm.jsx";
 import ImportWizard from "../components/contacts/ImportWizard.jsx";
 import { cn } from "../lib/utils.js";
+import { hasPermission } from "../utils/auth-helpers.js";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -56,6 +57,7 @@ export default function Contacts() {
   const loadSequenceRef = useRef(0);
   const loadControllerRef = useRef(null);
   const canMerge = ["company_admin", "super_admin"].includes(profile?.role);
+  const canTriggerCalls = hasPermission(profile?.role, "TRIGGER_CALLS");
 
   useEffect(() => {
     loadControllerRef.current?.abort();
@@ -320,9 +322,11 @@ export default function Contacts() {
         open={!!selected}
         onClose={() => setSelected(null)}
         token={token}
+        companyId={effectiveCompanyId}
         t={t}
         lang={i18n.language}
         canMerge={canMerge}
+        canTriggerCalls={canTriggerCalls}
         onVoiceCall={(contact) => navigate(`/outbound?contact_id=${encodeURIComponent(contact.id)}`)}
         onBookAppointment={(contact) => navigate(`/calendar?contact_id=${encodeURIComponent(contact.id)}`)}
         onMerge={(primary, duplicate) => {
@@ -461,9 +465,11 @@ function ContactDetailSheet({
   open,
   onClose,
   token,
+  companyId,
   t,
   lang,
   canMerge,
+  canTriggerCalls,
   onEdit,
   onArchive,
   onMerge,
@@ -489,7 +495,7 @@ function ContactDetailSheet({
 
     const headers = { Authorization: `Bearer ${token}` };
     const loadDetail = async () => {
-      const response = await fetch(`${API}/api/v1/contacts/${contactId}`, {
+      const response = await fetch(`${API}/api/v1/contacts/${contactId}?company_id=${encodeURIComponent(companyId)}`, {
         headers,
         signal: controller.signal,
       });
@@ -499,7 +505,7 @@ function ContactDetailSheet({
     };
     const loadDuplicates = async () => {
       try {
-        const response = await fetch(`${API}/api/v1/contacts/${contactId}/duplicates`, {
+        const response = await fetch(`${API}/api/v1/contacts/${contactId}/duplicates?company_id=${encodeURIComponent(companyId)}`, {
           headers,
           signal: controller.signal,
         });
@@ -523,12 +529,14 @@ function ContactDetailSheet({
     loadDuplicates();
 
     return () => controller.abort();
-  }, [contactId, token]);
+  }, [companyId, contactId, token]);
 
   const c = detail?.contact;
   const archived = c?.status === "archived";
-  const voiceCallDisabled = !c?.phone || c?.call_consent !== true || archived;
-  const voiceCallTitle = archived
+  const voiceCallDisabled = !canTriggerCalls || !c?.phone || c?.call_consent !== true || archived;
+  const voiceCallTitle = !canTriggerCalls
+    ? t("contacts.quick.voiceForbidden", "Seul un responsable peut lancer un appel Voice IA.")
+    : archived
     ? t("contacts.quick.voiceArchived", "Un contact archivé ne peut pas être appelé.")
     : !c?.phone
       ? t("contacts.quick.voiceNoPhone", "Ajoutez un téléphone E.164 pour appeler.")

@@ -27,15 +27,18 @@
 // ============================================================
 
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { supabase } from "../voice/lifecycle.js";
 import { searchSimilarChunks } from "../kb/rag.js";
 import { streamChat } from "../voice/llm.js";
+import { resolveInboundPolicy } from "../voice/inboundPolicy.js";
 import {
   findConsentTerminationToolName,
   isRecordingConsentRefusal,
   prefixConsentSystemRuleFr,
 } from "../privacy/consent.js";
 import { createCustomLlmAuthMiddleware } from "./customLlmAuth.js";
+import { buildOutboundMissionPrompt } from "./outboundMission.js";
 import {
   extractCustomLlmTenantHints,
   resolveElevenLabsCompany,
@@ -48,11 +51,52 @@ export {
 
 const router = express.Router();
 const requireCustomLlmAuth = createCustomLlmAuthMiddleware();
+const customLlmRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: req => String(
+    req.customLlmAgentId
+      || req.headers?.["x-elevenlabs-agent-id"]
+      || "authenticated-agent"
+  ).slice(0, 200),
+  message: { error: "custom_llm_rate_limited" },
+});
 
 function extractLastUserText(messages) {
   const arr = Array.isArray(messages) ? messages : [];
   const lastUser = [...arr].reverse().find(m => m && m.role === "user");
-  return lastUser?.content?.trim() || "";
+  return typeof lastUser?.content === "string"
+    ? lastUser.content.trim()
+    : "";
+}
+
+function validateCustomLlmBody(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return "invalid_body";
+  }
+  if (body.model !== undefined && typeof body.model !== "string") {
+    return "invalid_model";
+  }
+  if (!Array.isArray(body.messages) || body.messages.length > 200) {
+    return "invalid_messages";
+  }
+  let contentLength = 0;
+  for (const message of body.messages) {
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      return "invalid_message";
+    }
+    if (message.content !== null && message.content !== undefined) {
+      if (typeof message.content !== "string") return "invalid_message_content";
+      contentLength += message.content.length;
+      if (contentLength > 250_000) return "messages_too_large";
+    }
+  }
+  if (body.tools !== undefined && (!Array.isArray(body.tools) || body.tools.length > 64)) {
+    return "invalid_tools";
+  }
+  return null;
 }
 
 function normalizeConversationMessage(message) {
@@ -173,6 +217,10 @@ function sendForcedConsentTermination(res, body, toolName) {
 const llmHandler = async (req, res) => {
   const t0 = Date.now();
   const body = req.body || {};
+  const validationError = validateCustomLlmBody(body);
+  if (validationError) {
+    return res.status(400).json({ error: { message: validationError } });
+  }
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const lastUserText = extractLastUserText(messages);
   const userMessageCount = messages.filter(
@@ -200,6 +248,9 @@ const llmHandler = async (req, res) => {
     agentId,
     calledNumber,
     callerNumber: fromNumber,
+    direction,
+    outboundQueueId,
+    outboundAttemptId,
   } = extractCustomLlmTenantHints(req);
   let company;
   try {
@@ -207,6 +258,9 @@ const llmHandler = async (req, res) => {
       supabase,
       agentId,
       calledNumber,
+      direction,
+      outboundQueueId,
+      outboundAttemptId,
     });
   } catch {
     console.warn("[elevenlabs] tenant lookup unavailable");
@@ -233,8 +287,49 @@ const llmHandler = async (req, res) => {
     || `Tu es ${assistantName}, assistante vocale d'une PME québécoise. Réponds en français du Québec, ton chaleureux et professionnel, phrases courtes adaptées à l'audio.`;
   systemPrompt = prefixConsentSystemRuleFr(systemPrompt);
 
-  const contactCtx = await buildContactContext(fromNumber, companyId);
-  if (contactCtx) systemPrompt += contactCtx;
+  if (direction === "outbound") {
+    let missionPrompt;
+    try {
+      missionPrompt = await buildOutboundMissionPrompt({
+        supabase,
+        companyId,
+        queueId: outboundQueueId,
+        attemptId: outboundAttemptId,
+      });
+    } catch {
+      console.warn("[elevenlabs] outbound mission lookup unavailable");
+      return res.status(503).json({
+        error: { message: "Outbound mission unavailable" },
+      });
+    }
+    if (!missionPrompt) {
+      console.warn("[elevenlabs] outbound mission correlation failed");
+      return res.status(503).json({
+        error: { message: "Outbound mission unavailable" },
+      });
+    }
+    systemPrompt += missionPrompt;
+  } else {
+    const contactCtx = await buildContactContext(fromNumber, companyId);
+    if (contactCtx) systemPrompt += contactCtx;
+  }
+
+  // Les appels entrants respectent les horaires du tenant. L'indicateur
+  // outbound vient exclusivement des dynamic_variables injectées par notre
+  // worker sortant; en son absence, la politique la plus sûre est inbound.
+  // Une panne de configuration ne coupe pas un appel déjà connecté.
+  try {
+    const inboundPolicy = await resolveInboundPolicy({
+      supabase,
+      companyId,
+      direction,
+    });
+    if (inboundPolicy.promptSuffix) {
+      systemPrompt += `\n\n${inboundPolicy.promptSuffix}`;
+    }
+  } catch {
+    console.warn("[elevenlabs] inbound business-hours policy unavailable");
+  }
 
   // 3. RAG sur le dernier message utilisateur
   const userText = extractLastUserText(messages);
@@ -360,8 +455,12 @@ const llmHandler = async (req, res) => {
   }
 };
 
-router.post("/llm", requireCustomLlmAuth, express.json({ limit: "1mb" }), llmHandler);
-router.post("/llm/chat/completions", requireCustomLlmAuth, express.json({ limit: "1mb" }), llmHandler);
-router.post("/chat/completions", requireCustomLlmAuth, express.json({ limit: "1mb" }), llmHandler);
+const safeLlmHandler = (req, res, next) => {
+  Promise.resolve(llmHandler(req, res)).catch(next);
+};
+
+router.post("/llm", requireCustomLlmAuth, customLlmRateLimiter, express.json({ limit: "1mb" }), safeLlmHandler);
+router.post("/llm/chat/completions", requireCustomLlmAuth, customLlmRateLimiter, express.json({ limit: "1mb" }), safeLlmHandler);
+router.post("/chat/completions", requireCustomLlmAuth, customLlmRateLimiter, express.json({ limit: "1mb" }), safeLlmHandler);
 
 export default router;

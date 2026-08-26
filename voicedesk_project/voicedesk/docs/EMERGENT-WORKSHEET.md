@@ -815,7 +815,7 @@ vercel --prod
 ```bash
 cd backend
 fly launch --name voicedesk-voice-inbound --region yul --config voice-inbound.toml
-fly launch --name voicedesk-voice-outbound --region yul --config voice-outbound.toml
+# Aucun service voice-outbound séparé : le backend exécute la file durable ElevenLabs.
 ```
 
 ## Tâche 11.5 — Reconfigurer Twilio en production

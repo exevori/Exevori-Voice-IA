@@ -3,49 +3,55 @@ import fs from "node:fs";
 import { test } from "node:test";
 
 const source = fs.readFileSync(new URL("./index.js", import.meta.url), "utf8");
+const workerSource = fs.readFileSync(
+  new URL("./worker.js", import.meta.url),
+  "utf8"
+);
+const migrationSource = fs.readFileSync(
+  new URL("../../../migrations/012_outbound_rebuild.sql", import.meta.url),
+  "utf8"
+);
 
 test("DNC lookups fail closed when Supabase cannot confirm consent", () => {
   const helperStart = source.indexOf("async function checkDNC");
-  const helperEnd = source.indexOf("async function callsMadeToday", helperStart);
+  const helperEnd = source.indexOf("function normalizeTimeZone", helperStart);
   const helper = source.slice(helperStart, helperEnd);
 
   assert.ok(helperStart > 0 && helperEnd > helperStart);
   assert.match(helper, /const \{ data, error \} = await supabase/);
   assert.match(helper, /if \(error\) return \{ blocked: true, error: error\.message \}/);
   assert.doesNotMatch(helper, /return !!data/);
-  assert.equal(
-    (source.match(/Vérification DNC indisponible/g) || []).length,
-    3
-  );
+  assert.ok((source.match(/Vérification DNC indisponible/g) || []).length >= 2);
 });
 
-test("the worker revalidates DNC and explicit CRM consent immediately before Twilio", () => {
-  const workerStart = source.indexOf("async function processOutboundCalls");
-  const workerEnd = source.indexOf('router.post("/webhooks/twiml"', workerStart);
-  const worker = source.slice(workerStart, workerEnd);
-  const dncIndex = worker.indexOf("await checkDNC(company_id, contact.phone)");
-  const consentIndex = worker.indexOf("await checkOutboundConsent(company_id, contact.phone)");
-  const callingIndex = worker.indexOf('status: "calling"');
-  const twilioIndex = worker.indexOf("twilioClient.calls.create");
+test("le worker revalide DNC et consentement avant l'appel ElevenLabs", () => {
+  const contactIndex = workerSource.indexOf('.from("contacts")');
+  const dncIndex = workerSource.indexOf('.from("dnc_list")', contactIndex);
+  const beginIndex = workerSource.indexOf("queue.beginAttempt", dncIndex);
+  const providerIndex = workerSource.indexOf("client.initiateOutboundCall", beginIndex);
 
-  assert.ok(workerStart > 0 && workerEnd > workerStart);
-  assert.ok(dncIndex > 0);
-  assert.ok(consentIndex > dncIndex);
-  assert.ok(callingIndex > consentIndex);
-  assert.ok(twilioIndex > callingIndex);
-  assert.match(worker, /status: dncCheck\.blocked && !dncCheck\.error \? "dnc" : "error"/);
-  assert.match(worker, /Consentement explicite aux appels requis/);
-  assert.match(worker, /\.eq\("status", "pending"\)[\s\S]*?\.select\("id"\)[\s\S]*?\.maybeSingle\(\)/);
-  assert.match(worker, /if \(!claimedContact\) continue/);
+  assert.ok(contactIndex > 0);
+  assert.ok(dncIndex > contactIndex);
+  assert.ok(beginIndex > dncIndex);
+  assert.ok(providerIndex > beginIndex);
+  assert.match(workerSource, /\.eq\("company_id", job\.company_id\)/);
+  assert.match(workerSource, /\.eq\("call_consent", true\)/);
+  assert.match(workerSource, /\.is\("merged_into_contact_id", null\)/);
+  assert.match(workerSource, /"dnc_lookup_failed"/);
 
-  const consentStart = source.indexOf("async function checkOutboundConsent");
-  const consentEnd = source.indexOf("async function callsMadeToday", consentStart);
-  const consent = source.slice(consentStart, consentEnd);
-  assert.match(consent, /\.eq\("company_id", company_id\)/);
-  assert.match(consent, /\.eq\("phone", normalized\)/);
-  assert.match(consent, /\.eq\("call_consent", true\)/);
-  assert.match(consent, /\.is\("merged_into_contact_id", null\)/);
-  assert.match(consent, /if \(error\) return \{ allowed: false, error: error\.message \}/);
+  const gateStart = migrationSource.indexOf(
+    "CREATE OR REPLACE FUNCTION public.begin_outbound_call_attempt"
+  );
+  const gateEnd = migrationSource.indexOf(
+    "CREATE OR REPLACE FUNCTION public.mark_outbound_call_dispatched",
+    gateStart
+  );
+  const gate = migrationSource.slice(gateStart, gateEnd);
+  assert.match(gate, /c\.call_consent IS TRUE/);
+  assert.match(gate, /FROM public\.dnc_list AS d/);
+  assert.match(gate, /d\.company_id = v_queue\.company_id/);
+  assert.equal(source.includes("ConversationRelay"), false);
+  assert.equal(source.includes("twilioClient.calls.create"), false);
 });
 
 test("a DNC row cannot be removed while an explicit CRM refusal is active", () => {

@@ -263,26 +263,9 @@ router.post("/step/4", async (req, res) => {
         .eq("company_id", company_id);
     }
 
-    // Déclencher un appel test si demandé
-    if (test_phone_number) {
-      try {
-        const callResponse = await fetch(`${process.env.VOICE_OUTBOUND_URL}/outbound/call`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            company_id,
-            to_phone: test_phone_number,
-            context: "onboarding_test",
-            opening_script_fr: "Bonjour, c'est un appel test depuis VoiceDesk. Tout fonctionne correctement!",
-          }),
-        });
-        if (!callResponse.ok) {
-          console.warn("[ONBOARDING] Appel test échoué, mais on continue");
-        }
-      } catch (e) {
-        console.warn("[ONBOARDING] Voice server non disponible:", e.message);
-      }
-    }
+    // Les appels de validation passent désormais par la file durable afin
+    // d'appliquer consentement, DNC, quotas et idempotence avant tout appel.
+    const testCallDeferred = Boolean(test_phone_number);
 
     await markStepComplete(company_id, 4);
 
@@ -296,6 +279,10 @@ router.post("/step/4", async (req, res) => {
       success: true,
       message: "Configuration terminée!",
       onboarding_complete: true,
+      test_call_deferred: testCallDeferred,
+      test_call_message: testCallDeferred
+        ? "Créez l'appel de validation depuis Appels sortants après avoir confirmé le consentement."
+        : null,
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });

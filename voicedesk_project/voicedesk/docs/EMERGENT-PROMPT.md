@@ -73,7 +73,7 @@ Animation : framer-motion (déjà dans package.json)
 Auth      : Supabase Auth (@supabase/supabase-js, déjà installé)
 State     : React Context (pas de Redux, pas de Zustand)
 API calls : fetch natif (pas d'axios pour rester léger)
-Backend   : NE PAS TOUCHER (Node.js + Express, ports 3000/3100/8080/8081)
+Backend   : Node.js + Express (ports 3000/3100) + service inbound (8080); aucun service outbound public 8081
 
 ═══════════════════════════════════════════════════════════
 ÉCONOMIE DE CRÉDITS — COMMENT TRAVAILLER EFFICACEMENT

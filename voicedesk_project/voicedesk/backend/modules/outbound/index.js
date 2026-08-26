@@ -1,5 +1,5 @@
 // ============================================================
-// EXEVORI VOICE IA — MODULE OUTBOUND (Phase 8D)
+// EXEVORI VOICE IA — MODULE OUTBOUND V1
 // Appels sortants : prospection, suivi, validation RDV, annonce
 //
 // Routes :
@@ -22,20 +22,25 @@
 //   POST   /api/v1/outbound/dnc
 //   DELETE /api/v1/outbound/dnc/:id
 //
-//   POST   /api/v1/outbound/webhooks/call-status (Twilio)
+//   GET    /api/v1/outbound/settings
+//   PATCH  /api/v1/outbound/settings
+//
+//   POST   /api/v1/outbound/manual-review/:queueId/resolve (super_admin)
+//
+// Les callbacks fournisseur passent exclusivement par le webhook ElevenLabs
+// signé /api/voice/call-complete.
 // ============================================================
 
 import express from "express";
 import multer from "multer";
 import { createClient } from "@supabase/supabase-js";
-import twilio from "twilio";
 import dotenv from "dotenv";
 import ExcelJS from "exceljs";
-import {
-  escapeXmlAttribute,
-  prefixRecordingConsentEn,
-  prefixRecordingConsentFr,
-} from "../privacy/consent.js";
+import { parse as parseCsv } from "csv-parse/sync";
+import { canonicalizeBusinessHours } from "../voice/businessHours.js";
+import { mapImportField } from "./importMapping.js";
+import { enqueueOutboundCampaign } from "./queue.js";
+import { getOutboundWorkerStatus } from "./worker.js";
 
 dotenv.config();
 
@@ -44,16 +49,30 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
-
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 function isSuperAdmin(req) {
   return req.user?.role === "super_admin";
+}
+
+function requireOutboundManager(req, res, next) {
+  if (!["super_admin", "company_admin"].includes(req.user?.role)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  return next();
+}
+
+function requireSuperAdmin(req, res, next) {
+  if (!isSuperAdmin(req)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  return next();
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    .test(String(value || ""));
 }
 
 function hasTenantMismatch(req, requestedCompanyId) {
@@ -68,17 +87,54 @@ function getTargetCompanyId(req, requestedCompanyId) {
     : req.user?.company_id || null;
 }
 
+function campaignAcceptsContacts(campaign) {
+  return ["draft", "paused"].includes(campaign?.status);
+}
+
+function requireReadyOutboundWorker(res) {
+  const worker = getOutboundWorkerStatus();
+  if (!worker.ready) {
+    res.status(503).json({
+      error: "outbound_worker_unavailable",
+      message: "Le moteur d'appels sortants n'est pas prêt. Réessayez dans un instant.",
+    });
+    return false;
+  }
+  return true;
+}
+
 async function findTenantResource(table, id, req, columns = "*") {
+  const requestedCompanyId = req.query?.company_id || req.body?.company_id || null;
+  if (isSuperAdmin(req) && !requestedCompanyId) {
+    return { status: 400, message: "company_id requis pour un super_admin" };
+  }
+  if (!isSuperAdmin(req) && requestedCompanyId
+      && requestedCompanyId !== req.user?.company_id) {
+    return { status: 403, message: "Accès interdit à cette entreprise" };
+  }
+  const tenantCompanyId = isSuperAdmin(req)
+    ? requestedCompanyId
+    : req.user?.company_id;
+  if (!tenantCompanyId) {
+    return { status: 403, message: "Contexte entreprise introuvable" };
+  }
   const { data, error } = await supabase
     .from(table)
     .select(columns)
     .eq("id", id)
+    .eq("company_id", tenantCompanyId)
     .maybeSingle();
 
   if (error) return { status: 500, message: error.message };
   if (!data) return { status: 404, message: "Ressource introuvable" };
   if (!isSuperAdmin(req) && data.company_id !== req.user?.company_id) {
     return { status: 403, message: "Accès interdit à cette entreprise" };
+  }
+  if (isSuperAdmin(req) && !requestedCompanyId) {
+    return { status: 400, message: "company_id requis pour un super_admin" };
+  }
+  if (isSuperAdmin(req) && requestedCompanyId && data.company_id !== requestedCompanyId) {
+    return { status: 403, message: "AccÃ¨s interdit hors du contexte entreprise actif" };
   }
   return { status: 200, data };
 }
@@ -112,53 +168,160 @@ async function checkDNC(company_id, phone) {
   return { blocked: Boolean(data), error: null };
 }
 
-// Un appel sortant exige un accord CRM explicite et encore valide au moment d'appeler.
-async function checkOutboundConsent(company_id, phone) {
-  const normalized = normalizePhone(phone);
-  if (!normalized) return { allowed: false, error: "invalid_phone" };
+function normalizeTimeZone(value) {
+  const timeZone = String(value || "").trim();
+  if (!timeZone || timeZone.length > 128) return null;
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
+    return timeZone;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeAfterHoursMessage(value) {
+  const message = String(value || "").trim();
+  return message.length >= 1 && message.length <= 1000 ? message : null;
+}
+
+function hasOpenWindow(schedule) {
+  return Object.values(schedule || {}).some(
+    windows => Array.isArray(windows) && windows.length > 0
+  );
+}
+
+async function loadOutboundPhoneNumber(companyId, phoneNumberId) {
+  if (!phoneNumberId) return { data: null, error: null };
   const { data, error } = await supabase
-    .from("contacts")
-    .select("id")
-    .eq("company_id", company_id)
-    .eq("phone", normalized)
-    .eq("call_consent", true)
-    .neq("status", "archived")
-    .neq("status", "anonymized")
-    .is("merged_into_contact_id", null)
-    .limit(1)
+    .from("phone_numbers")
+    .select("id, company_id, status, elevenlabs_agent_id, elevenlabs_phone_number_id")
+    .eq("id", phoneNumberId)
+    .eq("company_id", companyId)
+    .eq("status", "active")
     .maybeSingle();
-  if (error) return { allowed: false, error: error.message };
-  return { allowed: Boolean(data), error: null };
+  if (error) return { data: null, error: "outbound_phone_lookup_failed" };
+  if (
+    !data?.elevenlabs_agent_id
+    || !data?.elevenlabs_phone_number_id
+  ) {
+    return { data: null, error: "outbound_phone_not_provisioned" };
+  }
+  return { data, error: null };
 }
 
-// Compte les appels déjà faits aujourd'hui pour cette campagne
-async function callsMadeToday(campaign_id) {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const { count } = await supabase
-    .from("outbound_contacts")
-    .select("id", { count: "exact" })
-    .eq("campaign_id", campaign_id)
-    .in("status", ["called", "no_answer", "interested", "not_interested", "error"])
-    .gte("last_called_at", todayStart.toISOString());
-  return count || 0;
-}
+// ─────────────────────────────────────────────────────────────
+// HORAIRES VOCAUX — configuration tenant
+// ─────────────────────────────────────────────────────────────
 
-// Vérifie qu'on est dans les heures autorisées
-function isWithinCallHours(startHour = 9, endHour = 20) {
-  const now = new Date();
-  // Heure de l'Est (UTC-4 ou UTC-5)
-  const estOffset = -4; // EDT (été)
-  const estHour = (now.getUTCHours() + 24 + estOffset) % 24;
-  return estHour >= startHour && estHour < endHour;
-}
+router.get("/settings", async (req, res) => {
+  const requestedCompanyId = req.query?.company_id;
+  if (hasTenantMismatch(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const companyId = getTargetCompanyId(req, requestedCompanyId);
+  if (!companyId) return res.status(400).json({ error: "company_id requis" });
+
+  const [settingsResult, phonesResult] = await Promise.all([
+    supabase
+      .from("voice_call_settings")
+      .select([
+        "company_id",
+        "timezone",
+        "business_hours",
+        "outbound_business_hours",
+        "after_hours_message_fr",
+        "after_hours_message_en",
+        "updated_at",
+      ].join(","))
+      .eq("company_id", companyId)
+      .maybeSingle(),
+    supabase
+      .from("phone_numbers")
+      .select("id, phone_number, status, elevenlabs_agent_id, elevenlabs_phone_number_id")
+      .eq("company_id", companyId)
+      .eq("status", "active")
+      .order("created_at", { ascending: true }),
+  ]);
+  if (settingsResult.error || phonesResult.error) {
+    return res.status(503).json({ error: "voice_settings_unavailable" });
+  }
+  if (!settingsResult.data) {
+    return res.status(404).json({ error: "voice_settings_not_configured" });
+  }
+  const outboundPhoneNumbers = (phonesResult.data || []).map(phone => ({
+    id: phone.id,
+    phone_number: phone.phone_number,
+    ready: Boolean(
+      phone.elevenlabs_agent_id && phone.elevenlabs_phone_number_id
+    ),
+  }));
+  return res.json({
+    settings: settingsResult.data,
+    outbound_phone_numbers: outboundPhoneNumbers,
+  });
+});
+
+router.patch("/settings", requireOutboundManager, express.json(), async (req, res) => {
+  const requestedCompanyId = req.body?.company_id;
+  if (hasTenantMismatch(req, requestedCompanyId)) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  const companyId = getTargetCompanyId(req, requestedCompanyId);
+  if (!companyId) return res.status(400).json({ error: "company_id requis" });
+
+  const updates = { company_id: companyId, updated_at: new Date().toISOString() };
+  try {
+    if (req.body?.timezone !== undefined) {
+      const timeZone = normalizeTimeZone(req.body.timezone);
+      if (!timeZone) return res.status(400).json({ error: "invalid_business_timezone" });
+      updates.timezone = timeZone;
+    }
+    if (req.body?.business_hours !== undefined) {
+      updates.business_hours = canonicalizeBusinessHours(req.body.business_hours);
+    }
+    if (req.body?.outbound_business_hours !== undefined) {
+      const schedule = canonicalizeBusinessHours(req.body.outbound_business_hours);
+      if (!schedule || !hasOpenWindow(schedule)) {
+        return res.status(400).json({ error: "outbound_business_hours_never_open" });
+      }
+      updates.outbound_business_hours = schedule;
+    }
+    for (const field of ["after_hours_message_fr", "after_hours_message_en"]) {
+      if (req.body?.[field] === undefined) continue;
+      const message = normalizeAfterHoursMessage(req.body[field]);
+      if (!message) return res.status(400).json({ error: `invalid_${field}` });
+      updates[field] = message;
+    }
+  } catch (error) {
+    return res.status(400).json({ error: error?.code || "invalid_business_hours" });
+  }
+
+  if (Object.keys(updates).length === 2) {
+    return res.status(400).json({ error: "Aucune modification fournie" });
+  }
+  const { data, error } = await supabase
+    .from("voice_call_settings")
+    .upsert(updates, { onConflict: "company_id" })
+    .select()
+    .single();
+  if (error) return res.status(503).json({ error: "voice_settings_unavailable" });
+  return res.json({ success: true, settings: data });
+});
 
 // ─────────────────────────────────────────────────────────────
 // CAMPAIGNS — CRUD
 // ─────────────────────────────────────────────────────────────
 
-router.post("/campaigns", express.json(), async (req, res) => {
-  const { company_id, name, mission_type, script, daily_call_limit, created_by } = req.body || {};
+router.post("/campaigns", requireOutboundManager, express.json(), async (req, res) => {
+  const {
+    company_id,
+    name,
+    mission_type,
+    script,
+    daily_call_limit,
+    created_by,
+    outbound_phone_number_id,
+  } = req.body || {};
   if (hasTenantMismatch(req, company_id)) {
     return res.status(403).json({ error: "Accès interdit à cette entreprise" });
   }
@@ -170,6 +333,13 @@ router.post("/campaigns", express.json(), async (req, res) => {
   if (!validTypes.includes(mission_type)) {
     return res.status(400).json({ error: `mission_type invalide. Valeurs acceptées : ${validTypes.join(", ")}` });
   }
+  const phoneLookup = await loadOutboundPhoneNumber(
+    companyId,
+    outbound_phone_number_id
+  );
+  if (phoneLookup.error) {
+    return res.status(400).json({ error: phoneLookup.error });
+  }
   const { data, error } = await supabase
     .from("outbound_campaigns")
     .insert({
@@ -178,6 +348,7 @@ router.post("/campaigns", express.json(), async (req, res) => {
       mission_type,
       script: String(script || "").slice(0, 5000),
       daily_call_limit: Math.min(Math.max(parseInt(daily_call_limit) || 10, 1), 50),
+      outbound_phone_number_id: phoneLookup.data?.id || null,
       created_by: isSuperAdmin(req) ? created_by || null : req.user?.profile?.id || null,
     })
     .select()
@@ -192,6 +363,7 @@ router.get("/campaigns", async (req, res) => {
     return res.status(403).json({ error: "Accès interdit à cette entreprise" });
   }
   const companyId = getTargetCompanyId(req, company_id);
+  if (!companyId) return res.status(400).json({ error: "company_id requis" });
   let query = supabase
     .from("outbound_campaigns")
     .select("*, outbound_contacts(count)");
@@ -226,19 +398,63 @@ router.get("/campaigns/:id", async (req, res) => {
   return res.json({ campaign, contacts: contacts || [] });
 });
 
-router.patch("/campaigns/:id", express.json(), async (req, res) => {
+router.patch("/campaigns/:id", requireOutboundManager, express.json(), async (req, res) => {
   const { id } = req.params;
-  const { company_id, name, script, daily_call_limit, status } = req.body || {};
+  const {
+    company_id,
+    name,
+    script,
+    daily_call_limit,
+    status,
+    outbound_phone_number_id,
+  } = req.body || {};
   if (hasTenantMismatch(req, company_id)) {
     return res.status(403).json({ error: "Accès interdit à cette entreprise" });
   }
-  const lookup = await findTenantResource("outbound_campaigns", id, req, "id, company_id");
+  const lookup = await findTenantResource(
+    "outbound_campaigns",
+    id,
+    req,
+    "id, company_id, status"
+  );
   if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
   const updates = {};
+  const editsConfiguration = [
+    name,
+    script,
+    daily_call_limit,
+    outbound_phone_number_id,
+  ].some(value => value !== undefined);
+  if (editsConfiguration && lookup.data.status !== "draft") {
+    return res.status(409).json({
+      error: "campaign_configuration_locked",
+      message: "La configuration ne peut être modifiée qu'avant le premier lancement.",
+    });
+  }
   if (name !== undefined)               updates.name = String(name).slice(0, 200);
   if (script !== undefined)             updates.script = String(script).slice(0, 5000);
   if (daily_call_limit !== undefined)   updates.daily_call_limit = Math.min(Math.max(parseInt(daily_call_limit) || 10, 1), 50);
-  if (status !== undefined)             updates.status = status;
+  if (outbound_phone_number_id !== undefined) {
+    const phoneLookup = await loadOutboundPhoneNumber(
+      lookup.data.company_id,
+      outbound_phone_number_id
+    );
+    if (phoneLookup.error) {
+      return res.status(400).json({ error: phoneLookup.error });
+    }
+    updates.outbound_phone_number_id = phoneLookup.data?.id || null;
+  }
+  if (status !== undefined) {
+    const sameStatus = status === lookup.data.status;
+    const canCancel = status === "cancelled"
+      && campaignAcceptsContacts(lookup.data);
+    if (!sameStatus && !canCancel) {
+      return res.status(400).json({
+        error: "Utilisez les routes launch, pause ou resume pour changer cet état",
+      });
+    }
+    updates.status = status;
+  }
   updates.updated_at = new Date().toISOString();
   const { data, error } = await supabase
     .from("outbound_campaigns")
@@ -252,7 +468,7 @@ router.patch("/campaigns/:id", express.json(), async (req, res) => {
   return res.json({ success: true, campaign: data });
 });
 
-router.delete("/campaigns/:id", async (req, res) => {
+router.delete("/campaigns/:id", requireOutboundManager, async (req, res) => {
   const { id } = req.params;
   const { company_id } = req.query;
   if (hasTenantMismatch(req, company_id)) {
@@ -263,6 +479,28 @@ router.delete("/campaigns/:id", async (req, res) => {
   const campaign = lookup.data;
   if (campaign.status === "active") {
     return res.status(409).json({ error: "Impossible de supprimer une campagne active. Mettez-la en pause d'abord." });
+  }
+  const { data: activeQueue, error: queueError } = await supabase
+    .from("outbound_call_queue")
+    .select("id")
+    .eq("company_id", campaign.company_id)
+    .eq("campaign_id", campaign.id)
+    .in("status", [
+      "claimed",
+      "dispatching",
+      "in_progress",
+      "dispatch_unknown",
+      "manual_review",
+    ])
+    .limit(1)
+    .maybeSingle();
+  if (queueError) {
+    return res.status(503).json({ error: "outbound_queue_unavailable" });
+  }
+  if (activeQueue) {
+    return res.status(409).json({
+      error: "Un appel de cette campagne est encore en cours ou à réconcilier",
+    });
   }
   const { data: deleted, error } = await supabase
     .from("outbound_campaigns")
@@ -280,7 +518,7 @@ router.delete("/campaigns/:id", async (req, res) => {
 // CONTACTS — Ajout manuel
 // ─────────────────────────────────────────────────────────────
 
-router.post("/campaigns/:id/contacts", express.json(), async (req, res) => {
+router.post("/campaigns/:id/contacts", requireOutboundManager, express.json(), async (req, res) => {
   const { id: campaign_id } = req.params;
   const { company_id, full_name, phone, email, company_name, notes, language } = req.body || {};
   if (hasTenantMismatch(req, company_id)) {
@@ -293,10 +531,15 @@ router.post("/campaigns/:id/contacts", express.json(), async (req, res) => {
     "outbound_campaigns",
     campaign_id,
     req,
-    "id, company_id"
+    "id, company_id, status"
   );
   if (!campaignLookup.data) {
     return res.status(campaignLookup.status).json({ error: campaignLookup.message });
+  }
+  if (!campaignAcceptsContacts(campaignLookup.data)) {
+    return res.status(409).json({
+      error: "Les contacts ne peuvent être modifiés que dans une campagne en brouillon ou en pause",
+    });
   }
   const companyId = campaignLookup.data.company_id;
   const normalized = normalizePhone(phone);
@@ -332,7 +575,7 @@ router.post("/campaigns/:id/contacts", express.json(), async (req, res) => {
 // CONTACTS — Import CSV / Excel
 // ─────────────────────────────────────────────────────────────
 
-router.post("/campaigns/:id/contacts/import", upload.single("file"), async (req, res) => {
+router.post("/campaigns/:id/contacts/import", requireOutboundManager, upload.single("file"), async (req, res) => {
   const { id: campaign_id } = req.params;
   const { company_id } = req.body || {};
   const file = req.file;
@@ -351,6 +594,11 @@ router.post("/campaigns/:id/contacts/import", upload.single("file"), async (req,
   if (!campaignLookup.data) {
     return res.status(campaignLookup.status).json({ error: campaignLookup.message });
   }
+  if (!campaignAcceptsContacts(campaignLookup.data)) {
+    return res.status(409).json({
+      error: "Les contacts ne peuvent être importés que dans une campagne en brouillon ou en pause",
+    });
+  }
   const companyId = campaignLookup.data.company_id;
 
   let rows = [];
@@ -359,18 +607,20 @@ router.post("/campaigns/:id/contacts/import", upload.single("file"), async (req,
     const name = (file.originalname || "").toLowerCase();
 
     if (mime === "text/csv" || name.endsWith(".csv")) {
-      // Parse CSV manuellement (pas de dépendance supplémentaire)
       const text = file.buffer.toString("utf-8");
-      const lines = text.split(/\r?\n/).filter(l => l.trim());
-      if (lines.length < 2) return res.status(422).json({ error: "CSV vide ou sans données" });
-      const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/['"]/g, ""));
-      for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(",").map(v => v.trim().replace(/['"]/g, ""));
-        const row = {};
-        headers.forEach((h, idx) => { row[h] = values[idx] || ""; });
-        rows.push(row);
+      rows = parseCsv(text, {
+        bom: true,
+        columns: headers => headers.map(header => (
+          String(header || "").trim().toLowerCase()
+        )),
+        skip_empty_lines: true,
+        trim: true,
+        relax_column_count: false,
+      });
+      if (rows.length === 0) {
+        return res.status(422).json({ error: "CSV vide ou sans données" });
       }
-    } else {
+    } else if (name.endsWith(".xlsx")) {
       // Excel (.xlsx) — exceljs ne supporte PAS l'ancien format binaire .xls
       const wb = new ExcelJS.Workbook();
       await wb.xlsx.load(file.buffer);
@@ -421,27 +671,40 @@ router.post("/campaigns/:id/contacts/import", upload.single("file"), async (req,
         }
         rows.push(row);
       }
+    } else {
+      return res.status(415).json({ error: "Format accepté : CSV ou Excel .xlsx" });
     }
   } catch (e) {
     return res.status(422).json({ error: `Erreur lecture fichier : ${e.message}` });
   }
-
-  // Mapping flexible des colonnes
-  const mapField = (row, ...keys) => {
-    for (const k of keys) {
-      const found = Object.keys(row).find(rk => rk.toLowerCase().includes(k.toLowerCase()));
-      if (found && row[found]) return String(row[found]).trim();
-    }
-    return null;
-  };
 
   let imported = 0, skipped = 0, dnc_skipped = 0;
   const errors = [];
   const toInsert = [];
 
   for (const row of rows) {
-    const full_name = mapField(row, "nom", "name", "full_name", "prenom", "prénom");
-    const phone_raw = mapField(row, "telephone", "téléphone", "phone", "tel", "mobile", "cellulaire");
+    const full_name = mapImportField(
+      row,
+      "full_name",
+      "full name",
+      "nom complet",
+      "contact name",
+      "nom",
+      "name",
+      "prenom",
+      "prénom"
+    );
+    const phone_raw = mapImportField(
+      row,
+      "phone",
+      "phone number",
+      "telephone",
+      "téléphone",
+      "numero de telephone",
+      "tel",
+      "mobile",
+      "cellulaire"
+    );
     if (!full_name || !phone_raw) { skipped++; continue; }
     const phone = normalizePhone(phone_raw);
     if (!phone) { skipped++; errors.push(`Numéro invalide : ${phone_raw}`); continue; }
@@ -458,10 +721,18 @@ router.post("/campaigns/:id/contacts/import", upload.single("file"), async (req,
       campaign_id,
       full_name: full_name.slice(0, 200),
       phone,
-      email:        mapField(row, "email", "courriel") || null,
-      company_name: mapField(row, "entreprise", "company", "société") || null,
-      notes:        mapField(row, "notes", "note", "commentaire") || null,
-      language:     mapField(row, "langue", "language") || "fr",
+      email:        mapImportField(row, "email", "courriel") || null,
+      company_name: mapImportField(
+        row,
+        "company_name",
+        "company name",
+        "nom entreprise",
+        "entreprise",
+        "company",
+        "société"
+      ) || null,
+      notes:        mapImportField(row, "notes", "note", "commentaire") || null,
+      language:     mapImportField(row, "langue", "language") || "fr",
     });
     imported++;
   }
@@ -495,7 +766,7 @@ router.get("/campaigns/:id/contacts", async (req, res) => {
     "outbound_campaigns",
     campaign_id,
     req,
-    "id, company_id"
+    "id, company_id, status"
   );
   if (!campaignLookup.data) {
     return res.status(campaignLookup.status).json({ error: campaignLookup.message });
@@ -511,7 +782,7 @@ router.get("/campaigns/:id/contacts", async (req, res) => {
   return res.json({ contacts: data || [] });
 });
 
-router.delete("/campaigns/:id/contacts/:cid", async (req, res) => {
+router.delete("/campaigns/:id/contacts/:cid", requireOutboundManager, async (req, res) => {
   const { id: campaignId, cid } = req.params;
   const { company_id } = req.query;
   if (hasTenantMismatch(req, company_id)) {
@@ -521,10 +792,15 @@ router.delete("/campaigns/:id/contacts/:cid", async (req, res) => {
     "outbound_campaigns",
     campaignId,
     req,
-    "id, company_id"
+    "id, company_id, status"
   );
   if (!campaignLookup.data) {
     return res.status(campaignLookup.status).json({ error: campaignLookup.message });
+  }
+  if (!campaignAcceptsContacts(campaignLookup.data)) {
+    return res.status(409).json({
+      error: "Les contacts ne peuvent être retirés que d’une campagne en brouillon ou en pause",
+    });
   }
   const contactLookup = await findTenantResource(
     "outbound_contacts",
@@ -537,6 +813,32 @@ router.delete("/campaigns/:id/contacts/:cid", async (req, res) => {
   }
   if (contactLookup.data.campaign_id !== campaignId) {
     return res.status(404).json({ error: "Contact introuvable dans cette campagne" });
+  }
+  const { data: nonTerminalQueue, error: queueError } = await supabase
+    .from("outbound_call_queue")
+    .select("id")
+    .eq("company_id", campaignLookup.data.company_id)
+    .eq("campaign_id", campaignId)
+    .eq("outbound_contact_id", cid)
+    .in("status", [
+      "pending",
+      "claimed",
+      "dispatching",
+      "in_progress",
+      "retry_scheduled",
+      "dispatch_unknown",
+      "manual_review",
+    ])
+    .limit(1)
+    .maybeSingle();
+  if (queueError) {
+    return res.status(503).json({ error: "outbound_queue_unavailable" });
+  }
+  if (nonTerminalQueue) {
+    return res.status(409).json({
+      error: "outbound_contact_has_active_queue",
+      message: "Ce contact est encore en file, en appel ou en réconciliation.",
+    });
   }
   const { data, error } = await supabase.from("outbound_contacts").delete()
     .eq("id", cid)
@@ -553,56 +855,100 @@ router.delete("/campaigns/:id/contacts/:cid", async (req, res) => {
 // LAUNCH / PAUSE / RESUME
 // ─────────────────────────────────────────────────────────────
 
-router.post("/campaigns/:id/launch", express.json(), async (req, res) => {
-  const { id } = req.params;
-  const { company_id } = req.body || {};
-  if (hasTenantMismatch(req, company_id)) {
+router.post("/campaigns/:id/launch", requireOutboundManager, express.json(), async (req, res) => {
+  const requestedCompanyId = req.body?.company_id;
+  if (hasTenantMismatch(req, requestedCompanyId)) {
     return res.status(403).json({ error: "Accès interdit à cette entreprise" });
   }
-
-  const lookup = await findTenantResource("outbound_campaigns", id, req);
-  if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
-  const campaign = lookup.data;
-  if (campaign.status === "active") return res.status(409).json({ error: "Campagne déjà active" });
-  if (!campaign.script || campaign.script.trim().length < 20) {
-    return res.status(400).json({ error: "Le script de la campagne est vide ou trop court (minimum 20 caractères)" });
-  }
-  if (!isWithinCallHours(campaign.call_hours_start, campaign.call_hours_end)) {
-    return res.status(400).json({ error: `Les appels sont autorisés entre ${campaign.call_hours_start}h et ${campaign.call_hours_end}h (heure de l'Est)` });
+  const companyId = getTargetCompanyId(req, requestedCompanyId);
+  if (!companyId) {
+    return res.status(400).json({ error: "company_id requis" });
   }
 
-  const todayMade = await callsMadeToday(id);
-  if (todayMade >= campaign.daily_call_limit) {
-    return res.status(400).json({ error: `Limite quotidienne atteinte (${campaign.daily_call_limit} appels/jour)` });
-  }
-
-  // Passer la campagne en active
-  const { data: activated, error: activateError } = await supabase
-    .from("outbound_campaigns")
-    .update({ status: "active", updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .eq("company_id", campaign.company_id)
-    .select("id")
-    .maybeSingle();
-  if (activateError) return res.status(500).json({ error: activateError.message });
-  if (!activated) return res.status(404).json({ error: "Campagne introuvable" });
-
-  // Lancer les appels en arrière-plan (non bloquant)
-  processOutboundCalls(campaign, campaign.company_id).catch(() =>
-    console.error(`[OUTBOUND] processOutboundCalls failed campaign=${id}`)
+  const campaignLookup = await findTenantResource(
+    "outbound_campaigns",
+    req.params.id,
+    req
   );
+  if (!campaignLookup.data) {
+    return res.status(campaignLookup.status).json({ error: campaignLookup.message });
+  }
+  if (campaignLookup.data.company_id !== companyId) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  if (campaignLookup.data.status === "active") {
+    return res.status(409).json({ error: "Campagne déjà active" });
+  }
+  if (campaignLookup.data.status !== "draft") {
+    return res.status(409).json({
+      error: "Seule une campagne en brouillon peut être lancée",
+    });
+  }
+  if (!requireReadyOutboundWorker(res)) return;
+  if (
+    typeof campaignLookup.data.script !== "string"
+    || campaignLookup.data.script.trim().length < 20
+  ) {
+    return res.status(400).json({
+      error: "Le script de la campagne doit contenir au moins 20 caractères",
+    });
+  }
 
-  return res.json({ success: true, message: "Campagne lancée. Les appels démarrent." });
+  const scheduledFor = req.body?.scheduled_for
+    ? new Date(req.body.scheduled_for)
+    : new Date();
+  if (Number.isNaN(scheduledFor.getTime())) {
+    return res.status(400).json({ error: "scheduled_for invalide" });
+  }
+
+  try {
+    const queued = await enqueueOutboundCampaign({
+      supabase,
+      campaignId: campaignLookup.data.id,
+      companyId,
+      scheduledFor,
+      maxAttempts: req.body?.max_attempts,
+    });
+    if (!queued.hasActiveWork) {
+      return res.status(409).json({
+        error: "Aucun contact admissible à l’appel",
+        blocked: queued.counts.blocked || 0,
+      });
+    }
+    return res.status(202).json({
+      success: true,
+      queued: queued.counts.pending || 0,
+      active: queued.activeTotal,
+      blocked: queued.counts.blocked || 0,
+      total: queued.total,
+      message: "Campagne placée dans la file d'appels durable.",
+    });
+  } catch (error) {
+    console.error("[OUTBOUND] durable campaign enqueue failed");
+    return res.status(503).json({
+      error: "outbound_queue_unavailable",
+      message: "La file d'appels est temporairement indisponible.",
+    });
+  }
+
 });
 
-router.post("/campaigns/:id/pause", express.json(), async (req, res) => {
+router.post("/campaigns/:id/pause", requireOutboundManager, express.json(), async (req, res) => {
   const { id } = req.params;
   const { company_id } = req.body || {};
   if (hasTenantMismatch(req, company_id)) {
     return res.status(403).json({ error: "Accès interdit à cette entreprise" });
   }
-  const lookup = await findTenantResource("outbound_campaigns", id, req, "id, company_id");
+  const lookup = await findTenantResource(
+    "outbound_campaigns",
+    id,
+    req,
+    "id, company_id, status"
+  );
   if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
+  if (lookup.data.status !== "active") {
+    return res.status(409).json({ error: "Seule une campagne active peut être mise en pause" });
+  }
   const { data, error } = await supabase
     .from("outbound_campaigns")
     .update({ status: "paused", updated_at: new Date().toISOString() })
@@ -615,267 +961,218 @@ router.post("/campaigns/:id/pause", express.json(), async (req, res) => {
   return res.json({ success: true });
 });
 
-router.post("/campaigns/:id/resume", express.json(), async (req, res) => {
-  const { id } = req.params;
-  const { company_id } = req.body || {};
-  if (hasTenantMismatch(req, company_id)) {
+router.post("/campaigns/:id/resume", requireOutboundManager, express.json(), async (req, res) => {
+  const resumeRequestedCompanyId = req.body?.company_id;
+  if (hasTenantMismatch(req, resumeRequestedCompanyId)) {
     return res.status(403).json({ error: "Accès interdit à cette entreprise" });
   }
-  const lookup = await findTenantResource("outbound_campaigns", id, req);
-  if (!lookup.data) return res.status(lookup.status).json({ error: lookup.message });
-  const campaign = lookup.data;
-  if (!isWithinCallHours(campaign.call_hours_start, campaign.call_hours_end)) {
-    return res.status(400).json({ error: "Hors des heures d'appel autorisées" });
+  const resumeCompanyId = getTargetCompanyId(req, resumeRequestedCompanyId);
+  if (!resumeCompanyId) {
+    return res.status(400).json({ error: "company_id requis" });
   }
-  const { data: resumed, error: resumeError } = await supabase
-    .from("outbound_campaigns")
-    .update({ status: "active", updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .eq("company_id", campaign.company_id)
-    .select("id")
-    .maybeSingle();
-  if (resumeError) return res.status(500).json({ error: resumeError.message });
-  if (!resumed) return res.status(404).json({ error: "Campagne introuvable" });
-  processOutboundCalls(campaign, campaign.company_id).catch(() =>
-    console.error("[OUTBOUND] resume failed")
+  const resumeLookup = await findTenantResource(
+    "outbound_campaigns",
+    req.params.id,
+    req
   );
-  return res.json({ success: true });
-});
+  if (!resumeLookup.data) {
+    return res.status(resumeLookup.status).json({ error: resumeLookup.message });
+  }
+  if (resumeLookup.data.company_id !== resumeCompanyId) {
+    return res.status(403).json({ error: "Accès interdit à cette entreprise" });
+  }
+  if (resumeLookup.data.status !== "paused") {
+    return res.status(409).json({
+      error: "Seule une campagne en pause peut être reprise",
+    });
+  }
+  if (!requireReadyOutboundWorker(res)) return;
+  if (
+    typeof resumeLookup.data.script !== "string"
+    || resumeLookup.data.script.trim().length < 20
+  ) {
+    return res.status(400).json({
+      error: "Le script de la campagne doit contenir au moins 20 caractères",
+    });
+  }
 
-// ─────────────────────────────────────────────────────────────
-// MOTEUR D'APPELS — processOutboundCalls
-// Lance les appels un par un jusqu'à la limite quotidienne
-// ─────────────────────────────────────────────────────────────
-
-async function processOutboundCalls(campaign, company_id) {
-  const DELAY_BETWEEN_CALLS_MS = 30_000; // 30 secondes entre chaque appel
-
-  while (true) {
-    // Re-vérifier le status de la campagne (peut avoir été mise en pause)
-    const { data: fresh, error: freshError } = await supabase
-      .from("outbound_campaigns").select("status, daily_call_limit, call_hours_start, call_hours_end")
-      .eq("id", campaign.id)
-      .eq("company_id", company_id)
-      .maybeSingle();
-    if (freshError) {
-      console.error(`[OUTBOUND] Impossible de vérifier la campagne ${campaign.id}`);
-      break;
-    }
-    if (!fresh || fresh.status !== "active") break;
-    if (!isWithinCallHours(fresh.call_hours_start, fresh.call_hours_end)) break;
-
-    // Vérifier limite quotidienne
-    const todayMade = await callsMadeToday(campaign.id);
-    if (todayMade >= fresh.daily_call_limit) {
-      await supabase.from("outbound_campaigns").update({ status: "paused", updated_at: new Date().toISOString() })
-        .eq("id", campaign.id)
-        .eq("company_id", company_id);
-      console.log(`[OUTBOUND] Limite quotidienne atteinte pour campagne ${campaign.id}`);
-      break;
-    }
-
-    // Prendre le prochain contact pending
-    const { data: contact, error: contactError } = await supabase
-      .from("outbound_contacts")
-      .select("*")
-      .eq("campaign_id", campaign.id)
-      .eq("company_id", company_id)
-      .eq("status", "pending")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    if (contactError) {
-      console.error(`[OUTBOUND] Impossible de charger le prochain contact de la campagne ${campaign.id}`);
-      break;
-    }
-
-    if (!contact) {
-      // Plus de contacts à appeler
-      await supabase.from("outbound_campaigns").update({ status: "completed", updated_at: new Date().toISOString() })
-        .eq("id", campaign.id)
-        .eq("company_id", company_id);
-      console.log(`[OUTBOUND] Campagne ${campaign.id} terminée — tous les contacts traités`);
-      break;
-    }
-
-    // Revalider DNC + consentement juste avant l'appel. Toute erreur bloque l'appel.
-    const dncCheck = await checkDNC(company_id, contact.phone);
-    const consentCheck = dncCheck.error || dncCheck.blocked
-      ? { allowed: false, error: null }
-      : await checkOutboundConsent(company_id, contact.phone);
-    const cannotCallReason = dncCheck.error
-      ? "Vérification DNC indisponible"
-      : dncCheck.blocked
-        ? "Numéro inscrit sur la liste DNC"
-        : consentCheck.error
-          ? "Vérification du consentement indisponible"
-          : !consentCheck.allowed
-            ? "Consentement explicite aux appels requis"
-            : null;
-
-    if (cannotCallReason) {
-      const { error: blockError } = await supabase
-        .from("outbound_contacts")
-        .update({
-          status: dncCheck.blocked && !dncCheck.error ? "dnc" : "error",
-          outcome_notes: cannotCallReason,
-        })
-        .eq("id", contact.id)
-        .eq("company_id", company_id);
-      if (blockError) {
-        console.error(`[OUTBOUND] Impossible de bloquer le contact ${contact.id}`);
-        break;
-      }
-      continue;
-    }
-
-    // Marquer le contact comme "calling" seulement après les gardes de conformité.
-    const { data: claimedContact, error: callingError } = await supabase
-      .from("outbound_contacts")
-      .update({ status: "calling", last_called_at: new Date().toISOString() })
-      .eq("id", contact.id)
-      .eq("company_id", company_id)
-      .eq("status", "pending")
-      .select("id")
-      .maybeSingle();
-    if (callingError) {
-      console.error(`[OUTBOUND] Impossible de verrouiller le contact ${contact.id}`);
-      break;
-    }
-    if (!claimedContact) continue;
-
-    // Initier l'appel Twilio
-    try {
-      const backendUrl = process.env.PUBLIC_BACKEND_URL || `http://localhost:${process.env.PORT || 8001}`;
-      await twilioClient.calls.create({
-        to:   contact.phone,
-        from: process.env.TWILIO_PHONE_NUMBER,
-        url:  `${backendUrl}/api/v1/outbound/webhooks/twiml?contact_id=${contact.id}&campaign_id=${campaign.id}&company_id=${company_id}`,
-        statusCallback: `${backendUrl}/api/v1/outbound/webhooks/call-status`,
-        statusCallbackMethod: "POST",
-        statusCallbackEvent: ["completed", "no-answer", "busy", "failed"],
-        machineDetection: "Enable",
-        timeout: 30,
+  try {
+    const queued = await enqueueOutboundCampaign({
+      supabase,
+      campaignId: resumeLookup.data.id,
+      companyId: resumeCompanyId,
+      scheduledFor: new Date(),
+      maxAttempts: req.body?.max_attempts,
+    });
+    if (!queued.hasActiveWork) {
+      return res.status(409).json({
+        error: "Aucun contact admissible à l’appel",
+        blocked: queued.counts.blocked || 0,
       });
-      await supabase.from("outbound_contacts").update({ call_attempts: contact.call_attempts + 1 })
-        .eq("id", contact.id)
-        .eq("company_id", company_id);
-      await supabase.from("outbound_campaigns").update({ calls_made: campaign.calls_made + 1 + todayMade, updated_at: new Date().toISOString() })
-        .eq("id", campaign.id)
-        .eq("company_id", company_id);
-      console.log(`[OUTBOUND] Appel initié pour la campagne ${campaign.id}`);
-    } catch (e) {
-      console.error(`[OUTBOUND] Échec Twilio pour la campagne ${campaign.id}`);
-      await supabase.from("outbound_contacts").update({
-        status: "error",
-        outcome_notes: e.message,
-        call_attempts: contact.call_attempts + 1,
-      })
-        .eq("id", contact.id)
-        .eq("company_id", company_id);
     }
-
-    // Attendre avant le prochain appel
-    await new Promise(r => setTimeout(r, DELAY_BETWEEN_CALLS_MS));
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// WEBHOOK TWILIO — TwiML pour appel sortant
-// Retourne le ConversationRelay avec le script de la campagne
-// ─────────────────────────────────────────────────────────────
-
-router.post("/webhooks/twiml", express.urlencoded({ extended: false }), async (req, res) => {
-  const { contact_id, campaign_id, company_id } = req.query;
-  const { AnsweredBy } = req.body || {};
-
-  // Si répondeur → raccrocher immédiatement
-  if (AnsweredBy && AnsweredBy !== "human") {
-    res.type("text/xml");
-    return res.send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Hangup/>
-</Response>`);
+    return res.status(202).json({
+      success: true,
+      queued: queued.counts.pending || 0,
+      active: queued.activeTotal,
+      blocked: queued.counts.blocked || 0,
+      total: queued.total,
+      message: "Campagne reprise par la file d'appels durable.",
+    });
+  } catch {
+    console.error("[OUTBOUND] durable campaign resume failed");
+    return res.status(503).json({
+      error: "outbound_queue_unavailable",
+      message: "La file d'appels est temporairement indisponible.",
+    });
   }
 
-  // Récupérer la campagne + contact pour le script
-  const [{ data: campaign }, { data: contact }] = await Promise.all([
-    supabase.from("outbound_campaigns").select("script, mission_type, name").eq("id", campaign_id).maybeSingle(),
-    supabase.from("outbound_contacts").select("full_name, language").eq("id", contact_id).maybeSingle(),
-  ]);
-
-  const script = campaign?.script || "";
-  const contactName = contact?.full_name || "vous";
-  const lang = contact?.language === "en" ? "en-CA" : "fr-CA";
-  const baseGreeting = lang === "fr-CA"
-    ? `Bonjour ${contactName}, je suis Léa, une assistante IA qui appelle au nom d'Exevori.`
-    : `Hello ${contactName}, I'm Léa, an AI assistant calling on behalf of Exevori.`;
-  const greeting = lang === "fr-CA"
-    ? prefixRecordingConsentFr(baseGreeting)
-    : prefixRecordingConsentEn(baseGreeting);
-  const safeGreeting = escapeXmlAttribute(greeting);
-
-  const backendUrl = process.env.PUBLIC_BACKEND_URL || `http://localhost:${process.env.PORT || 8001}`;
-
-  res.type("text/xml");
-  return res.send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Connect>
-    <ConversationRelay
-      url="wss://${backendUrl.replace(/^https?:\/\//, "")}/api/voice/relay/ws"
-      welcomeGreeting="${safeGreeting}"
-      welcomeGreetingInterruptible="false"
-      language="${lang}"
-      ttsLanguage="${lang}"
-      ttsProvider="ElevenLabs"
-      voice="WW0JfNPk5DgcQdM0d6X6-flash_v2_5-1.10_0.50_0.75"
-      transcriptionProvider="Deepgram"
-      speechModel="nova-2-general"
-    >
-      <Parameter name="outbound" value="true"/>
-      <Parameter name="contact_id" value="${contact_id}"/>
-      <Parameter name="campaign_id" value="${campaign_id}"/>
-      <Parameter name="company_id" value="${company_id}"/>
-      <Parameter name="contact_name" value="${contactName}"/>
-      <Parameter name="outbound_script" value="${script.replace(/"/g, "&quot;").slice(0, 2000)}"/>
-    </ConversationRelay>
-  </Connect>
-</Response>`);
-});
-
-// ─────────────────────────────────────────────────────────────
-// WEBHOOK TWILIO — Status callback (fin d'appel)
-// ─────────────────────────────────────────────────────────────
-
-router.post("/webhooks/call-status", express.urlencoded({ extended: false }), async (req, res) => {
-  const { CallStatus, CallDuration, To } = req.body || {};
-
-  // Retrouver le contact par numéro
-  if (To && CallStatus) {
-    const normalized = normalizePhone(To);
-    const statusMap = {
-      "completed": "called",
-      "no-answer": "no_answer",
-      "busy":      "no_answer",
-      "failed":    "error",
-      "canceled":  "error",
-    };
-    const newStatus = statusMap[CallStatus] || "called";
-    if (normalized) {
-      await supabase.from("outbound_contacts")
-        .update({ status: newStatus })
-        .eq("phone", normalized)
-        .eq("status", "calling");
-    }
-  }
-
-  res.status(200).send("OK");
 });
 
 // ─────────────────────────────────────────────────────────────
 // DNC LIST — CRUD
 // ─────────────────────────────────────────────────────────────
+
+// Une réponse fournisseur ambiguë reste en quarantaine jusqu'à ce qu'un
+// super administrateur ait vérifié l'état dans ElevenLabs/Twilio.
+router.get("/manual-reviews", requireSuperAdmin, async (req, res) => {
+  const companyId = req.query?.company_id;
+  if (!isUuid(companyId)) {
+    return res.status(400).json({ error: "company_id requis" });
+  }
+
+  const { data: queues, error: queueError } = await supabase
+    .from("outbound_call_queue")
+    .select([
+      "id",
+      "company_id",
+      "campaign_id",
+      "outbound_contact_id",
+      "current_attempt_id",
+      "status",
+      "last_error_code",
+      "created_at",
+      "updated_at",
+    ].join(","))
+    .eq("company_id", companyId)
+    .eq("status", "manual_review")
+    .order("updated_at", { ascending: true })
+    .limit(100);
+  if (queueError) {
+    return res.status(503).json({ error: "manual_review_unavailable" });
+  }
+  if (!queues?.length) return res.json({ reviews: [] });
+
+  const unique = values => [...new Set(values.filter(Boolean))];
+  const campaignIds = unique(queues.map(queue => queue.campaign_id));
+  const contactIds = unique(queues.map(queue => queue.outbound_contact_id));
+  const attemptIds = unique(queues.map(queue => queue.current_attempt_id));
+  const [campaignResponse, contactResponse, attemptResponse] = await Promise.all([
+    supabase.from("outbound_campaigns")
+      .select("id,name")
+      .eq("company_id", companyId)
+      .in("id", campaignIds),
+    supabase.from("outbound_contacts")
+      .select("id,full_name,phone")
+      .eq("company_id", companyId)
+      .in("id", contactIds),
+    attemptIds.length
+      ? supabase.from("outbound_call_attempts")
+        .select([
+          "id",
+          "status",
+          "elevenlabs_conversation_id",
+          "twilio_call_sid",
+          "error_code",
+          "started_at",
+        ].join(","))
+        .eq("company_id", companyId)
+        .in("id", attemptIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (campaignResponse.error || contactResponse.error || attemptResponse.error) {
+    return res.status(503).json({ error: "manual_review_unavailable" });
+  }
+
+  const byId = rows => new Map((rows || []).map(row => [row.id, row]));
+  const campaigns = byId(campaignResponse.data);
+  const contacts = byId(contactResponse.data);
+  const attempts = byId(attemptResponse.data);
+  return res.json({
+    reviews: queues.map(queue => {
+      const campaign = campaigns.get(queue.campaign_id) || null;
+      const contact = contacts.get(queue.outbound_contact_id) || null;
+      const attempt = attempts.get(queue.current_attempt_id) || null;
+      return {
+        queue_id: queue.id,
+        company_id: queue.company_id,
+        status: queue.status,
+        campaign: campaign ? { id: campaign.id, name: campaign.name } : null,
+        contact: contact ? {
+          id: contact.id,
+          full_name: contact.full_name,
+          phone: contact.phone,
+        } : null,
+        provider: attempt ? {
+          conversation_id: attempt.elevenlabs_conversation_id,
+          call_sid: attempt.twilio_call_sid,
+          attempt_status: attempt.status,
+          error_code: attempt.error_code,
+          started_at: attempt.started_at,
+        } : null,
+        last_error_code: queue.last_error_code,
+        created_at: queue.created_at,
+        updated_at: queue.updated_at,
+      };
+    }),
+  });
+});
+
+router.post(
+  "/manual-review/:queueId/resolve",
+  requireOutboundManager,
+  requireSuperAdmin,
+  express.json(),
+  async (req, res) => {
+    const { queueId } = req.params;
+    const { company_id, resolution } = req.body || {};
+    const allowed = new Set([
+      "confirmed_not_dispatched",
+      "confirmed_completed",
+      "confirmed_failed",
+    ]);
+    if (!isUuid(queueId) || !isUuid(company_id) || !allowed.has(resolution)) {
+      return res.status(400).json({ error: "invalid_manual_review_resolution" });
+    }
+
+    const lookup = await findTenantResource(
+      "outbound_call_queue",
+      queueId,
+      req,
+      "id, company_id, status"
+    );
+    if (!lookup.data) {
+      return res.status(lookup.status).json({ error: lookup.message });
+    }
+    if (lookup.data.status !== "manual_review") {
+      return res.status(409).json({ error: "queue_not_awaiting_manual_review" });
+    }
+
+    const { data, error } = await supabase.rpc("resolve_outbound_manual_review", {
+      p_queue_id: queueId,
+      p_resolution: resolution,
+      p_actor_user_id: req.user.id,
+    });
+    if (error) {
+      const status = error.code === "42501" ? 403
+        : error.code === "P0002" ? 404
+          : error.code === "22023" ? 400
+            : error.code === "55000" ? 409
+              : 503;
+      return res.status(status).json({ error: "manual_review_resolution_failed" });
+    }
+    return res.json(data || { success: true });
+  }
+);
 
 router.get("/dnc", async (req, res) => {
   const { company_id } = req.query;
@@ -883,14 +1180,15 @@ router.get("/dnc", async (req, res) => {
     return res.status(403).json({ error: "Accès interdit à cette entreprise" });
   }
   const companyId = getTargetCompanyId(req, company_id);
+  if (!companyId) return res.status(400).json({ error: "company_id requis" });
   let query = supabase.from("dnc_list").select("*");
-  if (companyId) query = query.eq("company_id", companyId);
+  query = query.eq("company_id", companyId);
   const { data, error } = await query.order("added_at", { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   return res.json({ dnc: data || [] });
 });
 
-router.post("/dnc", express.json(), async (req, res) => {
+router.post("/dnc", requireOutboundManager, express.json(), async (req, res) => {
   const { company_id, phone, reason } = req.body || {};
   if (hasTenantMismatch(req, company_id)) {
     return res.status(403).json({ error: "Accès interdit à cette entreprise" });
@@ -911,7 +1209,7 @@ router.post("/dnc", express.json(), async (req, res) => {
   return res.json({ success: true, entry: data });
 });
 
-router.delete("/dnc/:id", async (req, res) => {
+router.delete("/dnc/:id", requireOutboundManager, async (req, res) => {
   const { id } = req.params;
   const { company_id } = req.query;
   if (hasTenantMismatch(req, company_id)) {

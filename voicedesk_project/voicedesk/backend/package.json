@@ -8,8 +8,7 @@
     "start": "node index.js",
     "gateway": "node gateway/index.js",
     "voice:inbound": "node voice/inbound.js",
-    "voice:outbound": "node voice/outbound.js",
-    "voice:all": "concurrently -n inbound,outbound -c green,yellow \"npm run voice:inbound\" \"npm run voice:outbound\""
+    "voice:all": "npm run voice:inbound"
   },
   "dependencies": {
     "@fastify/websocket": "^11.0.0",

@@ -103,7 +103,8 @@ npm run dev:all
 
 ```bash
 npm run docker:up
-# Lance 5 services : backend, frontend, gateway, voice-inbound, voice-outbound
+# Lance 4 services : backend, frontend, gateway et voice-inbound.
+# Les appels sortants sont traités par la file durable du backend.
 ```
 
 ### Vérifier que ça marche

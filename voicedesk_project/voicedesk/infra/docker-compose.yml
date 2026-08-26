@@ -44,18 +44,6 @@ services:
     depends_on: [gateway]
     networks: [voicedesk]
 
-  voice-outbound:
-    build:
-      context: ../backend/voice
-      dockerfile: ../../infra/Dockerfile.service
-    container_name: voicedesk-voice-outbound
-    restart: unless-stopped
-    ports: ["8081:8081"]
-    env_file: ../.env
-    command: node outbound.js
-    depends_on: [gateway]
-    networks: [voicedesk]
-
   frontend:
     build:
       context: ../frontend

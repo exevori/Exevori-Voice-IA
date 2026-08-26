@@ -11,6 +11,8 @@ import {
 
 const COMPANY_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const COMPANY_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const QUEUE_A = "11111111-1111-4111-8111-111111111111";
+const ATTEMPT_A = "22222222-2222-4222-8222-222222222222";
 
 function fakeSupabase(rowsByTable = {}, errorsByTable = {}) {
   return {
@@ -90,6 +92,47 @@ test("called number disambiguates a shared agent", async () => {
   assert.deepEqual(company, { company_id: COMPANY_B });
 });
 
+test("un appel outbound exige agent, queue et tentative corrélés", async () => {
+  const supabase = fakeSupabase({
+    phone_numbers: [{
+      company_id: COMPANY_A,
+      elevenlabs_agent_id: "agent-a",
+      status: "active",
+    }],
+    outbound_call_attempts: [{
+      id: ATTEMPT_A,
+      queue_id: QUEUE_A,
+      company_id: COMPANY_A,
+    }],
+    outbound_call_queue: [{
+      id: QUEUE_A,
+      current_attempt_id: ATTEMPT_A,
+      company_id: COMPANY_A,
+    }],
+  });
+
+  assert.deepEqual(
+    await resolveElevenLabsCompany({
+      supabase,
+      agentId: "agent-a",
+      calledNumber: "+15145550999",
+      direction: "outbound",
+      outboundQueueId: QUEUE_A,
+      outboundAttemptId: ATTEMPT_A,
+    }),
+    { company_id: COMPANY_A }
+  );
+  assert.equal(
+    await resolveElevenLabsCompany({
+      supabase,
+      agentId: "agent-a",
+      direction: "outbound",
+      outboundQueueId: QUEUE_A,
+    }),
+    null
+  );
+});
+
 test("ambiguous, conflicting or absent mappings fail closed", async () => {
   const supabase = fakeSupabase({
     assistant_configs: [
@@ -157,8 +200,44 @@ test("custom LLM hints support authenticated headers and extra body", () => {
       agentId: "agent-header",
       calledNumber: "+15145550500",
       callerNumber: "+15145550400",
+      direction: "inbound",
     }
   );
+});
+
+test("custom LLM direction is outbound only for the explicit dynamic variable", () => {
+  const outboundHints = extractCustomLlmTenantHints({
+      body: {
+        conversation_initiation_client_data: {
+          dynamic_variables: {
+            voicedesk_direction: "outbound",
+            outbound_queue_id: QUEUE_A,
+            outbound_attempt_id: ATTEMPT_A,
+          },
+        },
+      },
+    });
+  assert.equal(outboundHints.direction, "outbound");
+  assert.equal(outboundHints.outboundQueueId, QUEUE_A);
+  assert.equal(outboundHints.outboundAttemptId, ATTEMPT_A);
+  assert.equal(
+    extractCustomLlmTenantHints({
+      body: {
+        elevenlabs_extra_body: {
+          dynamic_variables: { voicedesk_direction: "OUTBOUND" },
+        },
+      },
+    }).direction,
+    "outbound"
+  );
+  for (const value of [undefined, "", "incoming", "outbound-call"]) {
+    assert.equal(
+      extractCustomLlmTenantHints({
+        body: { dynamic_variables: { voicedesk_direction: value } },
+      }).direction,
+      "inbound"
+    );
+  }
 });
 
 test("post-call hints follow the official data and dynamic-variable shapes", () => {

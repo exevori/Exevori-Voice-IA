@@ -17,7 +17,7 @@ voicedesk/
 │   ├── modules/          # 15 modules métier
 │   ├── webhooks/         # Gmail Push + Twilio + Stripe
 │   ├── gateway/          # AI Gateway DeepSeek (port 3100)
-│   └── voice/            # Twilio + ElevenLabs (ports 8080, 8081)
+│   └── voice/            # Appels entrants; les sortants passent par la file du backend
 │
 ├── frontend/             # React + Vite + i18n FR/EN
 │   ├── src/

@@ -25,10 +25,32 @@ test("millisecondsUntilNextRun schedules the next 03:00 UTC", () => {
 test("runPrivacyRetentionCycle drains full local and provider batches", async () => {
   const calls = [];
   let purgeCall = 0;
+  let outboundPurgeCall = 0;
+  let postCallPurgeCall = 0;
   let providerCall = 0;
   const client = {
     async rpc(name, args) {
       calls.push(["rpc", name, args]);
+      if (name === "purge_expired_outbound_queue_metadata") {
+        outboundPurgeCall += 1;
+        return {
+          data: [{
+            purged_company_id: "company-1",
+            affected: outboundPurgeCall === 1 ? 500 : 2,
+          }],
+          error: null,
+        };
+      }
+      if (name === "purge_expired_post_call_processing_jobs") {
+        postCallPurgeCall += 1;
+        return {
+          data: [{
+            company_id: "company-1",
+            deleted_count: postCallPurgeCall === 1 ? 500 : 2,
+          }],
+          error: null,
+        };
+      }
       purgeCall += 1;
       return {
         data: {
@@ -64,6 +86,22 @@ test("runPrivacyRetentionCycle drains full local and provider batches", async ()
   assert.deepEqual(calls, [
     ["rpc", "purge_expired_privacy_data", { p_batch_size: 500 }],
     ["rpc", "purge_expired_privacy_data", { p_batch_size: 500 }],
+    ["rpc", "purge_expired_outbound_queue_metadata", {
+      p_batch_size: 500,
+      p_company_id: null,
+    }],
+    ["rpc", "purge_expired_outbound_queue_metadata", {
+      p_batch_size: 500,
+      p_company_id: null,
+    }],
+    ["rpc", "purge_expired_post_call_processing_jobs", {
+      p_batch_size: 500,
+      p_company_id: null,
+    }],
+    ["rpc", "purge_expired_post_call_processing_jobs", {
+      p_batch_size: 500,
+      p_company_id: null,
+    }],
     ["providers", 7, true],
     ["providers", 7, true],
   ]);
@@ -71,6 +109,12 @@ test("runPrivacyRetentionCycle drains full local and provider batches", async ()
   assert.equal(result.purge.call_recording_transcripts_cleared, 502);
   assert.equal(result.purge.learning_suggestions_deleted, 13);
   assert.equal(result.purge.batches, 2);
+  assert.equal(result.outbound_queue_metadata.deleted, 502);
+  assert.equal(result.outbound_queue_metadata.batches, 2);
+  assert.equal(result.outbound_queue_metadata.backlog_possible, false);
+  assert.equal(result.post_call_jobs.deleted, 502);
+  assert.equal(result.post_call_jobs.batches, 2);
+  assert.equal(result.post_call_jobs.backlog_possible, false);
   assert.equal(result.external_deletions.completed, 8);
   assert.equal(result.external_deletions.batches, 2);
   assert.equal(result.backlog_possible, false);
@@ -102,7 +146,13 @@ test("terminal provider failures do not create an endless retention backlog", as
 
 test("runPrivacyRetentionCycle reports a possible backlog at safety limits", async () => {
   const client = {
-    async rpc() {
+    async rpc(name) {
+      if (name === "purge_expired_outbound_queue_metadata") {
+        return { data: [{ affected: 10 }], error: null };
+      }
+      if (name === "purge_expired_post_call_processing_jobs") {
+        return { data: [{ deleted_count: 10 }], error: null };
+      }
       return { data: { calls_deleted: 10 }, error: null };
     },
   };
@@ -111,6 +161,8 @@ test("runPrivacyRetentionCycle reports a possible backlog at safety limits", asy
     client,
     batchSize: 10,
     maxPurgeBatches: 1,
+    maxOutboundPurgeBatches: 1,
+    maxPostCallPurgeBatches: 1,
     providerBatchSize: 5,
     maxProviderBatches: 1,
     processExternalDeletions: async () => ({
@@ -123,6 +175,8 @@ test("runPrivacyRetentionCycle reports a possible backlog at safety limits", asy
   });
 
   assert.equal(result.purge.backlog_possible, true);
+  assert.equal(result.outbound_queue_metadata.backlog_possible, true);
+  assert.equal(result.post_call_jobs.backlog_possible, true);
   assert.equal(result.external_deletions.backlog_possible, true);
   assert.equal(result.backlog_possible, true);
 });

@@ -17,6 +17,11 @@ function normalizeHint(value) {
     : "";
 }
 
+function normalizeUuidHint(value) {
+  const normalized = normalizeHint(value);
+  return UUID_PATTERN.test(normalized) ? normalized.toLowerCase() : "";
+}
+
 function firstHint(...values) {
   for (const value of values) {
     const normalized = normalizeHint(value);
@@ -60,6 +65,9 @@ export async function resolveElevenLabsCompany({
   supabase,
   agentId,
   calledNumber,
+  direction = "inbound",
+  outboundQueueId,
+  outboundAttemptId,
 } = {}) {
   if (!supabase) throw new TenantResolutionError("tenant_storage_unavailable");
 
@@ -87,6 +95,36 @@ export async function resolveElevenLabsCompany({
       ),
     ]);
     agentCompanies = unionSets(phoneAgentCompanies, configAgentCompanies);
+  }
+
+  if (direction === "outbound") {
+    const safeQueueId = normalizeUuidHint(outboundQueueId);
+    const safeAttemptId = normalizeUuidHint(outboundAttemptId);
+    if (!safeAgentId || !safeQueueId || !safeAttemptId) return null;
+
+    const [attemptCompanies, queueCompanies] = await Promise.all([
+      readCompanyIds(
+        supabase
+          .from("outbound_call_attempts")
+          .select("company_id")
+          .eq("id", safeAttemptId)
+          .eq("queue_id", safeQueueId),
+        "outbound_attempt_lookup_failed"
+      ),
+      readCompanyIds(
+        supabase
+          .from("outbound_call_queue")
+          .select("company_id")
+          .eq("id", safeQueueId)
+          .eq("current_attempt_id", safeAttemptId),
+        "outbound_queue_lookup_failed"
+      ),
+    ]);
+    const providerScoped = intersectSets(agentCompanies, attemptCompanies);
+    const candidates = intersectSets(providerScoped, queueCompanies);
+    return candidates.size === 1
+      ? { company_id: [...candidates][0] }
+      : null;
   }
 
   let phoneCompanies = new Set();
@@ -130,7 +168,64 @@ export async function resolveElevenLabsCompany({
 export function extractCustomLlmTenantHints(req) {
   const body = objectValue(req?.body);
   const extra = objectValue(body.elevenlabs_extra_body);
+  const bodyDynamicVariables = objectValue(body.dynamic_variables);
+  const bodyInitiation = objectValue(
+    body.conversation_initiation_client_data
+  );
+  const bodyInitiationVariables = objectValue(
+    bodyInitiation.dynamic_variables
+  );
+  const bodyCustomExtra = objectValue(body.custom_llm_extra_body);
+  const bodyInitiationExtra = objectValue(
+    bodyInitiation.custom_llm_extra_body
+  );
+  const extraDynamicVariables = objectValue(extra.dynamic_variables);
+  const extraInitiation = objectValue(
+    extra.conversation_initiation_client_data
+  );
+  const extraInitiationVariables = objectValue(
+    extraInitiation.dynamic_variables
+  );
   const headers = objectValue(req?.headers);
+  const directionHint = firstHint(
+    extra.voicedesk_direction,
+    extraDynamicVariables.voicedesk_direction,
+    extraInitiationVariables.voicedesk_direction,
+    bodyCustomExtra.voicedesk_direction,
+    bodyInitiationExtra.voicedesk_direction,
+    bodyDynamicVariables.voicedesk_direction,
+    bodyInitiationVariables.voicedesk_direction,
+    body.voicedesk_direction
+  ).toLowerCase();
+
+  const outboundQueueId = normalizeUuidHint(firstHint(
+    extra.outbound_queue_id,
+    extra.queue_id,
+    extraDynamicVariables.outbound_queue_id,
+    extraDynamicVariables.queue_id,
+    extraInitiationVariables.outbound_queue_id,
+    bodyCustomExtra.outbound_queue_id,
+    bodyCustomExtra.queue_id,
+    bodyInitiationExtra.outbound_queue_id,
+    bodyDynamicVariables.outbound_queue_id,
+    bodyDynamicVariables.queue_id,
+    bodyInitiationVariables.outbound_queue_id,
+    bodyInitiationVariables.queue_id
+  ));
+  const outboundAttemptId = normalizeUuidHint(firstHint(
+    extra.outbound_attempt_id,
+    extra.attempt_id,
+    extraDynamicVariables.outbound_attempt_id,
+    extraDynamicVariables.attempt_id,
+    extraInitiationVariables.outbound_attempt_id,
+    bodyCustomExtra.outbound_attempt_id,
+    bodyCustomExtra.attempt_id,
+    bodyInitiationExtra.outbound_attempt_id,
+    bodyDynamicVariables.outbound_attempt_id,
+    bodyDynamicVariables.attempt_id,
+    bodyInitiationVariables.outbound_attempt_id,
+    bodyInitiationVariables.attempt_id
+  ));
 
   return {
     agentId: firstHint(
@@ -155,6 +250,9 @@ export function extractCustomLlmTenantHints(req) {
       extra.from_number,
       body.caller_number
     ),
+    direction: directionHint === "outbound" ? "outbound" : "inbound",
+    ...(outboundQueueId ? { outboundQueueId } : {}),
+    ...(outboundAttemptId ? { outboundAttemptId } : {}),
   };
 }
 

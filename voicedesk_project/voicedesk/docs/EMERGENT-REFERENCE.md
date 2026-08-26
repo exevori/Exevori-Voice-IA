@@ -278,7 +278,7 @@ Service séparé, appelé par les modules backend.
 
 ---
 
-## 🎙️ Voice Servers — Ports 8080 + 8081
+## 🎙️ Services voix
 
 ### Voice Inbound (`http://localhost:8080`)
 
@@ -287,13 +287,12 @@ Service séparé, appelé par les modules backend.
 | `POST /voice/inbound` | Entry point Twilio (TwiML) |
 | `WS /voice/inbound/stream` | WebSocket ConversationRelay |
 
-### Voice Outbound (`http://localhost:8081`)
+### Appels sortants
 
-| Route | Description |
-|-------|-------------|
-| `POST /outbound/call` | Déclencher appel sortant |
-| `POST /outbound/twiml` | TwiML pour Twilio |
-| `WS /outbound/stream` | WebSocket ConversationRelay |
+Il n'existe plus de service public sur le port 8081. Les campagnes passent par
+les routes authentifiées `/api/v1/outbound`, puis par la file durable du backend
+qui applique le consentement, la liste DNC, les quotas et l'idempotence avant
+l'appel ElevenLabs.
 
 ---
 

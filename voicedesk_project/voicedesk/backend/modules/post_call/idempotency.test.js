@@ -146,23 +146,23 @@ test("un refus nu n'est accepté qu'au premier tour client", () => {
   );
 });
 
-test("le handler réserve l'appel avant le CRM et renvoie 503 si la réservation échoue", () => {
+test("le handler ingère avant le CRM et renvoie 503 si la transaction échoue", () => {
   const source = fs.readFileSync(new URL("./index.js", import.meta.url), "utf8");
   const tenantIndex = source.indexOf("const companyId = company.company_id");
   const refusalIndex = source.indexOf(
     "if (consentRefused)"
   );
   const detectionIndex = source.indexOf(
-    "const consentRefused = transcriptHasConsentRefusal(transcriptArr)"
+    "const consentRefused = transcriptHasConsentRefusal(transcript)"
   );
   const reconstructionIndex = source.indexOf(
-    ": reconstructTranscript(transcriptArr)"
+    "const transcriptText = reconstructTranscript(transcript)"
   );
   const cleanupIndex = source.indexOf(
     '"enqueue_consent_refusal_cleanup"'
   );
-  const reservationIndex = source.indexOf("reservation = await reservePostCall");
-  const contactIndex = source.indexOf('.from("contacts")');
+  const enqueueIndex = source.indexOf("ingestion = await enqueuePostCallEvent");
+  const responseIndex = source.indexOf("queued: true");
 
   assert.ok(source.includes("if (!isPostCallTranscription(body))"));
   assert.ok(source.includes("error: \"invalid conversation_id\""));
@@ -170,14 +170,19 @@ test("le handler réserve l'appel avant le CRM et renvoie 503 si la réservation
   assert.ok(reconstructionIndex > detectionIndex);
   assert.ok(refusalIndex > tenantIndex);
   assert.ok(cleanupIndex > refusalIndex);
-  assert.ok(reservationIndex > refusalIndex);
+  assert.ok(enqueueIndex > refusalIndex);
   assert.ok(
     source.includes('"enqueue_consent_refusal_cleanup"')
   );
   assert.ok(source.includes("error: \"privacy cleanup unavailable\""));
   assert.ok(source.includes('external_cleanup: "queued"'));
-  assert.ok(reservationIndex >= 0);
-  assert.ok(contactIndex > reservationIndex);
+  assert.ok(responseIndex > enqueueIndex);
+  assert.equal(source.includes('.from("contacts")'), false);
+  assert.equal(source.includes('.from("appointments")'), false);
+  assert.equal(source.includes('.from("learning_suggestions")'), false);
+  assert.equal(source.includes("streamChat"), false);
+  assert.ok(source.includes('error.code === "privacy_tombstone"'));
+  assert.ok(source.includes("privacy_tombstone: true"));
   assert.ok(source.includes("return res.status(503).json"));
   assert.ok(source.includes("return res.status(409).json"));
 });

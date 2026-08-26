@@ -10,6 +10,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_BATCH_SIZE = 100;
 const DEFAULT_PROVIDER_BATCH_SIZE = 25;
 const DEFAULT_MAX_PURGE_BATCHES = 50;
+const DEFAULT_MAX_OUTBOUND_PURGE_BATCHES = 50;
+const DEFAULT_MAX_POST_CALL_PURGE_BATCHES = 50;
 const DEFAULT_MAX_PROVIDER_BATCHES = 100;
 const RUN_HOUR_UTC = 3;
 const BACKLOG_RETRY_MS = 5 * 60 * 1000;
@@ -58,6 +60,8 @@ export async function runPrivacyRetentionCycle({
   batchSize = DEFAULT_BATCH_SIZE,
   providerBatchSize = DEFAULT_PROVIDER_BATCH_SIZE,
   maxPurgeBatches = DEFAULT_MAX_PURGE_BATCHES,
+  maxOutboundPurgeBatches = DEFAULT_MAX_OUTBOUND_PURGE_BATCHES,
+  maxPostCallPurgeBatches = DEFAULT_MAX_POST_CALL_PURGE_BATCHES,
   maxProviderBatches = DEFAULT_MAX_PROVIDER_BATCHES,
 } = {}) {
   const storage = client || createDefaultSupabase();
@@ -85,6 +89,22 @@ export async function runPrivacyRetentionCycle({
       500,
       Number.parseInt(maxProviderBatches, 10) ||
         DEFAULT_MAX_PROVIDER_BATCHES
+    )
+  );
+  const safeMaxOutboundPurgeBatches = Math.max(
+    1,
+    Math.min(
+      250,
+      Number.parseInt(maxOutboundPurgeBatches, 10)
+        || DEFAULT_MAX_OUTBOUND_PURGE_BATCHES
+    )
+  );
+  const safeMaxPostCallPurgeBatches = Math.max(
+    1,
+    Math.min(
+      250,
+      Number.parseInt(maxPostCallPurgeBatches, 10)
+        || DEFAULT_MAX_POST_CALL_PURGE_BATCHES
     )
   );
 
@@ -126,6 +146,72 @@ export async function runPrivacyRetentionCycle({
     purgeBacklogPossible = purgeBatches + 1 >= safeMaxPurgeBatches;
   }
 
+  const outboundQueueMetadata = {
+    deleted: 0,
+    batches: 0,
+    backlog_possible: false,
+  };
+  for (
+    ;
+    outboundQueueMetadata.batches < safeMaxOutboundPurgeBatches;
+    outboundQueueMetadata.batches += 1
+  ) {
+    const { data: rows, error } = await storage.rpc(
+      "purge_expired_outbound_queue_metadata",
+      {
+        p_batch_size: safeBatchSize,
+        p_company_id: null,
+      }
+    );
+    if (error) throw error;
+
+    const deletedThisBatch = (Array.isArray(rows) ? rows : rows ? [rows] : [])
+      .reduce((total, row) => {
+        const count = Number(row?.affected);
+        return total + (Number.isFinite(count) && count > 0 ? count : 0);
+      }, 0);
+    outboundQueueMetadata.deleted += deletedThisBatch;
+    if (deletedThisBatch < safeBatchSize) {
+      outboundQueueMetadata.batches += 1;
+      break;
+    }
+    outboundQueueMetadata.backlog_possible =
+      outboundQueueMetadata.batches + 1 >= safeMaxOutboundPurgeBatches;
+  }
+
+  const postCallJobs = {
+    deleted: 0,
+    batches: 0,
+    backlog_possible: false,
+  };
+  for (
+    ;
+    postCallJobs.batches < safeMaxPostCallPurgeBatches;
+    postCallJobs.batches += 1
+  ) {
+    const { data: rows, error } = await storage.rpc(
+      "purge_expired_post_call_processing_jobs",
+      {
+        p_batch_size: safeBatchSize,
+        p_company_id: null,
+      }
+    );
+    if (error) throw error;
+
+    const deletedThisBatch = (Array.isArray(rows) ? rows : rows ? [rows] : [])
+      .reduce((total, row) => {
+        const count = Number(row?.deleted_count);
+        return total + (Number.isFinite(count) && count > 0 ? count : 0);
+      }, 0);
+    postCallJobs.deleted += deletedThisBatch;
+    if (deletedThisBatch < safeBatchSize) {
+      postCallJobs.batches += 1;
+      break;
+    }
+    postCallJobs.backlog_possible =
+      postCallJobs.batches + 1 >= safeMaxPostCallPurgeBatches;
+  }
+
   const providerTotals = {
     claimed: 0,
     completed: 0,
@@ -162,6 +248,8 @@ export async function runPrivacyRetentionCycle({
 
   const backlogPossible =
     purgeBacklogPossible ||
+    outboundQueueMetadata.backlog_possible ||
+    postCallJobs.backlog_possible ||
     providerBacklogPossible ||
     providerTotals.pending;
 
@@ -171,6 +259,8 @@ export async function runPrivacyRetentionCycle({
       batches: purgeBatches,
       backlog_possible: purgeBacklogPossible,
     },
+    outbound_queue_metadata: outboundQueueMetadata,
+    post_call_jobs: postCallJobs,
     external_deletions: {
       ...providerTotals,
       batches: providerBatches,
@@ -191,6 +281,8 @@ async function runScheduledCycle(options) {
     const result = await runPrivacyRetentionCycle(options);
     logger.info("Privacy retention cycle completed", {
       purge: result.purge,
+      outbound_queue_metadata: result.outbound_queue_metadata,
+      post_call_jobs: result.post_call_jobs,
       external_deletions: result.external_deletions,
     });
     return result;
@@ -210,6 +302,8 @@ export function startPrivacyRetentionJob({
   batchSize = DEFAULT_BATCH_SIZE,
   providerBatchSize = DEFAULT_PROVIDER_BATCH_SIZE,
   maxPurgeBatches = DEFAULT_MAX_PURGE_BATCHES,
+  maxOutboundPurgeBatches = DEFAULT_MAX_OUTBOUND_PURGE_BATCHES,
+  maxPostCallPurgeBatches = DEFAULT_MAX_POST_CALL_PURGE_BATCHES,
   maxProviderBatches = DEFAULT_MAX_PROVIDER_BATCHES,
   now = () => new Date(),
   setTimer = setTimeout,
@@ -230,6 +324,8 @@ export function startPrivacyRetentionJob({
         batchSize,
         providerBatchSize,
         maxPurgeBatches,
+        maxOutboundPurgeBatches,
+        maxPostCallPurgeBatches,
         maxProviderBatches,
       });
       scheduleNext(result?.backlog_possible ? BACKLOG_RETRY_MS : null);
