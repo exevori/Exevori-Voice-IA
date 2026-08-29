@@ -21,6 +21,12 @@ const CALL_A = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 const UNLINKED_CALL_A = "12121212-1212-4212-8212-121212121212";
 const CALL_B = "13131313-1313-4313-8313-131313131313";
 const EMAIL_A = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+const APPOINTMENT_A = "20000000-0000-4000-8000-000000000001";
+const APPOINTMENT_LINKED = "20000000-0000-4000-8000-000000000002";
+const APPOINTMENT_B = "20000000-0000-4000-8000-000000000003";
+const BOOKING_A = "30000000-0000-4000-8000-000000000001";
+const BOOKING_FROM_APPOINTMENT = "30000000-0000-4000-8000-000000000002";
+const BOOKING_B = "30000000-0000-4000-8000-000000000003";
 const QUEUE_ONE = "10000000-0000-4000-8000-000000000001";
 const QUEUE_TWO = "10000000-0000-4000-8000-000000000002";
 const QUEUE_THREE = "10000000-0000-4000-8000-000000000003";
@@ -560,6 +566,147 @@ test("complete export is attachment/no-store, tenant scoped and audited without 
   assert.equal(serializedAudit.includes("alice@example.test"), false);
   assert.equal(serializedAudit.includes("+15145550123"), false);
   assert.equal(serializedAudit.includes("conv-secret-id"), false);
+});
+
+test("contact export includes only tenant-scoped Calendly bookings, linked appointments and email outbox", async () => {
+  const supabase = new FakeSupabase({
+    tables: {
+      contacts: [
+        { id: CONTACT_A, company_id: COMPANY_A, full_name: "Alice" },
+      ],
+      outbound_contacts: [],
+      contact_notes: [],
+      calls: [],
+      outbound_calls: [],
+      emails: [],
+      learning_suggestions: [],
+      appointments: [
+        {
+          id: APPOINTMENT_A,
+          company_id: COMPANY_A,
+          contact_id: CONTACT_A,
+          invitee_email: "alice@example.test",
+        },
+        {
+          id: APPOINTMENT_LINKED,
+          company_id: COMPANY_A,
+          contact_id: null,
+          invitee_email: "alice@example.test",
+        },
+        {
+          id: APPOINTMENT_B,
+          company_id: COMPANY_B,
+          contact_id: CONTACT_A,
+          invitee_email: "other-tenant@example.test",
+        },
+      ],
+      calendar_booking_requests: [
+        {
+          id: BOOKING_A,
+          company_id: COMPANY_A,
+          contact_id: CONTACT_A,
+          appointment_id: APPOINTMENT_LINKED,
+          invitee_email: "alice@example.test",
+          provider_response: { access_token: "never-export-token" },
+        },
+        {
+          id: BOOKING_FROM_APPOINTMENT,
+          company_id: COMPANY_A,
+          contact_id: null,
+          appointment_id: APPOINTMENT_A,
+          invitee_email: "alice@example.test",
+        },
+        {
+          id: BOOKING_B,
+          company_id: COMPANY_B,
+          contact_id: CONTACT_A,
+          appointment_id: APPOINTMENT_B,
+          invitee_email: "other-tenant@example.test",
+        },
+      ],
+      calendar_email_outbox: [
+        {
+          id: "outbox-a",
+          company_id: COMPANY_A,
+          appointment_id: APPOINTMENT_A,
+          recipient_email: "alice@example.test",
+          payload: { client_secret: "never-export-secret" },
+        },
+        {
+          id: "outbox-linked",
+          company_id: COMPANY_A,
+          appointment_id: APPOINTMENT_LINKED,
+          recipient_email: "alice@example.test",
+        },
+        {
+          id: "outbox-b",
+          company_id: COMPANY_B,
+          appointment_id: APPOINTMENT_B,
+          recipient_email: "other-tenant@example.test",
+        },
+      ],
+    },
+  });
+
+  await withServer(testRouter(supabase), async baseUrl => {
+    const response = await fetch(
+      `${baseUrl}/privacy/data-export`,
+      jsonRequest("POST", { contact_id: CONTACT_A }, userHeaders())
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+
+    assert.deepEqual(
+      payload.data.appointments.map(row => row.id).sort(),
+      [APPOINTMENT_A, APPOINTMENT_LINKED].sort()
+    );
+    assert.deepEqual(
+      payload.data.calendar_booking_requests.map(row => row.id).sort(),
+      [BOOKING_A, BOOKING_FROM_APPOINTMENT].sort()
+    );
+    assert.deepEqual(
+      payload.data.calendar_email_outbox.map(row => row.id).sort(),
+      ["outbox-a", "outbox-linked"]
+    );
+    assert.equal(
+      "access_token" in
+        payload.data.calendar_booking_requests.find(
+          row => row.id === BOOKING_A
+        ).provider_response,
+      false
+    );
+    assert.equal(
+      "client_secret" in
+        payload.data.calendar_email_outbox.find(
+          row => row.id === "outbox-a"
+        ).payload,
+      false
+    );
+    assert.equal(JSON.stringify(payload).includes("other-tenant"), false);
+  });
+
+  for (const table of [
+    "appointments",
+    "calendar_booking_requests",
+    "calendar_email_outbox",
+  ]) {
+    const queries = supabase.queryLog.filter(
+      query => query.table === table && query.action === "select"
+    );
+    assert.ok(queries.length > 0, `${table} doit etre interrogee`);
+    assert.equal(
+      queries.every(query =>
+        query.filters.some(
+          filter =>
+            filter.operator === "eq" &&
+            filter.column === "company_id" &&
+            filter.value === COMPANY_A
+        )
+      ),
+      true,
+      `${table} doit toujours etre filtree par company_id`
+    );
+  }
 });
 
 test("export paginates PostgREST collections beyond the 1000-row server cap", async () => {
@@ -1115,6 +1262,101 @@ test("external queue deletes ElevenLabs/Twilio, keeps Calendly in retry and expo
   ]) {
     assert.equal(serializedSummary.includes(sensitiveValue), false);
   }
+});
+
+test("Calendly invitee_email cleanup uses only the injected deleter and never performs a direct network call", async () => {
+  const jobs = [
+    {
+      id: QUEUE_ONE,
+      company_id: COMPANY_A,
+      target_contact_id: CONTACT_A,
+      provider: "calendly",
+      resource_type: "invitee_email",
+      external_id: `${COMPANY_A}:alice@example.test`,
+      status: "processing",
+      attempts: 1,
+    },
+    {
+      id: QUEUE_TWO,
+      company_id: COMPANY_A,
+      target_contact_id: CONTACT_A,
+      provider: "calendly",
+      resource_type: "scheduled_event",
+      external_id: "legacy-event-uri",
+      status: "processing",
+      attempts: 1,
+    },
+    {
+      id: QUEUE_THREE,
+      company_id: COMPANY_A,
+      target_contact_id: CONTACT_A,
+      provider: "calendly",
+      resource_type: "invitee_email",
+      external_id: `${COMPANY_B}:other-tenant@example.test`,
+      status: "processing",
+      attempts: 1,
+    },
+  ];
+  const supabase = new FakeSupabase({
+    tables: { privacy_external_deletions: jobs },
+    rpcHandlers: {
+      claim_privacy_external_deletions: async () => ({
+        data: jobs,
+        error: null,
+      }),
+    },
+  });
+  const deletedInvitees = [];
+  let networkCalls = 0;
+
+  const summary = await processPrivacyExternalDeletions({
+    supabase,
+    companyId: COMPANY_A,
+    contactId: CONTACT_A,
+    now: () => FIXED_NOW,
+    fetchImpl: async () => {
+      networkCalls += 1;
+      throw new Error("unexpected_network_call");
+    },
+    calendlyDeleter: async job => {
+      deletedInvitees.push({
+        companyId: job.company_id,
+        email: job.external_id,
+      });
+      return { outcome: "completed" };
+    },
+  });
+
+  assert.deepEqual(deletedInvitees, [
+    { companyId: COMPANY_A, email: "alice@example.test" },
+  ]);
+  assert.equal(networkCalls, 0);
+  assert.deepEqual(summary, {
+    claimed: 3,
+    completed: 1,
+    retry: 2,
+    failed: 0,
+    pending: true,
+  });
+  assert.equal(
+    supabase.tables.privacy_external_deletions.find(
+      row => row.id === QUEUE_ONE
+    ).status,
+    "completed"
+  );
+  const legacy = supabase.tables.privacy_external_deletions.find(
+    row => row.id === QUEUE_TWO
+  );
+  assert.equal(legacy.status, "retry");
+  assert.equal(legacy.last_error, "provider_not_configured");
+  const mismatchedTenant = supabase.tables.privacy_external_deletions.find(
+    row => row.id === QUEUE_THREE
+  );
+  assert.equal(mismatchedTenant.status, "retry");
+  assert.equal(
+    mismatchedTenant.last_error,
+    "invalid_calendly_invitee_identifier"
+  );
 });
 
 test("external queue moves an exhausted provider deletion to failed", async () => {

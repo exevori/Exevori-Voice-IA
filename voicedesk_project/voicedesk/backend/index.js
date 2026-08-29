@@ -27,7 +27,13 @@ import authRouter from "./modules/auth/index.js";
 import configRouter from "./modules/config/index.js";
 import dashboardRouter from "./modules/dashboard/index.js";
 import crmRouter from "./modules/crm/index.js";
-import calendarRouter from "./modules/calendar/index.js";
+import calendarRouter, {
+  calendarService,
+  calendarSupabase,
+  createCalendlyOAuthCallbackHandler,
+  createCalendlyWebhookHandler,
+} from "./modules/calendar/index.js";
+import { createCalendarWorkers } from "./modules/calendar/worker.js";
 import emailRouter from "./modules/email/index.js";
 import callsRouter from "./modules/calls/index.js";
 import { recordingRouter } from "./modules/calls/recording.js";
@@ -58,9 +64,11 @@ import {
   getPostCallWorkerStatus,
   startPostCallWorker,
 } from "./modules/post_call/worker.js";
-import privacyRouter from "./modules/privacy/index.js";
+import privacyRouter, {
+  configureCalendlyPrivacyDeleter,
+} from "./modules/privacy/index.js";
 
-// Webhooks externes (Gmail Push, Twilio status, Resend, Calendly)
+// Webhooks externes génériques (Gmail Push, Twilio status, Resend)
 import webhooksRouter from "./webhooks/index.js";
 import { startEmailPoller } from "./modules/email/email_poller.js";
 import { startWeeklyReportJob, triggerWeeklyReport } from "./modules/notifications/weekly_report_job.js";
@@ -71,6 +79,23 @@ import {
 } from "./modules/privacy/consent_sync.js";
 
 dotenv.config();
+
+if (calendarService) {
+  configureCalendlyPrivacyDeleter(job =>
+    calendarService.deleteInviteeData(
+      job.company_id,
+      `${job.company_id}:${job.external_id}`
+    )
+  );
+}
+
+const calendarWorkers = calendarService && calendarSupabase
+  ? createCalendarWorkers({
+      supabase: calendarSupabase,
+      service: calendarService,
+      logger,
+    })
+  : null;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -141,11 +166,13 @@ app.post("/api/voice/call-complete",
 );
 
 // ── JSON parser pour le reste ──
-// Webhook Calendly public : corps brut requis pour la signature HMAC-SHA256.
-// Le traitement metier complet de Calendly reste reserve a la Tache 11.
-app.post("/webhooks/calendly",
-  express.raw({ type: "application/json", limit: "2mb" }),
-  validateCalendlySignature
+// Webhook Calendly public : tenant résolu par l'identifiant opaque de la
+// connexion OAuth, corps brut signé, puis mise en inbox durable/idempotente.
+app.post("/webhooks/calendly/:connectionId",
+  m2mIngressLimiter,
+  express.raw({ type: "application/json", limit: "256kb" }),
+  validateCalendlySignature,
+  createCalendlyWebhookHandler({ service: calendarService })
 );
 
 // Les callbacks Twilio sont des formulaires signes avec HMAC-SHA1.
@@ -169,11 +196,18 @@ app.get("/health", (req, res) => {
   const outboundWorker = getOutboundWorkerStatus();
   const postCallWorker = getPostCallWorkerStatus();
   const customLlmAuth = getCustomLlmAuthStatus();
+  const calendarWorker = calendarWorkers?.status() || {
+    ready: false,
+    started: false,
+    last_error: "calendar_not_configured",
+  };
   const outboundWorkerRequired = process.env.DISABLE_OUTBOUND_WORKER !== "true";
   const postCallWorkerRequired =
     process.env.DISABLE_POST_CALL_WORKER !== "true";
+  const calendarWorkerRequired = process.env.DISABLE_CALENDAR_WORKER !== "true";
   const ready = (!outboundWorkerRequired || outboundWorker.ready)
     && (!postCallWorkerRequired || postCallWorker.ready)
+    && (!calendarWorkerRequired || calendarWorker.ready)
     && customLlmAuth.ready;
   res.status(ready ? 200 : 503).json({
     status: ready ? "ok" : "degraded",
@@ -189,6 +223,7 @@ app.get("/health", (req, res) => {
     },
     outbound_worker: outboundWorker,
     post_call_worker: postCallWorker,
+    calendar_worker: calendarWorker,
     custom_llm_auth: customLlmAuth,
   });
 });
@@ -202,7 +237,7 @@ app.get("/", (req, res) => {
   });
 });
 
-// ── WEBHOOKS EXTERNES (Gmail, Twilio, Resend, Calendly) - pas d'auth ──
+// ── WEBHOOKS EXTERNES GÉNÉRIQUES (Gmail, Twilio, Resend) - pas d'auth ──
 app.use("/webhooks", webhooksRouter);
 
 // ── ELEVENLABS POST-CALL WEBHOOK (public, sans JWT) ──
@@ -210,6 +245,10 @@ app.use("/webhooks", webhooksRouter);
 
 // ── ROUTES PUBLIQUES (login, signup, reset) ──
 app.use("/api/v1/auth", authRouter);
+app.get(
+  "/api/v1/calendar/oauth/callback",
+  createCalendlyOAuthCallbackHandler({ service: calendarService })
+);
 
 // ── ROUTES PROTÉGÉES (requireAuth) ──
 app.use("/api/v1/config",         requireAuth, configRouter);
@@ -223,7 +262,7 @@ app.use("/api/v1/company",        requireAuth, enforceTenantOwnership, companyRo
 app.use("/api/v1/team",           requireAuth, teamRouter);
 app.use("/api/v1/email-accounts", requireAuth, enforceTenantOwnership, emailAccountsRouter);
 app.use("/api/v1/twilio-config",  requireAuth, enforceTenantOwnership, twilioConfigRouter);
-app.use("/api/v1/calendar",       requireAuth, calendarRouter);
+app.use("/api/v1/calendar",       requireAuth, enforceTenantOwnership, calendarRouter);
 app.use("/api/v1/emails",         requireAuth, enforceTenantOwnership, emailRouter);
 app.use("/api/v1/learning",       requireAuth, learningRouter);
 app.use("/api/v1/knowledge",      requireAuth, knowledgeRouter);
@@ -311,6 +350,17 @@ if (process.env.DISABLE_POST_CALL_WORKER !== "true") {
   } catch (error) {
     logger.error("Post-call worker did not start", {
       error_code: error?.code || "post_call_worker_start_failed",
+    });
+  }
+}
+
+if (process.env.DISABLE_CALENDAR_WORKER !== "true") {
+  try {
+    if (!calendarWorkers) throw new Error("calendar_not_configured");
+    calendarWorkers.start();
+  } catch (error) {
+    logger.error("Calendar worker did not start", {
+      error_code: error?.code || error?.message || "calendar_worker_start_failed",
     });
   }
 }

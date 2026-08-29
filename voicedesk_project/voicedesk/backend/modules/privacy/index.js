@@ -36,6 +36,27 @@ const RESTRICTED_EXPORT_KEYS = new Set([
   "webhook_secret",
 ]);
 
+let configuredCalendlyPrivacyDeleter = null;
+
+/**
+ * Configure the production Calendly erasure adapter after the calendar OAuth
+ * service is initialized. The adapter is intentionally injected so this
+ * privacy module never reads OAuth tokens or performs an unmocked provider
+ * request on its own.
+ */
+export function configureCalendlyPrivacyDeleter(deleter) {
+  if (typeof deleter !== "function") {
+    throw new TypeError("calendly_privacy_deleter_must_be_a_function");
+  }
+  if (
+    configuredCalendlyPrivacyDeleter &&
+    configuredCalendlyPrivacyDeleter !== deleter
+  ) {
+    throw new Error("calendly_privacy_deleter_already_configured");
+  }
+  configuredCalendlyPrivacyDeleter = deleter;
+}
+
 class PrivacyStorageError extends Error {
   constructor(code) {
     super(code);
@@ -277,7 +298,7 @@ async function loadContactExport(supabase, companyId, contactId) {
     : [];
   const crmContactIds = crmContacts.map(row => row.id).filter(isUuid);
 
-  const [notes, calls, outboundCalls, emails, appointments] =
+  const [notes, calls, outboundCalls, emails, directAppointments] =
     await Promise.all([
       crmContactIds.length
         ? readAllForChunks(
@@ -349,7 +370,13 @@ async function loadContactExport(supabase, companyId, contactId) {
   const callIds = calls.map(call => call.id).filter(isUuid);
   const emailIds = emails.map(email => email.id).filter(isUuid);
 
-  const [recordings, events, drafts, learningSuggestions] = await Promise.all([
+  const [
+    recordings,
+    events,
+    drafts,
+    learningSuggestions,
+    directCalendarBookingRequests,
+  ] = await Promise.all([
     callIds.length
       ? readAllForChunks(
           callIds,
@@ -402,7 +429,75 @@ async function loadContactExport(supabase, companyId, contactId) {
           "learning_suggestions_read_failed"
         )
       : [],
+    crmContactIds.length
+      ? readAllForChunks(
+          crmContactIds,
+          ids =>
+            supabase
+              .from("calendar_booking_requests")
+              .select("*")
+              .eq("company_id", companyId)
+              .in("contact_id", ids)
+              .order("id", { ascending: true }),
+          "calendar_booking_requests_read_failed"
+        )
+      : [],
   ]);
+
+  // Follow only explicit foreign-key relationships. A booking may keep the
+  // contact link while its appointment has not yet been linked (or vice
+  // versa), so collect both directions without inferring identity from PII.
+  const bookingAppointmentIds = directCalendarBookingRequests
+    .map(booking => booking.appointment_id)
+    .filter(isUuid);
+  const bookingAppointments = bookingAppointmentIds.length
+    ? await readAllForChunks(
+        bookingAppointmentIds,
+        ids =>
+          supabase
+            .from("appointments")
+            .select("*")
+            .eq("company_id", companyId)
+            .in("id", ids)
+            .order("id", { ascending: true }),
+        "appointments_read_failed"
+      )
+    : [];
+  const appointments = mergeUniqueRows(
+    directAppointments,
+    bookingAppointments
+  );
+  const appointmentIds = appointments.map(row => row.id).filter(isUuid);
+  const appointmentBookingRequests = appointmentIds.length
+    ? await readAllForChunks(
+        appointmentIds,
+        ids =>
+          supabase
+            .from("calendar_booking_requests")
+            .select("*")
+            .eq("company_id", companyId)
+            .in("appointment_id", ids)
+            .order("id", { ascending: true }),
+        "calendar_booking_requests_read_failed"
+      )
+    : [];
+  const calendarBookingRequests = mergeUniqueRows(
+    directCalendarBookingRequests,
+    appointmentBookingRequests
+  );
+  const calendarEmailOutbox = appointmentIds.length
+    ? await readAllForChunks(
+        appointmentIds,
+        ids =>
+          supabase
+            .from("calendar_email_outbox")
+            .select("*")
+            .eq("company_id", companyId)
+            .in("appointment_id", ids)
+            .order("id", { ascending: true }),
+        "calendar_email_outbox_read_failed"
+      )
+    : [];
 
   const data = {
     contact: sanitizeForExport(contact),
@@ -416,6 +511,8 @@ async function loadContactExport(supabase, companyId, contactId) {
     emails: sanitizeForExport(emails),
     email_drafts: sanitizeForExport(drafts),
     appointments: sanitizeForExport(appointments),
+    calendar_booking_requests: sanitizeForExport(calendarBookingRequests),
+    calendar_email_outbox: sanitizeForExport(calendarEmailOutbox),
     learning_suggestions: sanitizeForExport(learningSuggestions),
   };
 
@@ -559,9 +656,39 @@ async function deleteTwilioResource(job, context) {
   }
 }
 
-async function deleteCalendlyResource() {
-  // Calendly OAuth is introduced in Task 11. Keep the durable queue item.
-  return { outcome: "retry", errorCode: "provider_not_configured" };
+async function deleteCalendlyResource(job, context) {
+  // Legacy scheduled_event jobs remain durable but are not silently mapped to
+  // a person-level erasure. Task 11 queues the explicit invitee email instead.
+  if (job.resource_type !== "invitee_email") {
+    if (typeof context.legacyCalendlyDeleter === "function") {
+      return context.legacyCalendlyDeleter(job, context);
+    }
+    return { outcome: "retry", errorCode: "provider_not_configured" };
+  }
+
+  const prefix = `${job.company_id}:`;
+  const email = job.external_id.startsWith(prefix)
+    ? job.external_id.slice(prefix.length).trim().toLowerCase()
+    : "";
+  if (
+    !isUuid(job.company_id) ||
+    !email ||
+    email.length > 254 ||
+    !/^[^@\s]+@[^@\s]+$/.test(email) ||
+    job.external_id !== `${prefix}${email}`
+  ) {
+    return {
+      outcome: "retry",
+      errorCode: "invalid_calendly_invitee_identifier",
+    };
+  }
+
+  const deleter =
+    context.calendlyDeleter || context.legacyCalendlyDeleter;
+  if (typeof deleter !== "function") {
+    return { outcome: "retry", errorCode: "provider_not_configured" };
+  }
+  return deleter({ ...job, external_id: email }, context);
 }
 
 async function updateExternalDeletion(supabase, job, updates) {
@@ -618,6 +745,7 @@ export async function processPrivacyExternalDeletions({
   twilioAccountSid = process.env.TWILIO_ACCOUNT_SID,
   twilioAuthToken = process.env.TWILIO_AUTH_TOKEN,
   providerTimeoutMs = process.env.PRIVACY_PROVIDER_TIMEOUT_MS,
+  calendlyDeleter = null,
   deleters = {},
 } = {}) {
   if (!supabase) throw new PrivacyStorageError("external_queue_unavailable");
@@ -626,6 +754,9 @@ export async function processPrivacyExternalDeletions({
   }
   if (contactId !== null && !isUuid(contactId)) {
     throw new PrivacyStorageError("invalid_queue_contact");
+  }
+  if (calendlyDeleter !== null && typeof calendlyDeleter !== "function") {
+    throw new PrivacyStorageError("invalid_calendly_deleter");
   }
 
   const safeBatchSize = Math.max(
@@ -650,11 +781,17 @@ export async function processPrivacyExternalDeletions({
     failed: 0,
     pending: false,
   };
+  const safeDeleters =
+    deleters && typeof deleters === "object" ? deleters : {};
+  const {
+    calendly: legacyCalendlyDeleter,
+    ...otherProviderDeleters
+  } = safeDeleters;
   const providerDeleters = {
     elevenlabs: deleteElevenLabsResource,
     twilio: deleteTwilioResource,
     calendly: deleteCalendlyResource,
-    ...deleters,
+    ...otherProviderDeleters,
   };
   const context = {
     fetchImpl,
@@ -662,6 +799,9 @@ export async function processPrivacyExternalDeletions({
     twilioAccountSid,
     twilioAuthToken,
     providerTimeoutMs: normalizeProviderTimeout(providerTimeoutMs),
+    calendlyDeleter:
+      calendlyDeleter || configuredCalendlyPrivacyDeleter,
+    legacyCalendlyDeleter,
   };
 
   for (const job of claimed) {
@@ -779,6 +919,7 @@ export function createPrivacyRouter({
   twilioAccountSid = process.env.TWILIO_ACCOUNT_SID,
   twilioAuthToken = process.env.TWILIO_AUTH_TOKEN,
   providerTimeoutMs = process.env.PRIVACY_PROVIDER_TIMEOUT_MS,
+  calendlyDeleter = null,
   deleters = {},
 } = {}) {
   const router = express.Router();
@@ -904,6 +1045,7 @@ export function createPrivacyRouter({
           twilioAccountSid,
           twilioAuthToken,
           providerTimeoutMs,
+          calendlyDeleter,
           deleters,
         });
       } catch {

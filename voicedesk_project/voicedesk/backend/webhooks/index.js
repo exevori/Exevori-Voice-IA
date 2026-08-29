@@ -191,18 +191,6 @@ router.post("/resend", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// POST /webhooks/calendly
-// Webhook Calendly (invitee.created / invitee.canceled)
-// Forward vers module calendar
-// ─────────────────────────────────────────────────────────────
-router.post("/calendly", express.raw({ type: "application/json" }), async (req, res) => {
-  // Le module calendar gère déjà ce webhook
-  // Cette route est ici pour le routing global propre
-  log.info("Calendly webhook forwarded");
-  return res.status(200).json({ received: true });
-});
-
-// ─────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────
 
