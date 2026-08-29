@@ -19,16 +19,22 @@ import pytest
 import requests
 import websockets
 
-BASE_HTTP = "http://localhost:8001"
-BASE_WS   = "ws://localhost:8001"
+BASE_HTTP = os.getenv("VOICE_DESK_BASE_URL", "http://localhost:8001")
+BASE_WS = os.getenv("VOICE_DESK_WS_URL", "ws://localhost:8001")
 
-SUPABASE_URL = "https://yptsvqhcnksjxufziech.supabase.co"
-SUPABASE_ANON = "sb_publishable_avATcYb4hXUF-_MKPNnYwg_9Q8uI9vl"
-SUPABASE_SERVICE_ROLE = "sb_secret_vIxlmUawjOWTV507F0RymQ_bMOeaRIb"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON = os.getenv("SUPABASE_ANON_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY")
+SUPABASE_SERVICE_ROLE = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-QA_BOT_EMAIL = "qa-bot@garage-tremblay.test"
-QA_BOT_PASSWORD = "QaBot_Test_2026!"
-COMPANY_ID = "af5f079f-6fc2-4d70-8c8d-51d83d301906"
+QA_BOT_EMAIL = os.getenv("QA_EMAIL")
+QA_BOT_PASSWORD = os.getenv("QA_PASSWORD")
+COMPANY_ID = os.getenv("QA_COMPANY_ID")
+
+INTEGRATION_ENV_REQUIRED = [SUPABASE_URL, SUPABASE_ANON, SUPABASE_SERVICE_ROLE, QA_BOT_EMAIL, QA_BOT_PASSWORD, COMPANY_ID]
+pytestmark = pytest.mark.skipif(
+    not all(INTEGRATION_ENV_REQUIRED),
+    reason="Legacy integration test requires explicit QA environment variables",
+)
 TEST_PHONE = "+14181112222"
 
 # ---------- Supabase REST helpers (service role) ----------

@@ -8,16 +8,22 @@ import pytest
 import requests
 
 # Public preview URL (provided by reviewer)
-BASE_URL = "https://720876eb-de73-4840-91bd-19cf23fab78e.preview.emergentagent.com"
+BASE_URL = os.getenv("VOICE_DESK_BASE_URL", "http://localhost:8001")
 API = f"{BASE_URL}/api/v1"
 
-QA_EMAIL = "qa-bot@garage-tremblay.test"
-QA_PASS = "QaBot_Test_2026!"
-QA_COMPANY = "af5f079f-6fc2-4d70-8c8d-51d83d301906"
+QA_EMAIL = os.getenv("QA_EMAIL")
+QA_PASS = os.getenv("QA_PASSWORD")
+QA_COMPANY = os.getenv("QA_COMPANY_ID")
 
 # Supabase login (the project uses supabase-js client-side; backend reads Bearer JWT)
-SUPABASE_URL = "https://yptsvqhcnksjxufziech.supabase.co"
-SUPABASE_ANON = "sb_publishable_avATcYb4hXUF-_MKPNnYwg_9Q8uI9vl"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON = os.getenv("SUPABASE_ANON_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY")
+
+INTEGRATION_ENV_REQUIRED = [SUPABASE_URL, SUPABASE_ANON, QA_EMAIL, QA_PASS, QA_COMPANY]
+pytestmark = pytest.mark.skipif(
+    not all(INTEGRATION_ENV_REQUIRED),
+    reason="Legacy integration test requires explicit QA environment variables",
+)
 
 
 @pytest.fixture(scope="session")

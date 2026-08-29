@@ -23,14 +23,20 @@ import pytest
 import requests
 import websockets
 
-BASE_HTTP = "http://localhost:8001"
-BASE_WS   = "ws://localhost:8001"
+BASE_HTTP = os.getenv("VOICE_DESK_BASE_URL", "http://localhost:8001")
+BASE_WS = os.getenv("VOICE_DESK_WS_URL", "ws://localhost:8001")
 
-SUPABASE_URL = "https://yptsvqhcnksjxufziech.supabase.co"
-SUPABASE_SR  = "sb_secret_vIxlmUawjOWTV507F0RymQ_bMOeaRIb"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SR = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-EXEVORI_COMPANY_ID = "992724ec-a5ec-4ecd-a2f4-9f2a6afa3f65"
-EXEVORI_PHONE      = "+15817004171"
+EXEVORI_COMPANY_ID = os.getenv("QA_EXEVORI_COMPANY_ID")
+EXEVORI_PHONE = os.getenv("QA_EXEVORI_PHONE")
+
+INTEGRATION_ENV_REQUIRED = [SUPABASE_URL, SUPABASE_SR, EXEVORI_COMPANY_ID, EXEVORI_PHONE]
+pytestmark = pytest.mark.skipif(
+    not all(INTEGRATION_ENV_REQUIRED),
+    reason="Legacy integration test requires explicit QA environment variables",
+)
 
 ACKS = ["Parfait", "D'accord", "D'accord,", "Très bien", "Bonne question",
         "Je comprends", "Permettez-moi", "Merci"]

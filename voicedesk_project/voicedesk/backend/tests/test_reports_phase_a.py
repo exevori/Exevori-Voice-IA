@@ -7,18 +7,25 @@ Coverage:
   - Empty company (no data) returns zeros
   - Coherence checks: totals == counts, saved_seconds = max(0, sans-avec), saved_cad math
 """
+import os
 import math
 import uuid
 import pytest
 import requests
 
-BASE_URL = "https://720876eb-de73-4840-91bd-19cf23fab78e.preview.emergentagent.com"
-SUPABASE_URL = "https://yptsvqhcnksjxufziech.supabase.co"
-SUPABASE_ANON_KEY = "sb_publishable_avATcYb4hXUF-_MKPNnYwg_9Q8uI9vl"
+BASE_URL = os.getenv("VOICE_DESK_BASE_URL", "http://localhost:8001")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY")
 
-QA_EMAIL = "qa-bot@garage-tremblay.test"
-QA_PASSWORD = "QaBot_Test_2026!"
-QA_COMPANY_ID = "af5f079f-6fc2-4d70-8c8d-51d83d301906"
+QA_EMAIL = os.getenv("QA_EMAIL")
+QA_PASSWORD = os.getenv("QA_PASSWORD")
+QA_COMPANY_ID = os.getenv("QA_COMPANY_ID")
+
+INTEGRATION_ENV_REQUIRED = [SUPABASE_URL, SUPABASE_ANON_KEY, QA_EMAIL, QA_PASSWORD, QA_COMPANY_ID]
+pytestmark = pytest.mark.skipif(
+    not all(INTEGRATION_ENV_REQUIRED),
+    reason="Legacy integration test requires explicit QA environment variables",
+)
 
 # ROI factors (must match backend defaults / env)
 PME_HOURLY_RATE_CAD = 35

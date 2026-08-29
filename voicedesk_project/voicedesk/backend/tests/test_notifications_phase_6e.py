@@ -11,13 +11,19 @@ import os
 import pytest
 import requests
 
-BACKEND = "http://localhost:8001"
-SUPABASE_URL = "https://yptsvqhcnksjxufziech.supabase.co"
-SUPABASE_ANON = "sb_publishable_avATcYb4hXUF-_MKPNnYwg_9Q8uI9vl"
-SUPABASE_SERVICE_KEY = "sb_secret_vIxlmUawjOWTV507F0RymQ_bMOeaRIb"
-QA_EMAIL = "qa-bot@garage-tremblay.test"
-QA_PASSWORD = "QaBot_Test_2026!"
-QA_COMPANY_ID = "af5f079f-6fc2-4d70-8c8d-51d83d301906"
+BACKEND = os.getenv("VOICE_DESK_BASE_URL", "http://localhost:8001")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON = os.getenv("SUPABASE_ANON_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+QA_EMAIL = os.getenv("QA_EMAIL")
+QA_PASSWORD = os.getenv("QA_PASSWORD")
+QA_COMPANY_ID = os.getenv("QA_COMPANY_ID")
+
+INTEGRATION_ENV_REQUIRED = [SUPABASE_URL, SUPABASE_ANON, SUPABASE_SERVICE_KEY, QA_EMAIL, QA_PASSWORD, QA_COMPANY_ID]
+pytestmark = pytest.mark.skipif(
+    not all(INTEGRATION_ENV_REQUIRED),
+    reason="Legacy integration test requires explicit QA environment variables",
+)
 
 DEFAULT_PREFS_KEYS = {"ticket_email", "billing_email", "draft_email", "learning_email", "system_email"}
 

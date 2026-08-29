@@ -18,12 +18,18 @@ import os, json, subprocess, time, uuid
 import requests
 import pytest
 
-BACKEND = "http://localhost:8001"
-SUPABASE_URL = "https://yptsvqhcnksjxufziech.supabase.co"
-SUPABASE_ANON = "sb_publishable_avATcYb4hXUF-_MKPNnYwg_9Q8uI9vl"
-COMPANY_ID = "af5f079f-6fc2-4d70-8c8d-51d83d301906"
-QA_EMAIL = "qa-bot@garage-tremblay.test"
-QA_PASS = "QaBot_Test_2026!"
+BACKEND = os.getenv("VOICE_DESK_BASE_URL", "http://localhost:8001")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON = os.getenv("SUPABASE_ANON_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY")
+COMPANY_ID = os.getenv("QA_COMPANY_ID")
+QA_EMAIL = os.getenv("QA_EMAIL")
+QA_PASS = os.getenv("QA_PASSWORD")
+
+INTEGRATION_ENV_REQUIRED = [SUPABASE_URL, SUPABASE_ANON, COMPANY_ID, QA_EMAIL, QA_PASS]
+pytestmark = pytest.mark.skipif(
+    not all(INTEGRATION_ENV_REQUIRED),
+    reason="Legacy integration test requires explicit QA environment variables",
+)
 
 
 @pytest.fixture(scope="session")
