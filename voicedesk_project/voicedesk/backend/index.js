@@ -38,6 +38,10 @@ import emailRouter from "./modules/email/index.js";
 import callsRouter from "./modules/calls/index.js";
 import { recordingRouter } from "./modules/calls/recording.js";
 import kbRouter from "./modules/kb/index.js";
+import {
+  getKnowledgeWorkerStatus,
+  startKnowledgeWorker,
+} from "./modules/kb/worker.js";
 import reportsRouter from "./modules/reports/index.js";
 import companyRouter from "./modules/company/index.js";
 import teamRouter from "./modules/team/index.js";
@@ -195,6 +199,7 @@ app.get("/health", (req, res) => {
   const privacyConsentSync = getPrivacyConsentSyncStatus();
   const outboundWorker = getOutboundWorkerStatus();
   const postCallWorker = getPostCallWorkerStatus();
+  const knowledgeWorker = getKnowledgeWorkerStatus();
   const customLlmAuth = getCustomLlmAuthStatus();
   const calendarWorker = calendarWorkers?.status() || {
     ready: false,
@@ -205,9 +210,11 @@ app.get("/health", (req, res) => {
   const postCallWorkerRequired =
     process.env.DISABLE_POST_CALL_WORKER !== "true";
   const calendarWorkerRequired = process.env.DISABLE_CALENDAR_WORKER !== "true";
+  const knowledgeWorkerRequired = process.env.DISABLE_KB_WORKER !== "true";
   const ready = (!outboundWorkerRequired || outboundWorker.ready)
     && (!postCallWorkerRequired || postCallWorker.ready)
     && (!calendarWorkerRequired || calendarWorker.ready)
+    && (!knowledgeWorkerRequired || knowledgeWorker.ready)
     && customLlmAuth.ready;
   res.status(ready ? 200 : 503).json({
     status: ready ? "ok" : "degraded",
@@ -224,6 +231,7 @@ app.get("/health", (req, res) => {
     outbound_worker: outboundWorker,
     post_call_worker: postCallWorker,
     calendar_worker: calendarWorker,
+    knowledge_worker: knowledgeWorker,
     custom_llm_auth: customLlmAuth,
   });
 });
@@ -264,8 +272,8 @@ app.use("/api/v1/email-accounts", requireAuth, enforceTenantOwnership, emailAcco
 app.use("/api/v1/twilio-config",  requireAuth, enforceTenantOwnership, twilioConfigRouter);
 app.use("/api/v1/calendar",       requireAuth, enforceTenantOwnership, calendarRouter);
 app.use("/api/v1/emails",         requireAuth, enforceTenantOwnership, emailRouter);
-app.use("/api/v1/learning",       requireAuth, learningRouter);
-app.use("/api/v1/knowledge",      requireAuth, knowledgeRouter);
+app.use("/api/v1/learning",       requireAuth, enforceTenantOwnership, learningRouter);
+app.use("/api/v1/knowledge",      requireAuth, enforceTenantOwnership, knowledgeRouter);
 app.use(
   "/api/v1/billing",
   (req, res, next) =>
@@ -276,7 +284,7 @@ app.use(
 );
 app.use("/api/v1/tickets",        requireAuth, ticketsRouter);
 app.use("/api/v1/voice-library",  requireAuth, voiceLibraryRouter);
-app.use("/api/v1/onboarding",     requireAuth, onboardingRouter);
+app.use("/api/v1/onboarding",     requireAuth, enforceTenantOwnership, onboardingRouter);
 app.use("/api/v1/import",         requireAuth, importRouter);
 app.use("/api/v1/notifications",  requireAuth, notificationsRouter);
 app.use("/api/v1/outbound",       requireAuth, enforceTenantOwnership, outboundRouter);
@@ -354,6 +362,16 @@ if (process.env.DISABLE_POST_CALL_WORKER !== "true") {
   }
 }
 
+if (process.env.DISABLE_KB_WORKER !== "true") {
+  try {
+    startKnowledgeWorker({ logger });
+  } catch (error) {
+    logger.error("Knowledge worker did not start", {
+      error_code: error?.code || error?.message || "kb_worker_start_failed",
+    });
+  }
+}
+
 if (process.env.DISABLE_CALENDAR_WORKER !== "true") {
   try {
     if (!calendarWorkers) throw new Error("calendar_not_configured");
@@ -369,7 +387,7 @@ server.listen(PORT, () => {
   logger.info("VoiceDesk backend started", {
     port: PORT,
     env: NODE_ENV,
-    modules: 17,
+    modules: 18,
   });
 });
 

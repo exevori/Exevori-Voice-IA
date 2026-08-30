@@ -640,10 +640,11 @@ async function lookupContactByEmail(companyId, email) {
 
 async function getKnowledgeBase(companyId) {
   const { data } = await supabase
-    .from("knowledge_base")
+    .from("knowledge_sources")
     .select("question, answer, category")
     .eq("company_id", companyId)
-    .eq("status", "active")
+    .eq("status", "ready")
+    .not("question", "is", null)
     .limit(30);
   return data || [];
 }

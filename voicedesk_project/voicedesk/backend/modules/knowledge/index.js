@@ -1,323 +1,284 @@
-// ============================================================
-// VOICEDESK IA — MODULE KNOWLEDGE BASE
-// CRUD des connaissances officielles de la PME
-// Utilisé par voice/inbound.js (lecture) + admin (gestion)
-// ============================================================
+// Compatibility API for historical /api/v1/knowledge consumers.
+// Since migration 014 every operation targets the canonical RAG tables.
 
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 
+import { requireRole } from "../../middleware/auth.js";
+import { buildQaContent } from "../kb/processing.js";
+import { createRagService } from "../kb/rag.js";
+import { createKnowledgeService } from "../kb/service.js";
+
 dotenv.config();
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+const REVIEW_ROLES = requireRole("company_admin", "super_admin");
 
-const router = express.Router();
-
-async function respondTenantMiss(res, id, isSuperAdmin) {
-  if (!isSuperAdmin) {
-    const { data, error } = await supabase
-      .from("knowledge_base")
-      .select("id")
-      .eq("id", id)
-      .maybeSingle();
-    if (error) return res.status(500).json({ error: error.message });
-    if (data) return res.status(403).json({ error: "Accès refusé" });
-  }
-  return res.status(404).json({ error: "Entrée introuvable" });
+function isSuperAdmin(req) {
+  return req.user?.role === "super_admin";
 }
 
-const VALID_CATEGORIES = [
-  "FAQ", "services", "pricing", "hours", "policies",
-  "contact", "team", "products", "shipping", "returns",
-];
+function companyFor(req, requested) {
+  if (isSuperAdmin(req)) return requested || null;
+  if (requested && requested !== req.user?.company_id) return false;
+  return req.user?.company_id || null;
+}
 
-// ─────────────────────────────────────────────────────────────
-// GET /api/v1/knowledge
-// Liste les connaissances actives d'une PME
-// ─────────────────────────────────────────────────────────────
-router.get("/", async (req, res) => {
-  const { company_id, category, status = "active", search, limit = 100 } = req.query;
+function legacyEntry(source) {
+  return {
+    id: source.id,
+    knowledge_source_id: source.id,
+    company_id: source.company_id,
+    question: source.question,
+    answer: source.answer,
+    category: source.category || "FAQ",
+    status: source.status === "ready" ? "active" : source.status,
+    source: source.type,
+    created_at: source.created_at,
+    updated_at: source.updated_at,
+    embeddings_ready_at: source.embeddings_ready_at,
+  };
+}
 
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
+export function createKnowledgeCompatibilityRouter({
+  supabase,
+  ragService,
+  knowledgeService,
+} = {}) {
+  const rag = ragService || createRagService({ supabase });
+  const knowledge = knowledgeService || createKnowledgeService({ supabase, ragService: rag });
+  const router = express.Router();
 
-  try {
-    let query = supabase
-      .from("knowledge_base")
-      .select("*", { count: "exact" })
-      .eq("company_id", company_id);
-
-    if (status !== "all") query = query.eq("status", status);
-    if (category) query = query.eq("category", category);
-    if (search) {
-      query = query.or(`question.ilike.%${search}%,answer.ilike.%${search}%`);
+  async function missingEntry(req, res) {
+    if (!isSuperAdmin(req)) {
+      const { data, error } = await supabase
+        .from("knowledge_sources")
+        .select("id")
+        .eq("id", req.params.id)
+        .maybeSingle();
+      if (error) return res.status(500).json({ error: "knowledge_lookup_failed" });
+      if (data) return res.status(403).json({ error: "forbidden_cross_tenant" });
     }
+    return res.status(404).json({ error: "knowledge_not_found" });
+  }
 
+  router.get("/search/semantic", async (req, res) => {
+    const companyId = companyFor(req, req.query.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    const query = String(req.query.query || "").trim();
+    if (!companyId || !query) return res.status(400).json({ error: "company_id_and_query_required" });
+    try {
+      const results = await rag.searchSimilarChunks({
+        company_id: companyId,
+        query,
+        topK: Math.max(1, Math.min(Number.parseInt(req.query.limit, 10) || 5, 20)),
+        minSimilarity: 0,
+      });
+      return res.json({
+        query,
+        matches: results.map(result => ({
+          id: result.source_id,
+          knowledge_source_id: result.source_id,
+          question: result.source_question,
+          answer: result.content,
+          category: result.source_category || "FAQ",
+          similarity: result.similarity,
+          source_name: result.source_name,
+          source_type: result.source_type,
+        })),
+        source_trace: results,
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error.code || "knowledge_search_failed" });
+    }
+  });
+
+  router.get("/stats/overview", async (req, res) => {
+    const companyId = companyFor(req, req.query.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId) return res.status(400).json({ error: "company_id_required" });
+    const { data, error } = await supabase
+      .from("knowledge_sources")
+      .select("category, type, status")
+      .eq("company_id", companyId)
+      .not("question", "is", null);
+    if (error) return res.status(500).json({ error: "knowledge_stats_failed" });
+    const stats = {
+      total_active: 0,
+      total_error: 0,
+      by_category: {},
+      by_source: {},
+    };
+    for (const row of data || []) {
+      if (row.status === "ready") stats.total_active += 1;
+      if (row.status === "error") stats.total_error += 1;
+      stats.by_category[row.category || "FAQ"] = (stats.by_category[row.category || "FAQ"] || 0) + 1;
+      stats.by_source[row.type] = (stats.by_source[row.type] || 0) + 1;
+    }
+    return res.json(stats);
+  });
+
+  router.post("/bulk-import", REVIEW_ROLES, async (req, res) => {
+    const companyId = companyFor(req, req.body?.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId || !Array.isArray(req.body?.entries)) {
+      return res.status(400).json({ error: "company_id_and_entries_required" });
+    }
+    const imported = [];
+    try {
+      for (const entry of req.body.entries.filter(item => item?.question && item?.answer)) {
+        const result = await knowledge.createQaSource({
+          companyId,
+          type: "manual",
+          question: entry.question,
+          answer: entry.answer,
+          category: entry.category || "FAQ",
+          createdBy: req.user?.profile?.id || null,
+          metadata: { created_via: "legacy_bulk_import" },
+        });
+        imported.push(legacyEntry(result.source));
+      }
+      return res.status(201).json({ success: true, imported: imported.length, entries: imported });
+    } catch (error) {
+      return res.status(error.status || 500).json({ error: error.code || "knowledge_import_failed" });
+    }
+  });
+
+  router.get("/", async (req, res) => {
+    const companyId = companyFor(req, req.query.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId) return res.status(400).json({ error: "company_id_required" });
+    let query = supabase
+      .from("knowledge_sources")
+      .select("*", { count: "exact" })
+      .eq("company_id", companyId)
+      .not("question", "is", null);
+    if (req.query.category) query = query.eq("category", req.query.category);
+    if (req.query.status && req.query.status !== "all") {
+      query = query.eq("status", req.query.status === "active" ? "ready" : req.query.status);
+    }
+    const limit = Math.max(1, Math.min(Number.parseInt(req.query.limit, 10) || 100, 200));
     const { data, error, count } = await query
       .order("category")
       .order("question")
-      .limit(parseInt(limit));
+      .limit(limit);
+    if (error) return res.status(500).json({ error: "knowledge_read_failed" });
+    const entries = (data || []).map(legacyEntry);
+    const grouped = Object.groupBy
+      ? Object.groupBy(entries, entry => entry.category || "Autres")
+      : entries.reduce((acc, entry) => {
+          (acc[entry.category || "Autres"] ||= []).push(entry);
+          return acc;
+        }, {});
+    return res.json({ entries, grouped, total: count || entries.length });
+  });
 
-    if (error) throw error;
-
-    // Grouper par catégorie pour faciliter l'affichage
-    const grouped = {};
-    (data || []).forEach(entry => {
-      const cat = entry.category || "Autres";
-      if (!grouped[cat]) grouped[cat] = [];
-      grouped[cat].push(entry);
-    });
-
-    return res.json({
-      entries: data || [],
-      grouped,
-      total: count || 0,
-      categories: VALID_CATEGORIES,
-    });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────
-// GET /api/v1/knowledge/:id
-// Détail d'une entrée
-// ─────────────────────────────────────────────────────────────
-router.get("/:id", async (req, res) => {
-  const isSuperAdmin = req.user?.role === "super_admin";
-
-  try {
-    let query = supabase
-      .from("knowledge_base")
-      .select("*")
-      .eq("id", req.params.id);
-    if (!isSuperAdmin) {
-      query = query.eq("company_id", req.user.company_id);
+  router.post("/", REVIEW_ROLES, async (req, res) => {
+    const companyId = companyFor(req, req.body?.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId) return res.status(400).json({ error: "company_id_required" });
+    try {
+      const result = await knowledge.createQaSource({
+        companyId,
+        type: "manual",
+        question: req.body?.question,
+        answer: req.body?.answer,
+        category: req.body?.category || "FAQ",
+        createdBy: req.user?.profile?.id || null,
+        metadata: { created_via: "legacy_knowledge_api" },
+      });
+      return res.status(201).json({ success: true, entry: legacyEntry(result.source) });
+    } catch (error) {
+      return res.status(error.status || 500).json({ error: error.code || "knowledge_create_failed" });
     }
+  });
+
+  router.get("/:id", async (req, res) => {
+    const companyId = companyFor(req, req.query.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    let query = supabase.from("knowledge_sources").select("*").eq("id", req.params.id);
+    if (!isSuperAdmin(req)) query = query.eq("company_id", companyId);
+    else if (companyId) query = query.eq("company_id", companyId);
     const { data, error } = await query.maybeSingle();
+    if (error) return res.status(500).json({ error: "knowledge_read_failed" });
+    if (!data) return missingEntry(req, res);
+    return res.json({ entry: legacyEntry(data) });
+  });
 
-    if (error) throw error;
-    if (!data) return respondTenantMiss(res, req.params.id, isSuperAdmin);
-    return res.json({ entry: data });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────
-// POST /api/v1/knowledge
-// Ajouter une entrée manuellement
-// ─────────────────────────────────────────────────────────────
-router.post("/", async (req, res) => {
-  const { company_id, question, answer, category = "FAQ", approved_by } = req.body;
-
-  if (!company_id || !question || !answer) {
-    return res.status(400).json({ error: "company_id, question, answer requis" });
-  }
-
-  try {
-    // Détection de doublons
-    const { data: existing } = await supabase
-      .from("knowledge_base")
-      .select("id, question")
-      .eq("company_id", company_id)
-      .eq("status", "active")
-      .ilike("question", `%${question.substring(0, 30)}%`)
-      .limit(3);
-
-    const { data, error } = await supabase
-      .from("knowledge_base")
-      .insert({
-        company_id,
+  router.patch("/:id", REVIEW_ROLES, async (req, res) => {
+    const companyId = companyFor(req, req.body?.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    let query = supabase.from("knowledge_sources").select("*").eq("id", req.params.id);
+    if (companyId) query = query.eq("company_id", companyId);
+    const { data: source, error } = await query.maybeSingle();
+    if (error) return res.status(500).json({ error: "knowledge_read_failed" });
+    if (!source) return missingEntry(req, res);
+    const question = String(req.body?.question ?? source.question ?? "").trim();
+    const answer = String(req.body?.answer ?? source.answer ?? "").trim();
+    if (!question || !answer) return res.status(400).json({ error: "question_and_answer_required" });
+    try {
+      const { error: sourceError } = await supabase
+        .from("knowledge_sources")
+        .update({
+          question,
+          answer,
+          category: req.body?.category || source.category || "FAQ",
+          name: question.slice(0, 200),
+          type: source.type === "legacy" ? "manual" : source.type,
+        })
+        .eq("id", source.id)
+        .eq("company_id", source.company_id);
+      if (sourceError) throw sourceError;
+      const result = await knowledge.replaceSourceContent({
+        sourceId: source.id,
+        companyId: source.company_id,
+        content: buildQaContent(question, answer),
+        sourceMetadata: source.metadata || {},
+        chunkMetadata: { kind: "qa", updated_via: "legacy_knowledge_api" },
+      });
+      return res.json({ success: true, entry: legacyEntry({
+        ...result.source,
         question,
         answer,
-        category,
-        status: "active",
-        source: "manual",
-        approved_by,
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return res.json({
-      success: true,
-      entry: data,
-      similar_entries: existing?.length > 0 ? existing : null,
-    });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────
-// PATCH /api/v1/knowledge/:id
-// Modifier une entrée
-// ─────────────────────────────────────────────────────────────
-router.patch("/:id", async (req, res) => {
-  const isSuperAdmin = req.user?.role === "super_admin";
-  const updates = { ...req.body, updated_at: new Date() };
-  delete updates.id;
-  delete updates.company_id;
-  delete updates.created_at;
-
-  try {
-    let query = supabase
-      .from("knowledge_base")
-      .update(updates)
-      .eq("id", req.params.id);
-    if (!isSuperAdmin) {
-      query = query.eq("company_id", req.user.company_id);
+        category: req.body?.category || source.category || "FAQ",
+      }) });
+    } catch (updateError) {
+      return res.status(500).json({ error: updateError.code || "knowledge_update_failed" });
     }
-    const { data, error } = await query.select().maybeSingle();
+  });
 
-    if (error) throw error;
-    if (!data) return respondTenantMiss(res, req.params.id, isSuperAdmin);
-    return res.json({ success: true, entry: data });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────
-// DELETE /api/v1/knowledge/:id
-// Désactiver une entrée (soft delete)
-// ─────────────────────────────────────────────────────────────
-router.delete("/:id", async (req, res) => {
-  const isSuperAdmin = req.user?.role === "super_admin";
-
-  try {
-    let query = supabase
-      .from("knowledge_base")
-      .update({ status: "archived", updated_at: new Date() })
-      .eq("id", req.params.id);
-    if (!isSuperAdmin) {
-      query = query.eq("company_id", req.user.company_id);
-    }
-    const { data, error } = await query.select("id").maybeSingle();
-    if (error) throw error;
-    if (!data) return respondTenantMiss(res, req.params.id, isSuperAdmin);
+  router.delete("/:id", REVIEW_ROLES, async (req, res) => {
+    const companyId = companyFor(req, req.body?.company_id || req.query.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    let lookup = supabase.from("knowledge_sources").select("id, company_id").eq("id", req.params.id);
+    if (companyId) lookup = lookup.eq("company_id", companyId);
+    const { data: source, error: lookupError } = await lookup.maybeSingle();
+    if (lookupError) return res.status(500).json({ error: "knowledge_read_failed" });
+    if (!source) return missingEntry(req, res);
+    const { error } = await supabase
+      .from("knowledge_sources")
+      .delete()
+      .eq("id", source.id)
+      .eq("company_id", source.company_id);
+    if (error) return res.status(500).json({ error: "knowledge_delete_failed" });
     return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
+  });
 
-// ─────────────────────────────────────────────────────────────
-// POST /api/v1/knowledge/bulk-import
-// Import en masse (utilisé par onboarding ou import CSV)
-// ─────────────────────────────────────────────────────────────
-router.post("/bulk-import", async (req, res) => {
-  const { company_id, entries, approved_by } = req.body;
+  return router;
+}
 
-  if (!company_id || !Array.isArray(entries)) {
-    return res.status(400).json({ error: "company_id et entries (array) requis" });
-  }
-
-  try {
-    const records = entries
-      .filter(e => e.question && e.answer)
-      .map(e => ({
-        company_id,
-        question: e.question,
-        answer: e.answer,
-        category: e.category || "FAQ",
-        status: "active",
-        source: e.source || "bulk_import",
-        approved_by,
-      }));
-
-    if (records.length === 0) {
-      return res.status(400).json({ error: "Aucune entrée valide" });
-    }
-
-    const { data, error } = await supabase
-      .from("knowledge_base")
-      .insert(records)
-      .select();
-
-    if (error) throw error;
-    return res.json({ success: true, imported: data.length, entries: data });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────
-// GET /api/v1/knowledge/search/semantic
-// Recherche pour voice/inbound.js (rapide, contextuelle)
-// ─────────────────────────────────────────────────────────────
-router.get("/search/semantic", async (req, res) => {
-  const { company_id, query, limit = 5 } = req.query;
-
-  if (!company_id || !query) {
-    return res.status(400).json({ error: "company_id et query requis" });
-  }
-
-  try {
-    // V0 : SQL text search (Phase 2 : pgvector)
-    const keywords = query.toLowerCase()
-      .split(/\s+/)
-      .filter(w => w.length > 3)
-      .slice(0, 5);
-
-    let supabaseQuery = supabase
-      .from("knowledge_base")
-      .select("id, question, answer, category")
-      .eq("company_id", company_id)
-      .eq("status", "active");
-
-    if (keywords.length > 0) {
-      const orConditions = keywords.map(k =>
-        `question.ilike.%${k}%,answer.ilike.%${k}%`
-      ).join(",");
-      supabaseQuery = supabaseQuery.or(orConditions);
-    }
-
-    const { data, error } = await supabaseQuery.limit(parseInt(limit));
-    if (error) throw error;
-
-    return res.json({ matches: data || [], query, keywords });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────
-// GET /api/v1/knowledge/stats
-// Statistiques pour dashboard
-// ─────────────────────────────────────────────────────────────
-router.get("/stats/overview", async (req, res) => {
-  const { company_id } = req.query;
-
-  try {
-    const { data } = await supabase
-      .from("knowledge_base")
-      .select("category, source, status")
-      .eq("company_id", company_id);
-
-    const stats = {
-      total_active: 0,
-      total_archived: 0,
-      by_category: {},
-      by_source: { manual: 0, learning_validated: 0, bulk_import: 0 },
-    };
-
-    (data || []).forEach(e => {
-      if (e.status === "active") stats.total_active++;
-      else if (e.status === "archived") stats.total_archived++;
-      stats.by_category[e.category] = (stats.by_category[e.category] || 0) + 1;
-      stats.by_source[e.source] = (stats.by_source[e.source] || 0) + 1;
-    });
-
-    return res.json(stats);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
+let router;
+if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+  const ragService = createRagService({ supabase });
+  const knowledgeService = createKnowledgeService({ supabase, ragService });
+  router = createKnowledgeCompatibilityRouter({ supabase, ragService, knowledgeService });
+} else {
+  router = express.Router();
+  router.use((_req, res) => res.status(503).json({ error: "knowledge_not_configured" }));
+}
 
 export default router;

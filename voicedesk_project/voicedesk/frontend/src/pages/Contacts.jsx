@@ -1138,8 +1138,10 @@ function HumanNotesZone({ contact: c, token, onUpdate, t }) {
 }
 
 function HesitationsZone({ suggestions, token, onResolved, t, lang }) {
+  const navigate = useNavigate();
   const [handlingId, setHandlingId] = useState(null);
   const [handleError, setHandleError] = useState(null);
+  const [lastApproval, setLastApproval] = useState(null);
   const handle = async (id, action) => {
     setHandlingId(id);
     setHandleError(null);
@@ -1152,6 +1154,14 @@ function HesitationsZone({ suggestions, token, onResolved, t, lang }) {
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+      if (action === "approve" && body.rag_test?.passed) {
+        setLastApproval({
+          question: body.suggestion?.final_question || body.knowledge_source?.question || "",
+          sourceId: body.rag_test.source_id,
+          sourceName: body.rag_test.source_name || body.knowledge_source?.name,
+          similarity: body.rag_test.similarity,
+        });
+      }
       onResolved?.(id);
     } catch (error) {
       setHandleError(error.message || t("contacts.ai.actionError", "Impossible de traiter cette suggestion."));
@@ -1181,6 +1191,31 @@ function HesitationsZone({ suggestions, token, onResolved, t, lang }) {
         )}
       </div>
 
+      {lastApproval && (
+        <div
+          className="mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-100"
+          role="status"
+          data-testid="learning-rag-approved"
+        >
+          <div className="font-medium">
+            {t("contacts.ai.ragApproved", "Suggestion ajoutée et retrouvée dans la base de connaissances.")}
+          </div>
+          <div className="mt-1 text-emerald-200/80">
+            {lastApproval.sourceName || t("contacts.ai.ragSource", "Source RAG")}
+            {Number.isFinite(lastApproval.similarity) && ` · ${Math.round(lastApproval.similarity * 100)}%`}
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            className="mt-2"
+            onClick={() => navigate(`/knowledge?question=${encodeURIComponent(lastApproval.question)}&source=${encodeURIComponent(lastApproval.sourceId)}`)}
+            data-testid="learning-test-approved-question"
+          >
+            {t("contacts.ai.testQuestion", "Tester cette question")}
+          </Button>
+        </div>
+      )}
+
       {suggestions.length === 0 ? (
         <p className="text-xs text-text-tertiary">
           {t("contacts.ai.hesitations_empty", "Aucune hésitation détectée — Léa a su répondre.")}
@@ -1195,11 +1230,11 @@ function HesitationsZone({ suggestions, token, onResolved, t, lang }) {
             >
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[10px] uppercase tracking-wider text-text-tertiary">
-                  {formatRelative(s.detected_at, lang)}
+                  {formatRelative(s.detected_at || s.created_at, lang)}
                 </span>
-                {s.confidence != null && (
+                {(s.confidence_score ?? s.confidence) != null && (
                   <span className="text-[10px] text-text-tertiary tabular-nums">
-                    {s.confidence}%
+                    {s.confidence_score ?? s.confidence}%
                   </span>
                 )}
               </div>
@@ -1208,14 +1243,14 @@ function HesitationsZone({ suggestions, token, onResolved, t, lang }) {
                   <div className="text-[10px] uppercase tracking-wider text-text-tertiary">
                     {t("contacts.ai.question", "Question")}
                   </div>
-                  <p className="text-text-primary">{s.question}</p>
+                  <p className="text-text-primary">{s.question_detected || s.question}</p>
                 </div>
-                {s.proposed_answer && (
+                {(s.suggested_answer || s.proposed_answer) && (
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-text-tertiary">
                       {t("contacts.ai.suggested_kb", "À ajouter à la KB")}
                     </div>
-                    <p className="text-text-secondary italic">{s.proposed_answer}</p>
+                    <p className="text-text-secondary italic">{s.suggested_answer || s.proposed_answer}</p>
                   </div>
                 )}
               </div>

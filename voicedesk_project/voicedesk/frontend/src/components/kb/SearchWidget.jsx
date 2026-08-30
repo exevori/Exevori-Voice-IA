@@ -6,31 +6,74 @@
 // Réutilisé en Phase 8 (Léa utilise searchSimilarChunks() côté backend).
 // ============================================================
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Sparkles, Search, FileText, Globe, Loader2, AlertCircle, Pencil } from "lucide-react";
+import {
+  Sparkles, Search, FileText, Globe, Loader2, AlertCircle, Pencil,
+  MessageSquare, ChevronRight,
+} from "lucide-react";
 import { Input } from "../ui/input.jsx";
 import { Button } from "../ui/button.jsx";
+import {
+  buildKnowledgeSearchPayload,
+  getKnowledgeChunkNumber,
+  normalizeKnowledgeQuestion,
+} from "../../lib/knowledge.js";
 
 const API = import.meta.env.VITE_API_URL || "";
 
-const TYPE_ICON = { upload: FileText, url: Globe, manual: Pencil };
+const TYPE_ICON = {
+  upload: FileText,
+  url: Globe,
+  manual: Pencil,
+  qa: MessageSquare,
+  onboarding: MessageSquare,
+  learning: Sparkles,
+  legacy: FileText,
+};
+const TYPE_LABEL = {
+  upload: "Document",
+  url: "Page web",
+  manual: "Note manuelle",
+  qa: "Q&R",
+  onboarding: "Onboarding",
+  learning: "Apprentissage validé",
+  legacy: "Historique migré",
+};
 
-export default function SearchWidget({ token, companyId, hasReadySources }) {
+export default function SearchWidget({
+  token,
+  companyId,
+  hasReadySources,
+  initialQuestion = "",
+  autoRun = false,
+  onSourceSelect,
+}) {
   const { t } = useTranslation();
-  const [query, setQuery] = useState("");
+  const normalizedInitialQuestion = normalizeKnowledgeQuestion(initialQuestion);
+  const [query, setQuery] = useState(normalizedInitialQuestion);
   const [results, setResults] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [latency, setLatency] = useState(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const activeRequestRef = useRef(null);
+  const autoRunKeyRef = useRef(null);
 
-  const runSearch = async () => {
-    const q = query.trim();
-    if (!q) return;
+  const runSearch = useCallback(async (question = query) => {
+    const q = normalizeKnowledgeQuestion(question);
+    if (!q || !token || !companyId || !hasReadySources) return;
+
+    activeRequestRef.current?.abort();
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
+
+    setQuery(q);
     setBusy(true);
     setError(null);
     setResults([]);
+    setLatency(null);
+    setHasSearched(false);
     try {
       const r = await fetch(`${API}/api/v1/kb/sources/search`, {
         method: "POST",
@@ -38,7 +81,8 @@ export default function SearchWidget({ token, companyId, hasReadySources }) {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ company_id: companyId, query: q, topK: 3 }),
+        body: JSON.stringify(buildKnowledgeSearchPayload({ companyId, question: q, topK: 3 })),
+        signal: controller.signal,
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
@@ -46,14 +90,38 @@ export default function SearchWidget({ token, companyId, hasReadySources }) {
       setLatency(d.latency_ms);
       setHasSearched(true);
     } catch (e) {
+      if (e.name === "AbortError") return;
       setError(e.message);
+      setHasSearched(true);
     } finally {
-      setBusy(false);
+      if (activeRequestRef.current === controller) {
+        activeRequestRef.current = null;
+        setBusy(false);
+      }
     }
-  };
+  }, [companyId, hasReadySources, query, token]);
+
+  useEffect(() => {
+    setQuery(normalizedInitialQuestion);
+    setResults([]);
+    setError(null);
+    setLatency(null);
+    setHasSearched(false);
+  }, [normalizedInitialQuestion]);
+
+  useEffect(() => {
+    if (!autoRun || !normalizedInitialQuestion || !token || !companyId || !hasReadySources) return;
+    const autoRunKey = `${companyId}:${normalizedInitialQuestion}`;
+    if (autoRunKeyRef.current === autoRunKey) return;
+    autoRunKeyRef.current = autoRunKey;
+    runSearch(normalizedInitialQuestion);
+  }, [autoRun, companyId, hasReadySources, normalizedInitialQuestion, runSearch, token]);
+
+  useEffect(() => () => activeRequestRef.current?.abort(), []);
 
   return (
     <div
+      id="kb-search-widget"
       className="rounded-xl border border-brand-purple/30 bg-gradient-to-br from-brand-purple/5 via-bg-card/60 to-bg-card/40 backdrop-blur-sm p-5"
       data-testid="kb-search-widget"
     >
@@ -76,17 +144,17 @@ export default function SearchWidget({ token, companyId, hasReadySources }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t("kb.search.placeholder", "Ex: Quels sont vos prix pour les pneus dhiver?")}
-          onKeyDown={(e) => { if (e.key === "Enter" && !busy) runSearch(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !busy && hasReadySources) runSearch(); }}
           disabled={!hasReadySources || busy}
           data-testid="search-widget-input"
         />
         <Button
-          onClick={runSearch}
+          onClick={() => runSearch()}
           disabled={!hasReadySources || busy || !query.trim()}
           data-testid="search-widget-button"
         >
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-          {t("kb.search.action", "Tester")}
+          {t("kb.search.action", "Tester cette question")}
         </Button>
       </div>
 
@@ -116,6 +184,10 @@ export default function SearchWidget({ token, companyId, hasReadySources }) {
           </div>
           {results.map((r, i) => {
             const Icon = TYPE_ICON[r.source_type] || FileText;
+            const sourceName = r.source_name || t("kb.search.unknownSource", "Source inconnue");
+            const sourceType = t(`kb.search.sourceType.${r.source_type}`, TYPE_LABEL[r.source_type] || "Source");
+            const chunkNumber = getKnowledgeChunkNumber(r.chunk_index);
+            const canOpenSource = Boolean(onSourceSelect && r.source_id);
             const pct = Math.round((r.similarity || 0) * 100);
             const pctColor = pct >= 75 ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"
                           : pct >= 50 ? "text-amber-300 bg-amber-500/10 border-amber-500/30"
@@ -129,8 +201,27 @@ export default function SearchWidget({ token, companyId, hasReadySources }) {
                 <div className="flex items-center justify-between gap-2 mb-1.5">
                   <div className="flex items-center gap-1.5 text-[11px] text-text-secondary min-w-0">
                     <Icon size={11} className="shrink-0 text-text-tertiary" />
-                    <span className="truncate" data-testid={`search-result-${i}-source`}>{r.source_name}</span>
-                    <span className="font-mono text-[10px] text-text-tertiary shrink-0">#{r.chunk_index}</span>
+                    <span className="shrink-0 text-text-tertiary">{sourceType}</span>
+                    <span aria-hidden="true" className="text-text-tertiary">·</span>
+                    {canOpenSource ? (
+                      <button
+                        type="button"
+                        onClick={() => onSourceSelect(r.source_id, r)}
+                        className="group/source inline-flex min-w-0 items-center gap-1 rounded-sm text-left text-brand-purple hover:text-brand-purple-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-purple/50"
+                        aria-label={t("kb.search.openSource", "Ouvrir la source {{name}}", { name: sourceName })}
+                        data-testid={`search-result-${i}-source-link`}
+                      >
+                        <span className="truncate underline-offset-2 group-hover/source:underline" data-testid={`search-result-${i}-source`}>{sourceName}</span>
+                        <ChevronRight size={10} className="shrink-0" aria-hidden="true" />
+                      </button>
+                    ) : (
+                      <span className="truncate" data-testid={`search-result-${i}-source`}>{sourceName}</span>
+                    )}
+                    {chunkNumber != null && (
+                      <span className="font-mono text-[10px] text-text-tertiary shrink-0">
+                        {t("kb.search.chunk", "extrait {{number}}", { number: chunkNumber })}
+                      </span>
+                    )}
                   </div>
                   <span
                     className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] tabular-nums ${pctColor}`}

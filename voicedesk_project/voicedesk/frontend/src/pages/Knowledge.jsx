@@ -5,6 +5,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 import {
   BookOpen, Upload, Link as LinkIcon, FileText, Globe, Trash2,
   Loader2, AlertCircle, CheckCircle2, Sparkles, Pencil, ChevronRight, Brain, RefreshCw,
@@ -18,9 +19,11 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../components/ui/s
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs.jsx";
 import DataTable, { RowActionButton } from "../components/common/DataTable.jsx";
 import SearchWidget from "../components/kb/SearchWidget.jsx";
+import { hasKnowledgeWorkInProgress, normalizeKnowledgeQuestion } from "../lib/knowledge.js";
 import { cn } from "../lib/utils.js";
 
 const API = import.meta.env.VITE_API_URL || "";
+const POLL_INTERVAL_MS = 3_000;
 
 const STATUS_META = {
   pending:    { label: "En attente", variant: "ghost",   icon: Loader2 },
@@ -34,11 +37,15 @@ const TYPE_META = {
   url:    { label: "URL",     icon: Globe },
   manual: { label: "Manuel",  icon: Pencil },
   qa:     { label: "Q&R",     icon: MessageSquare },
+  onboarding: { label: "Onboarding", icon: MessageSquare },
+  learning:   { label: "Apprentissage", icon: Brain },
+  legacy:     { label: "Historique", icon: BookOpen },
 };
 
 export default function Knowledge() {
   const { t, i18n } = useTranslation();
   const { token, effectiveCompanyId, profile } = useAuth();
+  const [searchParams] = useSearchParams();
   const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("upload");
@@ -50,24 +57,60 @@ export default function Knowledge() {
   const [noteBody, setNoteBody] = useState("");
   const [qQuestion, setQQuestion] = useState("");
   const [qAnswer, setQAnswer] = useState("");
+  const initialQuestion = normalizeKnowledgeQuestion(
+    searchParams.get("question") || searchParams.get("q") || ""
+  );
+  const initialSourceId = searchParams.get("source") || "";
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ silent = false } = {}) => {
     if (!token || !effectiveCompanyId) { setLoading(false); return; }
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const r = await fetch(`${API}/api/v1/kb/sources?company_id=${effectiveCompanyId}&limit=200`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setSources(d.sources || []);
     } catch (e) {
       console.error("[KB] load:", e);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [token, effectiveCompanyId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const hasWorkInProgress = hasKnowledgeWorkInProgress(sources);
+
+  useEffect(() => {
+    if (!hasWorkInProgress || !token || !effectiveCompanyId) return undefined;
+
+    let cancelled = false;
+    let timeoutId;
+    const poll = async () => {
+      await load({ silent: true });
+      if (!cancelled) timeoutId = setTimeout(poll, POLL_INTERVAL_MS);
+    };
+
+    timeoutId = setTimeout(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [effectiveCompanyId, hasWorkInProgress, load, token]);
+
+  useEffect(() => {
+    if (!initialQuestion) return undefined;
+    const frameId = requestAnimationFrame(() => {
+      document.getElementById("kb-search-widget")?.scrollIntoView({ block: "center" });
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [initialQuestion]);
+
+  useEffect(() => {
+    if (initialSourceId) setSelectedId(initialSourceId);
+  }, [initialSourceId]);
 
   const handleUpload = async (file) => {
     if (!file) return;
@@ -86,8 +129,8 @@ export default function Knowledge() {
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setToast({
         type: "success",
-        msg: t("kb.toast.uploaded", "{{name}} importé — {{count}} chunks créés", {
-          name: file.name, count: d.chunks_count,
+        msg: t("kb.toast.uploadQueued", "{{name}} est en file de traitement. Vous pouvez continuer à travailler.", {
+          name: file.name,
         }),
       });
       load();
@@ -115,7 +158,7 @@ export default function Knowledge() {
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setToast({
         type: "success",
-        msg: t("kb.toast.scraped", "URL importée — {{count}} chunks créés", { count: d.chunks_count }),
+        msg: t("kb.toast.scrapeQueued", "URL sécurisée et mise en file de traitement."),
       });
       setScrapeUrl("");
       load();
@@ -193,7 +236,7 @@ export default function Knowledge() {
   const handleDelete = async (source) => {
     if (!window.confirm(t("kb.confirmDelete", "Supprimer définitivement « {{name}} » et ses chunks ?", { name: source.name }))) return;
     try {
-      const r = await fetch(`${API}/api/v1/kb/sources/${source.id}`, {
+      const r = await fetch(`${API}/api/v1/kb/sources/${source.id}?company_id=${encodeURIComponent(effectiveCompanyId || "")}`, {
         method: "DELETE", headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) throw new Error(await r.text());
@@ -216,11 +259,11 @@ export default function Knowledge() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setSources((arr) => arr.map((s) => s.id === source.id
-        ? { ...s, _reembedding: false, embeddings_ready_at: d.embeddings_ready_at }
+        ? { ...s, _reembedding: false, status: "pending", error_message: null }
         : s));
       setToast({
         type: "success",
-        msg: t("kb.toast.reembedded", "{{name}} ré-indexé — {{count}} chunks", { name: source.name, count: d.embedded_count }),
+        msg: t("kb.toast.reembedQueued", "{{name}} est en file de ré-indexation.", { name: source.name }),
       });
     } catch (e) {
       setSources((arr) => arr.map((s) => s.id === source.id ? { ...s, _reembedding: false } : s));
@@ -368,7 +411,7 @@ export default function Knowledge() {
               </Button>
             </div>
             <p className="text-[11px] text-text-tertiary">
-              {t("kb.url.hint", "Le contenu HTML est nettoyé puis découpé en chunks. Les SPAs JS-only (React/Vue/Angular) sont désormais supportées via Playwright (rendu JS côté serveur).")}
+              {t("kb.url.hint", "Seuls les domaines autorisés sont accessibles. Le HTML public est téléchargé avec un délai court, nettoyé puis traité en arrière-plan; les pages qui exigent JavaScript ne sont pas exécutées.")}
             </p>
             <p className="text-[11px] text-text-tertiary">
               Astuce : entrez l'URL <strong>racine</strong> du site (ex&nbsp;: <code>https://exevori.com</code>) plutôt qu'une sous-page peu remplie.
@@ -505,6 +548,9 @@ export default function Knowledge() {
         token={token}
         companyId={effectiveCompanyId}
         hasReadySources={hasReadySources}
+        initialQuestion={initialQuestion}
+        autoRun={Boolean(initialQuestion)}
+        onSourceSelect={(sourceId) => setSelectedId(sourceId)}
       />
 
       {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
@@ -557,12 +603,14 @@ function SourceDetailSheet({ sourceId, open, onClose, token, companyId, t, onChu
   useEffect(() => {
     if (!sourceId || !token) return;
     setLoading(true);
-    fetch(`${API}/api/v1/kb/sources/${sourceId}`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${API}/api/v1/kb/sources/${sourceId}?company_id=${encodeURIComponent(companyId || "")}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
       .then((r) => r.json())
       .then(setData)
       .catch(() => setData(null))
       .finally(() => setLoading(false));
-  }, [sourceId, token]);
+  }, [companyId, sourceId, token]);
 
   const s = data?.source;
   const chunks = data?.chunks || [];
@@ -634,7 +682,7 @@ function StatusBadge({ status }) {
   const Icon = m.icon;
   return (
     <Badge variant={m.variant} className="text-[10px]" data-testid={`source-status-${status}`}>
-      <Icon size={10} className={status === "processing" ? "animate-spin" : ""} /> {m.label}
+      <Icon size={10} className={["pending", "processing"].includes(status) ? "animate-spin" : ""} /> {m.label}
     </Badge>
   );
 }

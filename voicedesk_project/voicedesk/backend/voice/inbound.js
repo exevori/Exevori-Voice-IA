@@ -290,10 +290,11 @@ async function lookupContact(companyId, phone) {
 
 async function getKnowledgeBase(companyId) {
   const { data } = await supabase
-    .from("knowledge_base")
+    .from("knowledge_sources")
     .select("question, answer, category")
     .eq("company_id", companyId)
-    .eq("status", "active")
+    .eq("status", "ready")
+    .not("question", "is", null)
     .order("created_at", { ascending: false })
     .limit(50);
   return data || [];

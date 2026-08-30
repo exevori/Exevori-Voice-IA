@@ -11,6 +11,8 @@ import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { provisionNewClient } from "./provision_service.js";
+import { createRagService } from "../kb/rag.js";
+import { createKnowledgeService, qaOriginKey } from "../kb/service.js";
 
 dotenv.config();
 
@@ -18,6 +20,11 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+const onboardingRag = createRagService({ supabase });
+const onboardingKnowledge = createKnowledgeService({
+  supabase,
+  ragService: onboardingRag,
+});
 
 const router = express.Router();
 
@@ -200,47 +207,61 @@ router.post("/step/3", async (req, res) => {
     knowledge_entries = [],  // Array de {question, answer, category}
   } = req.body;
 
+  const isSuperAdmin = req.user?.role === "super_admin";
+  if (!isSuperAdmin && company_id && company_id !== req.user?.company_id) {
+    return res.status(403).json({ error: "forbidden_cross_tenant" });
+  }
+  const effectiveCompanyId = isSuperAdmin ? company_id : req.user?.company_id;
+  if (!effectiveCompanyId) {
+    return res.status(400).json({ error: "company_id requis" });
+  }
+
   try {
     // Activer/désactiver les services
     if (services_enabled.length > 0) {
-      const { data: allServices } = await supabase
+      const { data: allServices, error: servicesError } = await supabase
         .from("services")
         .select("id, code")
-        .eq("company_id", company_id);
+        .eq("company_id", effectiveCompanyId);
+      if (servicesError) throw servicesError;
 
       for (const service of allServices || []) {
         const enabled = services_enabled.includes(service.code);
-        await supabase
+        const { error: serviceError } = await supabase
           .from("services")
           .update({ is_active: enabled })
-          .eq("id", service.id);
+          .eq("id", service.id)
+          .eq("company_id", effectiveCompanyId);
+        if (serviceError) throw serviceError;
       }
     }
 
-    // Importer les connaissances de base
+    // FAQ onboarding -> source RAG canonique avec embedding Fireworks.
+    // L'origine déterministe rend chaque retry idempotent.
+    let knowledgeCount = 0;
     if (knowledge_entries.length > 0) {
-      const records = knowledge_entries
-        .filter(e => e.question && e.answer)
-        .map(e => ({
-          company_id,
-          question: e.question,
-          answer: e.answer,
-          category: e.category || "FAQ",
-          status: "active",
-          source: "onboarding",
-        }));
-
-      if (records.length > 0) {
-        await supabase.from("knowledge_base").insert(records);
+      const validEntries = knowledge_entries.filter(entry => entry?.question && entry?.answer);
+      for (const entry of validEntries) {
+        await onboardingKnowledge.createQaSource({
+          companyId: effectiveCompanyId,
+          type: "onboarding",
+          question: entry.question,
+          answer: entry.answer,
+          category: entry.category || "FAQ",
+          originKey: qaOriginKey("onboarding", entry.question),
+          createdBy: req.user?.profile?.id || null,
+          metadata: { created_via: "onboarding_step_3" },
+        });
+        knowledgeCount += 1;
       }
     }
 
-    await markStepComplete(company_id, 3);
+    await markStepComplete(effectiveCompanyId, 3);
     return res.json({
       success: true,
       next_step: 4,
       services_count: services_enabled.length,
-      knowledge_count: knowledge_entries.length,
+      knowledge_count: knowledgeCount,
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -304,24 +325,26 @@ router.post("/skip", async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 
 async function markStepComplete(company_id, step) {
-  const { data: current } = await supabase
+  const { data: current, error: readError } = await supabase
     .from("onboarding_progress")
     .select("completed_steps")
     .eq("company_id", company_id)
-    .single();
+    .maybeSingle();
+  if (readError) throw readError;
 
   const completedSteps = current?.completed_steps || [];
   if (!completedSteps.includes(step)) completedSteps.push(step);
 
   const nextStep = Math.min(step + 1, TOTAL_STEPS);
 
-  await supabase
+  const { error: progressError } = await supabase
     .from("onboarding_progress")
     .upsert({
       company_id,
       current_step: nextStep,
       completed_steps: completedSteps,
     }, { onConflict: "company_id" });
+  if (progressError) throw progressError;
 }
 
 async function createDefaultServicesAndAssignments(company_id, voice_library_id) {

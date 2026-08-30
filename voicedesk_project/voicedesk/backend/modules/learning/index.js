@@ -1,405 +1,428 @@
-// ============================================================
-// VOICEDESK IA — SYSTÈME D'APPRENTISSAGE CONTRÔLÉ
-//
-// Concept unique à VoiceDesk (aucun équivalent open source direct) :
-//   1. Détection de patterns dans appels + courriels
-//   2. Proposition de réponse complète avec score de confiance
-//   3. Workflow validation humaine (approuver/modifier/refuser)
-//   4. Une fois approuvé → intégré dans la KB officielle
-//
-// Différencie VoiceDesk de Goodcall (qui détecte les gaps mais
-// ne propose pas de réponse) et de Bland (gaps detection only).
-// ============================================================
-
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 
+import { requireRole } from "../../middleware/auth.js";
+import { createRagService } from "../kb/rag.js";
+import { createKnowledgeService } from "../kb/service.js";
+
 dotenv.config();
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
 const AI_GATEWAY_URL = process.env.AI_GATEWAY_URL || "http://localhost:3100";
-
-const router = express.Router();
+const REVIEW_ROLES = requireRole("company_admin", "super_admin");
 
 function isSuperAdmin(req) {
   return req.user?.role === "super_admin";
 }
 
-function scopeToTenant(query, req) {
-  return isSuperAdmin(req)
-    ? query
-    : query.eq("company_id", req.user.company_id);
-}
-
 function resolveCompanyId(req, requestedCompanyId) {
-  return isSuperAdmin(req) ? requestedCompanyId : req.user.company_id;
+  if (isSuperAdmin(req)) return requestedCompanyId || null;
+  if (requestedCompanyId && requestedCompanyId !== req.user?.company_id) return false;
+  return req.user?.company_id || null;
 }
 
-function targetsAnotherTenant(req, requestedCompanyId) {
-  return !isSuperAdmin(req)
-    && requestedCompanyId
-    && requestedCompanyId !== req.user.company_id;
+function clean(value, maxLength) {
+  return String(value || "").trim().slice(0, maxLength);
 }
 
-async function checkSuggestionAccess(id, req) {
-  const { data, error } = await supabase
-    .from("learning_suggestions")
-    .select("id, company_id")
-    .eq("id", id)
-    .maybeSingle();
-  if (error) return { error };
-  if (!data) return { status: 404 };
-  if (!isSuperAdmin(req) && data.company_id !== req.user.company_id) {
-    return { status: 403 };
+async function callAIGateway(payload, { fetchImpl = globalThis.fetch } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  timer.unref?.();
+  try {
+    const response = await fetchImpl(`${AI_GATEWAY_URL}/api/ai/respond`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+      redirect: "error",
+    });
+    if (!response.ok) throw new Error(`ai_gateway_http_${response.status}`);
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
   }
-  return { status: 200, companyId: data.company_id };
 }
 
-// ─────────────────────────────────────────────────────────────
-// CRON / SCHEDULED JOB
-// À exécuter toutes les 6 heures pour détecter de nouveaux patterns
-// ─────────────────────────────────────────────────────────────
-export async function detectPatternsForAllCompanies() {
-  console.log("[LEARNING] Démarrage détection patterns...");
+export async function approveLearningSuggestion({
+  supabase,
+  ragService,
+  knowledgeService,
+  suggestion,
+  question,
+  answer,
+  category = "FAQ",
+  approvedBy,
+  createdBy = null,
+}) {
+  const finalQuestion = clean(question || suggestion.question_detected, 20_000);
+  const finalAnswer = clean(answer || suggestion.suggested_answer, 100_000);
+  if (finalQuestion.length < 5 || finalAnswer.length < 3) {
+    const error = new Error("learning_question_or_answer_invalid");
+    error.status = 400;
+    throw error;
+  }
 
-  const { data: companies } = await supabase
-    .from("companies")
-    .select("id, name")
-    .eq("status", "active");
+  try {
+    const ragResult = await knowledgeService.createQaSource({
+      companyId: suggestion.company_id,
+      type: "learning",
+      question: finalQuestion,
+      answer: finalAnswer,
+      category,
+      originKey: `learning:${suggestion.id}`,
+      createdBy,
+      metadata: {
+        suggestion_id: suggestion.id,
+        approved_by: approvedBy,
+        source: "learning_validated",
+      },
+    });
 
-  for (const company of companies || []) {
-    try {
-      await detectPatternsForCompany(company.id);
-    } catch (err) {
-      console.error(`[LEARNING] Erreur pour ${company.name}:`, err);
+    const matches = await ragService.searchSimilarChunks({
+      company_id: suggestion.company_id,
+      query: finalQuestion,
+      topK: 5,
+      minSimilarity: 0,
+    });
+    const ownMatch = matches.find(match => match.source_id === ragResult.source.id);
+    if (!ownMatch) {
+      const error = new Error("learning_rag_test_did_not_find_approved_source");
+      error.code = "learning_rag_test_failed";
+      throw error;
     }
-  }
 
-  console.log("[LEARNING] Détection terminée.");
+    const approvedAt = new Date().toISOString();
+    const { data: updated, error: updateError } = await supabase
+      .from("learning_suggestions")
+      .update({
+        status: "approved",
+        approved_at: approvedAt,
+        approved_by: approvedBy,
+        final_question: finalQuestion,
+        final_answer: finalAnswer,
+        knowledge_source_id: ragResult.source.id,
+        rag_status: "ready",
+        rag_test_source_id: ownMatch.source_id,
+        rag_test_similarity: ownMatch.similarity,
+        rag_error: null,
+      })
+      .eq("id", suggestion.id)
+      .eq("company_id", suggestion.company_id)
+      .select()
+      .single();
+    if (updateError) throw updateError;
+
+    return {
+      suggestion: updated,
+      knowledge_source: ragResult.source,
+      rag_test: {
+        passed: true,
+        source_id: ownMatch.source_id,
+        source_name: ownMatch.source_name,
+        source_type: ownMatch.source_type,
+        similarity: ownMatch.similarity,
+        chunk_id: ownMatch.chunk_id,
+      },
+    };
+  } catch (error) {
+    await supabase
+      .from("learning_suggestions")
+      .update({
+        rag_status: "error",
+        rag_error: clean(error?.message || error, 2_000),
+      })
+      .eq("id", suggestion.id)
+      .eq("company_id", suggestion.company_id);
+    throw error;
+  }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Détection des patterns pour UNE entreprise
-// ─────────────────────────────────────────────────────────────
-async function detectPatternsForCompany(companyId) {
-  // 1. Récupérer les 50 derniers appels + courriels des 7 derniers jours
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-  const [calls, emails, knowledgeBase, existingSuggestions] = await Promise.all([
+async function detectPatternsForCompany({ supabase, companyId, fetchImpl }) {
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const [calls, emails, knowledge, suggestions] = await Promise.all([
     supabase
       .from("calls")
       .select("id, ai_summary, intent, transcript")
       .eq("company_id", companyId)
-      .gte("created_at", sevenDaysAgo.toISOString())
+      .gte("created_at", since)
       .limit(50),
     supabase
       .from("emails")
       .select("id, subject, body, intent")
       .eq("company_id", companyId)
-      .gte("received_at", sevenDaysAgo.toISOString())
+      .gte("received_at", since)
       .limit(50),
     supabase
-      .from("knowledge_base")
-      .select("question")
+      .from("knowledge_sources")
+      .select("question, name")
       .eq("company_id", companyId)
-      .eq("status", "active"),
+      .eq("status", "ready")
+      .not("question", "is", null)
+      .limit(500),
     supabase
       .from("learning_suggestions")
       .select("question_detected")
       .eq("company_id", companyId)
-      .in("status", ["pending", "approved"]),
+      .in("status", ["pending", "approved"])
+      .limit(500),
   ]);
+  for (const result of [calls, emails, knowledge, suggestions]) {
+    if (result.error) throw result.error;
+  }
+  if (!calls.data?.length && !emails.data?.length) return 0;
 
-  if (!calls.data?.length && !emails.data?.length) return;
-
-  // 2. Demander à DeepSeek d'identifier les patterns récurrents
-  const detectedPatterns = await callAIGateway({
+  const detected = await callAIGateway({
     task: "detect_learning_patterns",
     company_id: companyId,
     calls: calls.data || [],
     emails: emails.data || [],
-    existing_knowledge: knowledgeBase.data?.map(k => k.question) || [],
-    existing_suggestions: existingSuggestions.data?.map(s => s.question_detected) || [],
-  });
+    existing_knowledge: (knowledge.data || []).map(row => row.question || row.name),
+    existing_suggestions: (suggestions.data || []).map(row => row.question_detected),
+  }, { fetchImpl });
 
-  // 3. Pour chaque pattern détecté, générer une réponse proposée
-  for (const pattern of detectedPatterns?.patterns || []) {
-    if (pattern.occurrences < 2) continue; // Pattern doit apparaître au moins 2x
-    if (pattern.is_duplicate) continue;     // Déjà connu
-
-    // Générer la réponse proposée
-    const proposedAnswer = await callAIGateway({
+  let inserted = 0;
+  for (const pattern of detected?.patterns || []) {
+    if (Number(pattern.occurrences) < 2 || pattern.is_duplicate) continue;
+    const proposed = await callAIGateway({
       task: "generate_suggested_answer",
       company_id: companyId,
       question: pattern.question,
       context: pattern.context,
-      existing_knowledge: knowledgeBase.data || [],
-    });
-
-    // Sauvegarder la suggestion
-    await supabase.from("learning_suggestions").insert({
+      existing_knowledge: knowledge.data || [],
+    }, { fetchImpl });
+    const { error } = await supabase.from("learning_suggestions").insert({
       company_id: companyId,
       type: pattern.type || "frequently_asked",
-      question_detected: pattern.question,
-      suggested_answer: proposedAnswer?.answer || "",
-      source_summary: pattern.source_summary,
-      detected_from: pattern.detected_from, // 'calls' | 'emails' | 'mixed'
-      occurrences: pattern.occurrences,
-      source_ids: pattern.source_ids || [],
-      confidence_score: proposedAnswer?.confidence || 70,
+      question_detected: clean(pattern.question, 20_000),
+      suggested_answer: clean(proposed?.answer, 100_000),
+      source_summary: clean(pattern.source_summary, 20_000),
+      detected_from: pattern.detected_from || "calls",
+      occurrences: Number(pattern.occurrences) || 2,
+      source_ids: Array.isArray(pattern.source_ids) ? pattern.source_ids : [],
+      confidence_score: Number(proposed?.confidence) || 70,
       status: "pending",
+      rag_status: "pending",
     });
+    if (error) throw error;
+    inserted += 1;
   }
-
-  console.log(`[LEARNING] ${detectedPatterns?.patterns?.length || 0} patterns détectés pour company ${companyId}`);
+  return inserted;
 }
 
-// ─────────────────────────────────────────────────────────────
-// GET /api/v1/learning/suggestions
-// Liste les suggestions pour validation
-// ─────────────────────────────────────────────────────────────
-router.get("/suggestions", async (req, res) => {
-  const { company_id: requestedCompanyId, status = "pending" } = req.query;
+export function createLearningModule({
+  supabase,
+  ragService,
+  knowledgeService,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  if (!supabase?.from) throw new TypeError("supabase.from est requis");
+  const rag = ragService || createRagService({ supabase });
+  const knowledge = knowledgeService || createKnowledgeService({ supabase, ragService: rag });
+  const router = express.Router();
 
-  if (targetsAnotherTenant(req, requestedCompanyId)) {
-    return res.status(403).json({ error: "forbidden" });
-  }
-  const companyId = resolveCompanyId(req, requestedCompanyId);
-
-  let query = supabase
-    .from("learning_suggestions")
-    .select("*")
-    .eq("status", status);
-  if (companyId) query = query.eq("company_id", companyId);
-  const { data, error } = await query
-    .order("confidence_score", { ascending: false });
-
-  if (error) return res.status(500).json({ error: error.message });
-  return res.json({ suggestions: data });
-});
-
-// ─────────────────────────────────────────────────────────────
-// POST /api/v1/learning/suggestions/:id/approve
-// Approuver une suggestion → l'ajouter à la KB
-// ─────────────────────────────────────────────────────────────
-router.post("/suggestions/:id/approve", async (req, res) => {
-  const { id } = req.params;
-  const { edited_question, edited_answer, category = "FAQ" } = req.body;
-  const approvedBy = req.user.id;
-
-  try {
-    const access = await checkSuggestionAccess(id, req);
-    if (access.error) return res.status(500).json({ error: access.error.message });
-    if (access.status === 404) return res.status(404).json({ error: "suggestion introuvable" });
-    if (access.status === 403) return res.status(403).json({ error: "forbidden" });
-
-    let suggestionQuery = supabase
+  async function suggestionForRequest(req, res) {
+    let query = supabase
       .from("learning_suggestions")
       .select("*")
-      .eq("id", id);
-    suggestionQuery = scopeToTenant(suggestionQuery, req);
-    const { data: suggestion, error: suggestionError } = await suggestionQuery.maybeSingle();
+      .eq("id", req.params.id);
+    if (!isSuperAdmin(req)) query = query.eq("company_id", req.user.company_id);
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      res.status(500).json({ error: "suggestion_read_failed" });
+      return null;
+    }
+    if (!data) {
+      if (!isSuperAdmin(req)) {
+        const { data: exists } = await supabase
+          .from("learning_suggestions")
+          .select("id")
+          .eq("id", req.params.id)
+          .maybeSingle();
+        if (exists) {
+          res.status(403).json({ error: "forbidden_cross_tenant" });
+          return null;
+        }
+      }
+      res.status(404).json({ error: "suggestion_not_found" });
+      return null;
+    }
+    return data;
+  }
 
-    if (suggestionError) return res.status(500).json({ error: suggestionError.message });
-    if (!suggestion) return res.status(404).json({ error: "suggestion introuvable" });
+  router.get("/suggestions", async (req, res) => {
+    const companyId = resolveCompanyId(req, req.query.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId) return res.status(400).json({ error: "company_id_required" });
+    let query = supabase
+      .from("learning_suggestions")
+      .select("*")
+      .eq("company_id", companyId);
+    if (req.query.status && req.query.status !== "all") {
+      query = query.eq("status", req.query.status);
+    }
+    const { data, error } = await query.order("confidence_score", { ascending: false });
+    if (error) return res.status(500).json({ error: "suggestions_read_failed" });
+    return res.json({ suggestions: data || [] });
+  });
 
-    const finalQuestion = edited_question || suggestion.question_detected;
-    const finalAnswer = edited_answer || suggestion.suggested_answer;
+  router.post("/suggestions/:id/approve", REVIEW_ROLES, async (req, res) => {
+    const suggestion = await suggestionForRequest(req, res);
+    if (!suggestion) return;
+    try {
+      const result = await approveLearningSuggestion({
+        supabase,
+        ragService: rag,
+        knowledgeService: knowledge,
+        suggestion,
+        question: req.body?.edited_question,
+        answer: req.body?.edited_answer,
+        category: req.body?.category || "FAQ",
+        approvedBy: req.user.id,
+        createdBy: req.user?.profile?.id || null,
+      });
+      return res.json({ success: true, ...result });
+    } catch (error) {
+      return res.status(error.status || 500).json({
+        error: error.code || "learning_approval_failed",
+        message: error.status && error.status < 500 ? error.message : "Validation RAG échouée",
+      });
+    }
+  });
 
-    // 1. Ajouter à la base de connaissances officielle
-    const { data: kbEntry, error: kbError } = await supabase
-      .from("knowledge_base")
-      .insert({
-        company_id: suggestion.company_id,
-        question: finalQuestion,
-        answer: finalAnswer,
-        category,
-        status: "active",
-        source: "learning_validated",
-        source_suggestion_id: id,
-        approved_by: approvedBy,
-      })
-      .select()
-      .single();
-    if (kbError) throw kbError;
-
-    // 2. Marquer la suggestion comme approuvée
-    let updateQuery = supabase
+  router.post("/suggestions/:id/reject", REVIEW_ROLES, async (req, res) => {
+    const suggestion = await suggestionForRequest(req, res);
+    if (!suggestion) return;
+    const { data, error } = await supabase
       .from("learning_suggestions")
       .update({
-        status: "approved",
-        approved_at: new Date(),
-        approved_by: approvedBy,
-        knowledge_base_id: kbEntry.id,
-        final_question: finalQuestion,
-        final_answer: finalAnswer,
+        status: "rejected",
+        rejected_at: new Date().toISOString(),
+        rejected_by: req.user.id,
+        rejection_reason: clean(req.body?.reason || "Refusé sans motif", 2_000),
       })
-      .eq("id", id);
-    updateQuery = scopeToTenant(updateQuery, req);
-    const { data: updatedSuggestion, error: updateError } = await updateQuery
-      .select("id")
-      .maybeSingle();
-    if (updateError) throw updateError;
-    if (!updatedSuggestion) return res.status(404).json({ error: "suggestion introuvable" });
+      .eq("id", suggestion.id)
+      .eq("company_id", suggestion.company_id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: "suggestion_reject_failed" });
+    return res.json({ success: true, suggestion: data });
+  });
 
-    return res.json({ success: true, knowledge_base_id: kbEntry.id });
-  } catch (err) {
-    console.error("[LEARNING] Approve error:", err);
-    return res.status(500).json({ error: err.message });
-  }
-});
+  router.post("/suggestions/:id/modify", REVIEW_ROLES, async (req, res) => {
+    const suggestion = await suggestionForRequest(req, res);
+    if (!suggestion) return;
+    const question = clean(req.body?.new_question, 20_000);
+    const answer = clean(req.body?.new_answer, 100_000);
+    if (question.length < 5 || answer.length < 3) {
+      return res.status(400).json({ error: "learning_question_or_answer_invalid" });
+    }
+    const { data, error } = await supabase
+      .from("learning_suggestions")
+      .update({
+        question_detected: question,
+        suggested_answer: answer,
+        modified_by: req.user.id,
+        modified_at: new Date().toISOString(),
+        rag_status: "pending",
+        rag_error: null,
+      })
+      .eq("id", suggestion.id)
+      .eq("company_id", suggestion.company_id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: "suggestion_modify_failed" });
+    return res.json({ success: true, suggestion: data });
+  });
 
-// ─────────────────────────────────────────────────────────────
-// POST /api/v1/learning/suggestions/:id/reject
-// ─────────────────────────────────────────────────────────────
-router.post("/suggestions/:id/reject", async (req, res) => {
-  const { id } = req.params;
-  const { reason } = req.body;
-
-  const access = await checkSuggestionAccess(id, req);
-  if (access.error) return res.status(500).json({ error: access.error.message });
-  if (access.status === 404) return res.status(404).json({ error: "suggestion introuvable" });
-  if (access.status === 403) return res.status(403).json({ error: "forbidden" });
-
-  let updateQuery = supabase
-    .from("learning_suggestions")
-    .update({
-      status: "rejected",
-      rejected_at: new Date(),
-      rejected_by: req.user.id,
-      rejection_reason: reason || "Refusé sans motif",
-    })
-    .eq("id", id);
-  updateQuery = scopeToTenant(updateQuery, req);
-  const { data, error } = await updateQuery.select("id").maybeSingle();
-  if (error) return res.status(500).json({ error: error.message });
-  if (!data) return res.status(404).json({ error: "suggestion introuvable" });
-
-  return res.json({ success: true });
-});
-
-// ─────────────────────────────────────────────────────────────
-// POST /api/v1/learning/suggestions/:id/modify
-// Modifier la réponse proposée puis approuver
-// ─────────────────────────────────────────────────────────────
-router.post("/suggestions/:id/modify", async (req, res) => {
-  const { id } = req.params;
-  const { new_question, new_answer } = req.body;
-
-  const access = await checkSuggestionAccess(id, req);
-  if (access.error) return res.status(500).json({ error: access.error.message });
-  if (access.status === 404) return res.status(404).json({ error: "suggestion introuvable" });
-  if (access.status === 403) return res.status(403).json({ error: "forbidden" });
-
-  let updateQuery = supabase
-    .from("learning_suggestions")
-    .update({
-      question_detected: new_question,
-      suggested_answer: new_answer,
-      modified_by: req.user.id,
-      modified_at: new Date(),
-    })
-    .eq("id", id);
-  updateQuery = scopeToTenant(updateQuery, req);
-  const { data: suggestion, error } = await updateQuery
-    .select()
-    .maybeSingle();
-  if (error) return res.status(500).json({ error: error.message });
-  if (!suggestion) return res.status(404).json({ error: "suggestion introuvable" });
-
-  return res.json({ success: true, suggestion });
-});
-
-// ─────────────────────────────────────────────────────────────
-// GET /api/v1/learning/stats
-// Statistiques d'apprentissage pour le dashboard
-// ─────────────────────────────────────────────────────────────
-router.get("/stats", async (req, res) => {
-  const requestedCompanyId = req.query.company_id;
-
-  if (targetsAnotherTenant(req, requestedCompanyId)) {
-    return res.status(403).json({ error: "forbidden" });
-  }
-  const companyId = resolveCompanyId(req, requestedCompanyId);
-
-  let suggestionsQuery = supabase
-    .from("learning_suggestions")
-    .select("status");
-  if (companyId) suggestionsQuery = suggestionsQuery.eq("company_id", companyId);
-  const { data, error: suggestionsError } = await suggestionsQuery;
-  if (suggestionsError) return res.status(500).json({ error: suggestionsError.message });
-
-  const stats = {
-    pending: data?.filter(s => s.status === "pending").length || 0,
-    approved: data?.filter(s => s.status === "approved").length || 0,
-    rejected: data?.filter(s => s.status === "rejected").length || 0,
-    total: data?.length || 0,
-  };
-
-  // KB totale
-  let kbQuery = supabase
-    .from("knowledge_base")
-    .select("*", { count: "exact", head: true })
-    .eq("status", "active");
-  if (companyId) kbQuery = kbQuery.eq("company_id", companyId);
-  const { count: kbTotal, error: kbError } = await kbQuery;
-  if (kbError) return res.status(500).json({ error: kbError.message });
-
-  stats.knowledge_base_size = kbTotal || 0;
-
-  return res.json(stats);
-});
-
-// ─────────────────────────────────────────────────────────────
-// POST /api/v1/learning/manual
-// Admin ajoute manuellement une entrée à la KB (sans passer par détection)
-// ─────────────────────────────────────────────────────────────
-router.post("/manual", async (req, res) => {
-  const { company_id: requestedCompanyId, question, answer, category } = req.body;
-
-  if (targetsAnotherTenant(req, requestedCompanyId)) {
-    return res.status(403).json({ error: "forbidden" });
-  }
-  const companyId = resolveCompanyId(req, requestedCompanyId);
-  if (!companyId) return res.status(400).json({ error: "company_id requis" });
-
-  const { data, error } = await supabase
-    .from("knowledge_base")
-    .insert({
-      company_id: companyId,
-      question,
-      answer,
-      category: category || "FAQ",
-      status: "active",
-      source: "manual",
-      approved_by: req.user.id,
-    })
-    .select()
-    .single();
-  if (error) return res.status(500).json({ error: error.message });
-
-  return res.json({ success: true, knowledge_base_id: data?.id });
-});
-
-async function callAIGateway(payload) {
-  try {
-    const response = await fetch(`${AI_GATEWAY_URL}/api/ai/respond`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+  router.get("/stats", async (req, res) => {
+    const companyId = resolveCompanyId(req, req.query.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId) return res.status(400).json({ error: "company_id_required" });
+    const [suggestions, knowledgeCount] = await Promise.all([
+      supabase
+        .from("learning_suggestions")
+        .select("status")
+        .eq("company_id", companyId),
+      supabase
+        .from("knowledge_sources")
+        .select("id", { count: "exact", head: true })
+        .eq("company_id", companyId)
+        .eq("status", "ready"),
+    ]);
+    if (suggestions.error || knowledgeCount.error) {
+      return res.status(500).json({ error: "learning_stats_failed" });
+    }
+    const rows = suggestions.data || [];
+    return res.json({
+      pending: rows.filter(row => row.status === "pending").length,
+      approved: rows.filter(row => row.status === "approved").length,
+      rejected: rows.filter(row => row.status === "rejected").length,
+      total: rows.length,
+      knowledge_base_size: knowledgeCount.count || 0,
     });
-    if (!response.ok) throw new Error(`AI Gateway ${response.status}`);
-    return await response.json();
-  } catch (err) {
-    console.error("[AI Gateway] Error:", err);
-    return null;
+  });
+
+  router.post("/manual", REVIEW_ROLES, async (req, res) => {
+    const companyId = resolveCompanyId(req, req.body?.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId) return res.status(400).json({ error: "company_id_required" });
+    try {
+      const result = await knowledge.createQaSource({
+        companyId,
+        type: "manual",
+        question: req.body?.question,
+        answer: req.body?.answer,
+        category: req.body?.category || "FAQ",
+        createdBy: req.user?.profile?.id || null,
+        metadata: { created_via: "learning_manual", approved_by: req.user.id },
+      });
+      return res.status(201).json({ success: true, knowledge_source_id: result.source.id, ...result });
+    } catch (error) {
+      return res.status(error.status || 500).json({ error: error.code || "learning_manual_failed" });
+    }
+  });
+
+  async function detectAllCompanies() {
+    const { data: companies, error } = await supabase
+      .from("companies")
+      .select("id, name")
+      .eq("status", "active");
+    if (error) throw error;
+    let inserted = 0;
+    for (const company of companies || []) {
+      try {
+        inserted += await detectPatternsForCompany({
+          supabase,
+          companyId: company.id,
+          fetchImpl,
+        });
+      } catch (errorForCompany) {
+        console.error(`[LEARNING] ${company.id}:`, errorForCompany.message);
+      }
+    }
+    return inserted;
   }
+
+  return { router, detectAllCompanies };
 }
 
-export default router;
+let defaultModule;
+if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+  const ragService = createRagService({ supabase });
+  const knowledgeService = createKnowledgeService({ supabase, ragService });
+  defaultModule = createLearningModule({ supabase, ragService, knowledgeService });
+} else {
+  defaultModule = { router: express.Router(), detectAllCompanies: async () => 0 };
+  defaultModule.router.use((_req, res) => res.status(503).json({ error: "learning_not_configured" }));
+}
+
+export function detectPatternsForAllCompanies() {
+  return defaultModule.detectAllCompanies();
+}
+
+export default defaultModule.router;

@@ -1,796 +1,485 @@
-// ============================================================
-// EXEVORI VOICE IA — MODULE KB (Phase KB+A)
-//
-// Routes :
-//   POST   /api/v1/kb/sources/upload    multipart file → extract → chunk → store
-//   POST   /api/v1/kb/sources/scrape    { url } → fetch → extract → chunk → store
-//   GET    /api/v1/kb/sources?company_id=...
-//   GET    /api/v1/kb/sources/:id       → metadata + chunks
-//   DELETE /api/v1/kb/sources/:id       → cascade delete chunks + storage object
-//
-// Tables : knowledge_sources, knowledge_chunks
-// Bucket : kb-uploads
-// ============================================================
-
 import express from "express";
 import multer from "multer";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 
-import { PDFParse } from "pdf-parse";
-import mammoth from "mammoth";
-import * as cheerio from "cheerio";
-import { convert as htmlToText } from "html-to-text";
-import { encode as gptEncode } from "gpt-tokenizer";
-
-import { embedChunksOfSource, searchSimilarChunks, embedText } from "./rag.js";
+import { createRagService } from "./rag.js";
+import { validateSafeUrl } from "./safeFetch.js";
+import { createKnowledgeService } from "./service.js";
+import { countTokens, sanitizeFilename } from "./processing.js";
 
 dotenv.config();
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-const router = express.Router();
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const ALLOWED_UPLOAD_MIMES = new Set([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/plain",
+  "text/markdown",
+  "text/x-markdown",
+]);
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
 });
 
-async function respondTenantMiss(res, table, id, notFoundMessage, isSuperAdmin) {
-  if (!isSuperAdmin) {
+function isSuperAdmin(req) {
+  return req.user?.role === "super_admin";
+}
+
+function resolveCompanyId(req, requestedCompanyId) {
+  if (isSuperAdmin(req)) return requestedCompanyId || null;
+  if (requestedCompanyId && requestedCompanyId !== req.user?.company_id) return false;
+  return req.user?.company_id || null;
+}
+
+function requestProfileId(req) {
+  return req.user?.profile?.id || null;
+}
+
+function integer(value, fallback, min, max) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed >= min && parsed <= max
+    ? parsed
+    : fallback;
+}
+
+function sendServiceError(res, error) {
+  const status = Number.isInteger(error?.status) ? error.status : 500;
+  return res.status(status).json({
+    error: error?.code || "knowledge_error",
+    message: status >= 500 ? "Traitement de la base de connaissances échoué" : error.message,
+  });
+}
+
+async function respondTenantMiss({ supabase, req, res, table, id, label }) {
+  if (!isSuperAdmin(req)) {
     const { data, error } = await supabase
       .from(table)
       .select("id")
       .eq("id", id)
       .maybeSingle();
-    if (error) return res.status(500).json({ error: error.message });
-    if (data) return res.status(403).json({ error: "Accès refusé" });
+    if (error) return res.status(500).json({ error: "tenant_lookup_failed" });
+    if (data) return res.status(403).json({ error: "forbidden_cross_tenant" });
   }
-  return res.status(404).json({ error: notFoundMessage });
+  return res.status(404).json({ error: `${label}_not_found` });
 }
 
-// ─────────────────────────────────────────────────────────────
-// POST /upload
-// multipart: file, company_id
-// ─────────────────────────────────────────────────────────────
-router.post("/sources/upload", upload.single("file"), async (req, res) => {
-  const requestedCompanyId = req.body.company_id;
-  if (
-    req.user.role !== "super_admin" &&
-    requestedCompanyId &&
-    requestedCompanyId !== req.user.company_id
-  ) {
-    return res.status(403).json({ error: "forbidden_cross_tenant" });
-  }
-  const company_id =
-    req.user.role === "super_admin" ? requestedCompanyId : req.user.company_id;
-  const created_by = req.user.id;
-  const file = req.file;
-  if (!company_id || !file) return res.status(400).json({ error: "company_id et file requis" });
+export function createKbRouter({ supabase, ragService, knowledgeService } = {}) {
+  if (!supabase?.from || !supabase?.storage) throw new TypeError("supabase incomplet");
+  const rag = ragService || createRagService({ supabase });
+  const knowledge = knowledgeService || createKnowledgeService({ supabase, ragService: rag });
+  const router = express.Router();
 
-  const mime = file.mimetype;
-  const allowedMimes = [
-    "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/msword",
-    "text/plain",
-    "text/markdown",
-    "text/x-markdown",
-  ];
-  if (!allowedMimes.includes(mime)) {
-    return res.status(400).json({ error: `Type de fichier non supporté : ${mime}` });
-  }
+  router.post("/sources/upload", upload.single("file"), async (req, res) => {
+    const companyId = resolveCompanyId(req, req.body?.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId || !req.file) {
+      return res.status(400).json({ error: "company_id_and_file_required" });
+    }
+    if (!ALLOWED_UPLOAD_MIMES.has(req.file.mimetype)) {
+      return res.status(415).json({ error: "unsupported_file_type" });
+    }
 
-  // 1. Créer la source en status=processing
-  const { data: source, error: sErr } = await supabase
-    .from("knowledge_sources")
-    .insert({
-      company_id,
-      type: "upload",
-      name: file.originalname,
-      mime_type: mime,
-      size_bytes: file.size,
-      status: "processing",
-      created_by: created_by || null,
-    })
-    .select()
-    .single();
-  if (sErr) return res.status(500).json({ error: sErr.message });
-
-  // 2. Upload du fichier dans le bucket
-  const storagePath = `${company_id}/${source.id}/${sanitizeFilename(file.originalname)}`;
-  const { error: upErr } = await supabase.storage
-    .from("kb-uploads")
-    .upload(storagePath, file.buffer, { contentType: mime, upsert: false });
-  if (upErr) {
-    await supabase.from("knowledge_sources").update({
-      status: "error",
-      error_message: `upload: ${upErr.message}`,
-    }).eq("id", source.id);
-    return res.status(500).json({ error: upErr.message });
-  }
-  await supabase.from("knowledge_sources").update({ storage_path: storagePath }).eq("id", source.id);
-
-  // 3. Extraction du texte
-  let text = "";
-  try {
-    text = await extractText(file.buffer, mime, file.originalname);
-  } catch (e) {
-    await supabase.from("knowledge_sources").update({
-      status: "error",
-      error_message: `extract: ${e.message}`,
-    }).eq("id", source.id);
-    return res.status(500).json({ error: `Extraction échouée : ${e.message}` });
-  }
-
-  // 4. Chunking + insertion
-  const result = await ingestChunks({ company_id, source_id: source.id, text });
-  if (result.error) {
-    await supabase.from("knowledge_sources").update({
-      status: "error",
-      error_message: `chunk: ${result.error}`,
-    }).eq("id", source.id);
-    return res.status(500).json({ error: result.error });
-  }
-
-  await supabase.from("knowledge_sources").update({
-    status: "ready",
-    chunks_count: result.chunks_count,
-  }).eq("id", source.id);
-
-  // KB+B — Embeddings (best-effort: si fail, source reste 'ready' mais sans embeddings,
-  // l'utilisateur pourra cliquer "Re-embed" plus tard).
-  let embeddings_ready_at = null;
-  try {
-    const emb = await embedChunksOfSource({ source_id: source.id, company_id });
-    embeddings_ready_at = emb.embeddings_ready_at;
-  } catch (e) {
-    console.warn(`[KB] embed upload source=${source.id}:`, e.message);
-  }
-
-  return res.json({
-    success: true,
-    source: { ...source, status: "ready", chunks_count: result.chunks_count, storage_path: storagePath, embeddings_ready_at },
-    chunks_count: result.chunks_count,
-    text_chars: text.length,
-    embeddings_ready: !!embeddings_ready_at,
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
-// POST /sources/scrape
-// body: { company_id, url, created_by? }
-// ─────────────────────────────────────────────────────────────
-router.post("/sources/scrape", express.json(), async (req, res) => {
-  const { company_id, url, created_by } = req.body;
-  if (!company_id || !url) return res.status(400).json({ error: "company_id et url requis" });
-
-  let parsedUrl;
-  try { parsedUrl = new URL(url); }
-  catch { return res.status(400).json({ error: "URL invalide" }); }
-  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-    return res.status(400).json({ error: "URL doit être http(s)" });
-  }
-
-  const { data: source, error: sErr } = await supabase
-    .from("knowledge_sources")
-    .insert({
-      company_id,
-      type: "url",
-      name: parsedUrl.hostname + parsedUrl.pathname,
-      url,
-      status: "processing",
-      created_by: created_by || null,
-    })
-    .select()
-    .single();
-  if (sErr) return res.status(500).json({ error: sErr.message });
-
-  let text = "";
-  try {
-    text = await scrapeUrl(url);
-  } catch (e) {
-    await supabase.from("knowledge_sources").update({
-      status: "error",
-      error_message: `scrape: ${e.message}`,
-    }).eq("id", source.id);
-    return res.status(500).json({ error: `Scraping échoué : ${e.message}` });
-  }
-
-  if (text.length < 100) {
-    await supabase.from("knowledge_sources").update({
-      status: "error",
-      error_message: "Contenu < 100 caractères (page 404 ou vide ?)",
-    }).eq("id", source.id);
-    return res.status(422).json({
-      error: "Contenu trop court (< 100 caractères). Vérifiez que l'URL renvoie une vraie page (essayez la racine du site, ex: https://exevori.com).",
-    });
-  }
-
-  const result = await ingestChunks({ company_id, source_id: source.id, text });
-  if (result.error) {
-    await supabase.from("knowledge_sources").update({
-      status: "error",
-      error_message: `chunk: ${result.error}`,
-    }).eq("id", source.id);
-    return res.status(500).json({ error: result.error });
-  }
-
-  await supabase.from("knowledge_sources").update({
-    status: "ready",
-    chunks_count: result.chunks_count,
-    size_bytes: text.length,
-  }).eq("id", source.id);
-
-  // KB+B — Embeddings (best-effort, idem upload)
-  let embeddings_ready_at = null;
-  try {
-    const emb = await embedChunksOfSource({ source_id: source.id, company_id });
-    embeddings_ready_at = emb.embeddings_ready_at;
-  } catch (e) {
-    console.warn(`[KB] embed scrape source=${source.id}:`, e.message);
-  }
-
-  return res.json({
-    success: true,
-    source: { ...source, status: "ready", chunks_count: result.chunks_count, size_bytes: text.length, embeddings_ready_at },
-    chunks_count: result.chunks_count,
-    text_chars: text.length,
-    embeddings_ready: !!embeddings_ready_at,
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
-// POST /sources/manual  — Note manuelle (Phase Bonus KB)
-//   body: { company_id, name, content, created_by? }
-//   → crée une knowledge_sources type='manual', chunke, embed
-// ─────────────────────────────────────────────────────────────
-router.post("/sources/manual", express.json({ limit: "5mb" }), async (req, res) => {
-  const { company_id, name, content, created_by } = req.body || {};
-  if (!company_id || !name || !content) {
-    return res.status(400).json({ error: "company_id, name et content requis" });
-  }
-  const cleanText = String(content).trim();
-  if (cleanText.length < 30) {
-    return res.status(400).json({ error: "Contenu trop court (< 30 caractères)" });
-  }
-  if (cleanText.length > 200_000) {
-    return res.status(400).json({ error: "Contenu trop long (> 200 000 caractères)" });
-  }
-
-  const { data: source, error: sErr } = await supabase
-    .from("knowledge_sources")
-    .insert({
-      company_id,
-      type: "manual",
-      name: String(name).slice(0, 200),
-      status: "processing",
-      size_bytes: cleanText.length,
-      created_by: created_by || null,
-    })
-    .select()
-    .single();
-  if (sErr) return res.status(500).json({ error: sErr.message });
-
-  const result = await ingestChunks({ company_id, source_id: source.id, text: cleanText });
-  if (result.error) {
-    await supabase.from("knowledge_sources").update({
-      status: "error", error_message: `chunk: ${result.error}`,
-    }).eq("id", source.id);
-    return res.status(500).json({ error: result.error });
-  }
-
-  await supabase.from("knowledge_sources").update({
-    status: "ready",
-    chunks_count: result.chunks_count,
-  }).eq("id", source.id);
-
-  // Embeddings best-effort
-  let embeddings_ready_at = null;
-  try {
-    const emb = await embedChunksOfSource({ source_id: source.id, company_id });
-    embeddings_ready_at = emb.embeddings_ready_at;
-  } catch (e) {
-    console.warn(`[KB] embed manual source=${source.id}:`, e.message);
-  }
-
-  return res.json({
-    success: true,
-    source: { ...source, status: "ready", chunks_count: result.chunks_count, embeddings_ready_at },
-    chunks_count: result.chunks_count,
-    embeddings_ready: !!embeddings_ready_at,
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
-// POST /sources/qa  — Training Q&R (Phase 8C-5)
-//   body: { company_id, question, answer, created_by? }
-//   → crée une source type='qa' avec content "Q: ...\nR: ..." + chunk + embed
-// ─────────────────────────────────────────────────────────────
-router.post("/sources/qa", express.json(), async (req, res) => {
-  const { company_id, question, answer, created_by } = req.body || {};
-  if (!company_id || !question || !answer) {
-    return res.status(400).json({ error: "company_id, question et answer requis" });
-  }
-  const q = String(question).trim();
-  const a = String(answer).trim();
-  if (q.length < 5) return res.status(400).json({ error: "question trop courte (< 5 caractères)" });
-  if (a.length < 3) return res.status(400).json({ error: "réponse trop courte (< 3 caractères)" });
-
-  const content = `Q: ${q}\nR: ${a}`;
-
-  const { data: source, error: sErr } = await supabase
-    .from("knowledge_sources")
-    .insert({
-      company_id,
-      type: "qa",
-      name: q.slice(0, 200),
-      status: "processing",
-      size_bytes: content.length,
-      created_by: created_by || null,
-    })
-    .select()
-    .single();
-  if (sErr) return res.status(500).json({ error: sErr.message });
-
-  const result = await ingestChunks({ company_id, source_id: source.id, text: content });
-  if (result.error) {
-    await supabase.from("knowledge_sources").update({
-      status: "error", error_message: `chunk: ${result.error}`,
-    }).eq("id", source.id);
-    return res.status(500).json({ error: result.error });
-  }
-
-  await supabase.from("knowledge_sources").update({
-    status: "ready", chunks_count: result.chunks_count,
-  }).eq("id", source.id);
-
-  let embeddings_ready_at = null;
-  try {
-    const emb = await embedChunksOfSource({ source_id: source.id, company_id });
-    embeddings_ready_at = emb.embeddings_ready_at;
-  } catch (e) {
-    console.warn(`[KB] embed qa source=${source.id}:`, e.message);
-  }
-
-  return res.json({
-    success: true,
-    source: { ...source, status: "ready", chunks_count: result.chunks_count, embeddings_ready_at },
-    chunks_count: result.chunks_count,
-    embeddings_ready: !!embeddings_ready_at,
-  });
-});
-//   body: { company_id, content }
-//   → met à jour content + re-embed CE chunk uniquement (rapide)
-// ─────────────────────────────────────────────────────────────
-router.patch("/chunks/:id", express.json(), async (req, res) => {
-  const { id } = req.params;
-  const { company_id, content } = req.body || {};
-  const isSuperAdmin = req.user?.role === "super_admin";
-  if (!company_id || !content) return res.status(400).json({ error: "company_id et content requis" });
-  const cleanText = String(content).trim();
-  if (cleanText.length < 10)      return res.status(400).json({ error: "Contenu trop court (< 10 caractères)" });
-  if (cleanText.length > 50_000)  return res.status(400).json({ error: "Contenu trop long (> 50 000 caractères)" });
-
-  // Sanity check : le chunk existe et appartient au bon tenant
-  let chunkQuery = supabase
-    .from("knowledge_chunks")
-    .select("id, company_id, source_id, chunk_index")
-    .eq("id", id);
-  if (!isSuperAdmin) {
-    chunkQuery = chunkQuery.eq("company_id", req.user.company_id);
-  }
-  const { data: chunk, error: cErr } = await chunkQuery.maybeSingle();
-  if (cErr)                             return res.status(500).json({ error: cErr.message });
-  if (!chunk) {
-    return respondTenantMiss(
-      res,
-      "knowledge_chunks",
-      id,
-      "Chunk introuvable",
-      isSuperAdmin
-    );
-  }
-  if (!isSuperAdmin && chunk.company_id !== company_id) {
-    return res.status(403).json({ error: "Chunk d'un autre tenant" });
-  }
-
-  // Embed nouveau contenu
-  let embedding = null;
-  try {
-    embedding = await embedText(cleanText);
-  } catch (e) {
-    return res.status(500).json({ error: `Embedding échoué : ${e.message}` });
-  }
-
-  // gpt-tokenizer pour le token_count
-  const token_count = gptEncode(cleanText).length;
-
-  let updateQuery = supabase
-    .from("knowledge_chunks")
-    .update({ content: cleanText, embedding, token_count })
-    .eq("id", id);
-  if (!isSuperAdmin) {
-    updateQuery = updateQuery.eq("company_id", req.user.company_id);
-  }
-  const { data: updated, error: uErr } = await updateQuery
-    .select("id, chunk_index, content, token_count")
-    .maybeSingle();
-  if (uErr) return res.status(500).json({ error: uErr.message });
-  if (!updated) {
-    return respondTenantMiss(
-      res,
-      "knowledge_chunks",
-      id,
-      "Chunk introuvable",
-      isSuperAdmin
-    );
-  }
-
-  // Met à jour le timestamp embeddings_ready_at de la source (puisqu'on a re-embeddé)
-  let sourceUpdateQuery = supabase
-    .from("knowledge_sources")
-    .update({ embeddings_ready_at: new Date().toISOString() })
-    .eq("id", chunk.source_id);
-  if (!isSuperAdmin) {
-    sourceUpdateQuery = sourceUpdateQuery.eq("company_id", req.user.company_id);
-  }
-  await sourceUpdateQuery;
-
-  return res.json({ success: true, chunk: updated });
-});
-
-// ─────────────────────────────────────────────────────────────
-// GET /sources?company_id=...
-// ─────────────────────────────────────────────────────────────
-router.get("/sources", async (req, res) => {
-  const { company_id, status, limit = 100, offset = 0 } = req.query;
-  if (!company_id || company_id === "null" || company_id === "undefined" || company_id.length < 10) {
-    return res.status(400).json({ error: "company_id requis et valide" });
-  }
-
-  let q = supabase.from("knowledge_sources")
-    .select("*", { count: "exact" })
-    .eq("company_id", company_id)
-    .order("created_at", { ascending: false })
-    .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
-  if (status) q = q.eq("status", status);
-
-  const { data, error, count } = await q;
-  if (error) return res.status(500).json({ error: error.message });
-  return res.json({ sources: data, total: count });
-});
-
-// ─────────────────────────────────────────────────────────────
-// GET /sources/:id  → metadata + chunks preview (limit 50)
-// ─────────────────────────────────────────────────────────────
-router.get("/sources/:id", async (req, res) => {
-  const { id } = req.params;
-  const companyId = req.user?.company_id;
-  const isSuperAdmin = req.user?.role === "super_admin";
-  let query = supabase.from("knowledge_sources").select("*").eq("id", id);
-  if (!isSuperAdmin) {
-    query = query.eq("company_id", companyId);
-  }
-  const { data: source, error } = await query.maybeSingle();
-  if (error)   return res.status(500).json({ error: error.message });
-  if (!source) {
-    return respondTenantMiss(
-      res,
-      "knowledge_sources",
-      id,
-      "Source introuvable",
-      isSuperAdmin
-    );
-  }
-
-  let chunksQuery = supabase
-    .from("knowledge_chunks")
-    .select("id, chunk_index, content, token_count")
-    .eq("source_id", id);
-  if (!isSuperAdmin) {
-    chunksQuery = chunksQuery.eq("company_id", companyId);
-  }
-  const { data: chunks, error: chunksError } = await chunksQuery
-    .order("chunk_index", { ascending: true })
-    .limit(50);
-  if (chunksError) return res.status(500).json({ error: chunksError.message });
-
-  return res.json({ source, chunks: chunks || [] });
-});
-
-// ─────────────────────────────────────────────────────────────
-// DELETE /sources/:id  → cascade chunks + storage object
-// ─────────────────────────────────────────────────────────────
-router.delete("/sources/:id", async (req, res) => {
-  const { id } = req.params;
-  const companyId = req.user?.company_id;
-  const isSuperAdmin = req.user?.role === "super_admin";
-
-  // Delete atomique avec le filtre tenant → cascade chunks via FK
-  let deleteQuery = supabase.from("knowledge_sources").delete().eq("id", id);
-  if (!isSuperAdmin) {
-    deleteQuery = deleteQuery.eq("company_id", companyId);
-  }
-  const { data: source, error } = await deleteQuery
-    .select("storage_path")
-    .maybeSingle();
-  if (error) return res.status(500).json({ error: error.message });
-  if (!source) {
-    return respondTenantMiss(
-      res,
-      "knowledge_sources",
-      id,
-      "Source introuvable",
-      isSuperAdmin
-    );
-  }
-
-  // Delete storage object (best-effort)
-  if (source?.storage_path) {
-    await supabase.storage.from("kb-uploads").remove([source.storage_path]).catch(() => {});
-  }
-  return res.json({ success: true });
-});
-
-// ─────────────────────────────────────────────────────────────
-// KB+B — POST /sources/search  (widget Knowledge + Phase 8 helper)
-// body: { company_id, query, topK?, minSimilarity? }
-// ─────────────────────────────────────────────────────────────
-router.post("/sources/search", express.json(), async (req, res) => {
-  const { company_id, query, topK, minSimilarity } = req.body;
-  if (!company_id || !query) {
-    return res.status(400).json({ error: "company_id et query requis" });
-  }
-  try {
-    const t0 = Date.now();
-    const results = await searchSimilarChunks({
-      company_id,
-      query,
-      topK: Number.isInteger(topK) ? topK : 3,
-      minSimilarity: typeof minSimilarity === "number" ? minSimilarity : 0.0,
-    });
-    return res.json({
-      success: true,
-      query,
-      results,
-      latency_ms: Date.now() - t0,
-    });
-  } catch (e) {
-    console.error("[KB] /search:", e);
-    return res.status(500).json({ error: e.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────
-// KB+B — POST /sources/:id/reembed  (régénère embeddings d'une source)
-// body: { company_id }
-// ─────────────────────────────────────────────────────────────
-router.post("/sources/:id/reembed", express.json(), async (req, res) => {
-  const { id } = req.params;
-  const { company_id } = req.body;
-  const isSuperAdmin = req.user?.role === "super_admin";
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
-
-  // Sanity check : la source existe et appartient bien à la company
-  let sourceQuery = supabase
-    .from("knowledge_sources")
-    .select("id, company_id, chunks_count, status")
-    .eq("id", id);
-  if (!isSuperAdmin) {
-    sourceQuery = sourceQuery.eq("company_id", req.user.company_id);
-  }
-  const { data: source, error: sErr } = await sourceQuery.maybeSingle();
-  if (sErr)                            return res.status(500).json({ error: sErr.message });
-  if (!source) {
-    return respondTenantMiss(
-      res,
-      "knowledge_sources",
-      id,
-      "Source introuvable",
-      isSuperAdmin
-    );
-  }
-  if (!isSuperAdmin && source.company_id !== company_id) {
-    return res.status(403).json({ error: "Source d'un autre tenant" });
-  }
-  if (source.status !== "ready")       return res.status(409).json({ error: `Source en status '${source.status}' (doit être 'ready')` });
-
-  try {
-    const t0 = Date.now();
-    const result = await embedChunksOfSource({
-      source_id: id,
-      company_id: source.company_id,
-    });
-    return res.json({
-      success: true,
-      embedded_count: result.embedded_count,
-      embeddings_ready_at: result.embeddings_ready_at,
-      latency_ms: Date.now() - t0,
-    });
-  } catch (e) {
-    console.error("[KB] /reembed:", e);
-    return res.status(500).json({ error: e.message });
-  }
-});
-
-// ============================================================
-//  HELPERS
-// ============================================================
-
-function sanitizeFilename(name) {
-  return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
-}
-
-async function extractText(buffer, mime, originalName) {
-  const name = (originalName || "").toLowerCase();
-  if (mime === "application/pdf" || name.endsWith(".pdf")) {
-    const parser = new PDFParse({ data: buffer });
+    let source;
+    let storagePath;
     try {
-      const result = await parser.getText();
-      return result?.text || "";
-    } finally {
-      await parser.destroy().catch(() => {});
-    }
-  }
-  if (
-    mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-    name.endsWith(".docx")
-  ) {
-    const result = await mammoth.extractRawText({ buffer });
-    return result.value || "";
-  }
-  // .doc legacy — non supporté nativement, fallback texte
-  if (mime === "text/plain" || mime.startsWith("text/") || /\.(txt|md|markdown)$/i.test(name)) {
-    return buffer.toString("utf-8");
-  }
-  throw new Error(`Type non géré : ${mime}`);
-}
+      const { data, error } = await supabase
+        .from("knowledge_sources")
+        .insert({
+          company_id: companyId,
+          type: "upload",
+          name: String(req.file.originalname || "document").slice(0, 200),
+          mime_type: req.file.mimetype,
+          size_bytes: req.file.size,
+          status: "pending",
+          created_by: requestProfileId(req),
+          metadata: { original_filename: String(req.file.originalname || "document").slice(0, 255) },
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      source = data;
 
-async function scrapeUrl(url) {
-  // Phase 8C-4 : Playwright headless pour gérer les SPAs (React/Vue/Angular).
-  // Fallback : raw fetch si Playwright échoue (réseau ou timeout).
-  // Timeout total : 25s (load JS + wait DOM idle 1.5s).
-  try {
-    return await scrapeWithPlaywright(url);
-  } catch (e) {
-    console.warn(`[KB] Playwright scrape failed (${e.message}). Fallback raw fetch.`);
-    return await scrapeWithFetch(url);
-  }
-}
+      storagePath = `${companyId}/${source.id}/${sanitizeFilename(req.file.originalname)}`;
+      const { error: uploadError } = await supabase.storage
+        .from("kb-uploads")
+        .upload(storagePath, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: false,
+        });
+      if (uploadError) throw uploadError;
 
-async function scrapeWithPlaywright(url) {
-  const { chromium } = await import("playwright");
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-  });
-  try {
-    const ctx = await browser.newContext({
-      userAgent: "ExevoriVoiceIA-KB-Bot/1.0 (+https://exevori.com) Playwright/Chromium",
-      viewport: { width: 1366, height: 900 },
-      locale: "fr-CA",
-    });
-    const page = await ctx.newPage();
-    // Bloque images/font/media pour scrape plus rapide
-    await page.route("**/*", (route) => {
-      const t = route.request().resourceType();
-      if (t === "image" || t === "font" || t === "media") return route.abort();
-      return route.continue();
-    });
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
-    // Laisse le SPA hydrater
-    try { await page.waitForLoadState("networkidle", { timeout: 5000 }); }
-    catch (_) {} // tolère timeout sur sites qui pollent en boucle
-    const html = await page.content();
-    return cleanHtml(html);
-  } finally {
-    await browser.close().catch(() => {});
-  }
-}
+      const { error: sourceUpdateError } = await supabase
+        .from("knowledge_sources")
+        .update({ storage_path: storagePath })
+        .eq("id", source.id)
+        .eq("company_id", companyId);
+      if (sourceUpdateError) throw sourceUpdateError;
 
-async function scrapeWithFetch(url) {
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 15000);
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "ExevoriVoiceIA-KB-Bot/1.0 (+https://exevori.com)",
-        "Accept": "text/html,application/xhtml+xml",
-      },
-      signal: ctrl.signal,
-      redirect: "follow",
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const html = await res.text();
-    return cleanHtml(html);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
+      const queued = await knowledge.enqueueKnowledgeJob({
+        companyId,
+        sourceId: source.id,
+        jobType: "extract_upload",
+        idempotencyKey: `extract:${source.id}`,
+      });
 
-function cleanHtml(html) {
-  // 1. cheerio retire scripts/styles/nav/footer
-  const $ = cheerio.load(html);
-  $("script,style,noscript,nav,footer,iframe,svg,form,header").remove();
-  // Prefer main content
-  let root = $("main").length ? $("main") : $("article").length ? $("article") : $("body");
-  const filtered = root.html() || "";
-
-  // 2. html-to-text pour produire du texte propre
-  return htmlToText(filtered, {
-    wordwrap: false,
-    selectors: [
-      { selector: "a",   options: { ignoreHref: true } },
-      { selector: "img", format: "skip" },
-    ],
-  }).replace(/\n{3,}/g, "\n\n").trim();
-}
-
-// Chunking : 350 tokens cible, overlap 40 (mémoire contextuelle)
-const CHUNK_TARGET = 350;
-const CHUNK_OVERLAP = 40;
-
-function chunkText(text) {
-  if (!text || !text.trim()) return [];
-  const paragraphs = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-  const chunks = [];
-  let buffer = [];
-  let bufferTokens = 0;
-
-  const flush = () => {
-    if (buffer.length === 0) return;
-    const content = buffer.join("\n\n");
-    chunks.push({ content, token_count: gptEncode(content).length });
-    // Overlap : retient les derniers paragraphes jusqu'à CHUNK_OVERLAP tokens
-    let kept = [];
-    let keptTokens = 0;
-    for (let i = buffer.length - 1; i >= 0; i--) {
-      const t = gptEncode(buffer[i]).length;
-      if (keptTokens + t > CHUNK_OVERLAP) break;
-      kept.unshift(buffer[i]);
-      keptTokens += t;
-    }
-    buffer = kept;
-    bufferTokens = keptTokens;
-  };
-
-  for (const para of paragraphs) {
-    const tokens = gptEncode(para).length;
-    // Paragraphe trop gros tout seul : on le split brutalement
-    if (tokens > CHUNK_TARGET * 1.6) {
-      flush();
-      const words = para.split(/\s+/);
-      const stride = Math.ceil(words.length / Math.ceil(tokens / CHUNK_TARGET));
-      for (let i = 0; i < words.length; i += stride) {
-        const slice = words.slice(i, i + stride).join(" ");
-        chunks.push({ content: slice, token_count: gptEncode(slice).length });
+      return res.status(202).json({
+        success: true,
+        queued: true,
+        source: { ...source, storage_path: storagePath, status: "pending" },
+        job: { id: queued.job.id, status: queued.job.status },
+      });
+    } catch (error) {
+      if (source) {
+        await knowledge.markSourceError(source.id, companyId, error).catch(() => {});
       }
-      continue;
+      if (storagePath) {
+        await supabase.storage.from("kb-uploads").remove([storagePath]).catch(() => {});
+      }
+      return sendServiceError(res, error);
     }
-    if (bufferTokens + tokens > CHUNK_TARGET) flush();
-    buffer.push(para);
-    bufferTokens += tokens;
-  }
-  flush();
-  return chunks;
+  });
+
+  router.post("/sources/scrape", async (req, res) => {
+    const companyId = resolveCompanyId(req, req.body?.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId || !req.body?.url) {
+      return res.status(400).json({ error: "company_id_and_url_required" });
+    }
+
+    let safeUrl;
+    try {
+      safeUrl = validateSafeUrl(req.body.url);
+    } catch (error) {
+      return res.status(400).json({
+        error: error.code || "unsafe_scrape_url",
+        message: error.message,
+      });
+    }
+
+    let source;
+    try {
+      const parsed = new URL(safeUrl);
+      const { data, error } = await supabase
+        .from("knowledge_sources")
+        .insert({
+          company_id: companyId,
+          type: "url",
+          name: `${parsed.hostname}${parsed.pathname}`.slice(0, 200),
+          url: safeUrl,
+          status: "pending",
+          created_by: requestProfileId(req),
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      source = data;
+
+      const queued = await knowledge.enqueueKnowledgeJob({
+        companyId,
+        sourceId: source.id,
+        jobType: "scrape_url",
+        idempotencyKey: `scrape:${source.id}`,
+      });
+      return res.status(202).json({
+        success: true,
+        queued: true,
+        source,
+        job: { id: queued.job.id, status: queued.job.status },
+      });
+    } catch (error) {
+      if (source) {
+        await knowledge.markSourceError(source.id, companyId, error).catch(() => {});
+      }
+      return sendServiceError(res, error);
+    }
+  });
+
+  router.post("/sources/manual", async (req, res) => {
+    const companyId = resolveCompanyId(req, req.body?.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId || !req.body?.name || !req.body?.content) {
+      return res.status(400).json({ error: "company_id_name_content_required" });
+    }
+    try {
+      const result = await knowledge.createRagSource({
+        companyId,
+        type: "manual",
+        name: req.body.name,
+        content: req.body.content,
+        createdBy: requestProfileId(req),
+        metadata: { created_via: "kb_manual" },
+      });
+      return res.status(result.reused ? 200 : 201).json({ success: true, ...result });
+    } catch (error) {
+      return sendServiceError(res, error);
+    }
+  });
+
+  router.post("/sources/qa", async (req, res) => {
+    const companyId = resolveCompanyId(req, req.body?.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId || !req.body?.question || !req.body?.answer) {
+      return res.status(400).json({ error: "company_id_question_answer_required" });
+    }
+    try {
+      const result = await knowledge.createQaSource({
+        companyId,
+        question: req.body.question,
+        answer: req.body.answer,
+        category: req.body.category || "FAQ",
+        type: "qa",
+        createdBy: requestProfileId(req),
+        metadata: { created_via: "kb_qa" },
+      });
+      return res.status(201).json({ success: true, ...result });
+    } catch (error) {
+      return sendServiceError(res, error);
+    }
+  });
+
+  router.patch("/chunks/:id", async (req, res) => {
+    const companyId = resolveCompanyId(req, req.body?.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    const content = String(req.body?.content || "").trim();
+    if (!companyId || content.length < 10 || content.length > 50_000) {
+      return res.status(400).json({ error: "invalid_company_or_content" });
+    }
+
+    let query = supabase
+      .from("knowledge_chunks")
+      .select("id, company_id, source_id")
+      .eq("id", req.params.id);
+    if (!isSuperAdmin(req)) query = query.eq("company_id", companyId);
+    const { data: chunk, error } = await query.maybeSingle();
+    if (error) return res.status(500).json({ error: "chunk_read_failed" });
+    if (!chunk) {
+      return respondTenantMiss({
+        supabase,
+        req,
+        res,
+        table: "knowledge_chunks",
+        id: req.params.id,
+        label: "chunk",
+      });
+    }
+    if (isSuperAdmin(req) && chunk.company_id !== companyId) {
+      return res.status(403).json({ error: "forbidden_cross_tenant" });
+    }
+
+    try {
+      const embedding = await rag.embedText(content);
+      const { data: updated, error: updateError } = await supabase
+        .from("knowledge_chunks")
+        .update({
+          content,
+          token_count: countTokens(content),
+          embedding,
+          embedding_model: rag.model || null,
+        })
+        .eq("id", chunk.id)
+        .eq("source_id", chunk.source_id)
+        .eq("company_id", chunk.company_id)
+        .select("id, chunk_index, content, token_count")
+        .single();
+      if (updateError) throw updateError;
+      const { error: sourceEmbeddingError } = await supabase
+        .from("knowledge_sources")
+        .update({ embeddings_ready_at: new Date().toISOString() })
+        .eq("id", chunk.source_id)
+        .eq("company_id", chunk.company_id);
+      if (sourceEmbeddingError) throw sourceEmbeddingError;
+      return res.json({ success: true, chunk: updated });
+    } catch (embeddingError) {
+      return sendServiceError(res, embeddingError);
+    }
+  });
+
+  router.get("/sources", async (req, res) => {
+    const companyId = resolveCompanyId(req, req.query.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId) return res.status(400).json({ error: "company_id_required" });
+    const limit = integer(req.query.limit, 100, 1, 200);
+    const offset = integer(req.query.offset, 0, 0, 100_000);
+    let query = supabase
+      .from("knowledge_sources")
+      .select("*", { count: "exact" })
+      .eq("company_id", companyId)
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (req.query.status) query = query.eq("status", req.query.status);
+    const { data, error, count } = await query;
+    if (error) return res.status(500).json({ error: "sources_read_failed" });
+    return res.json({ sources: data || [], total: count || 0 });
+  });
+
+  router.get("/sources/:id", async (req, res) => {
+    const requestedCompanyId = req.query.company_id;
+    const companyId = resolveCompanyId(req, requestedCompanyId);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (isSuperAdmin(req) && !companyId) {
+      return res.status(400).json({ error: "company_id_required_for_super_admin" });
+    }
+    let query = supabase.from("knowledge_sources").select("*").eq("id", req.params.id);
+    if (companyId) query = query.eq("company_id", companyId);
+    const { data: source, error } = await query.maybeSingle();
+    if (error) return res.status(500).json({ error: "source_read_failed" });
+    if (!source) {
+      return respondTenantMiss({
+        supabase,
+        req,
+        res,
+        table: "knowledge_sources",
+        id: req.params.id,
+        label: "source",
+      });
+    }
+    const { data: chunks, error: chunksError } = await supabase
+      .from("knowledge_chunks")
+      .select("id, chunk_index, content, token_count, metadata, embedding_model")
+      .eq("source_id", source.id)
+      .eq("company_id", source.company_id)
+      .order("chunk_index", { ascending: true })
+      .limit(100);
+    if (chunksError) return res.status(500).json({ error: "chunks_read_failed" });
+    return res.json({ source, chunks: chunks || [] });
+  });
+
+  router.delete("/sources/:id", async (req, res) => {
+    const companyId = resolveCompanyId(req, req.body?.company_id || req.query.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (isSuperAdmin(req) && !companyId) {
+      return res.status(400).json({ error: "company_id_required_for_super_admin" });
+    }
+    let lookup = supabase
+      .from("knowledge_sources")
+      .select("id, company_id, storage_path")
+      .eq("id", req.params.id);
+    if (companyId) lookup = lookup.eq("company_id", companyId);
+    const { data: source, error } = await lookup.maybeSingle();
+    if (error) return res.status(500).json({ error: "source_read_failed" });
+    if (!source) {
+      return respondTenantMiss({
+        supabase,
+        req,
+        res,
+        table: "knowledge_sources",
+        id: req.params.id,
+        label: "source",
+      });
+    }
+    const { error: deleteError } = await supabase
+      .from("knowledge_sources")
+      .delete()
+      .eq("id", source.id)
+      .eq("company_id", source.company_id);
+    if (deleteError) return res.status(500).json({ error: "source_delete_failed" });
+    if (source.storage_path) {
+      await supabase.storage.from("kb-uploads").remove([source.storage_path]).catch(() => {});
+    }
+    return res.json({ success: true });
+  });
+
+  router.post("/sources/search", async (req, res) => {
+    const companyId = resolveCompanyId(req, req.body?.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    const query = String(req.body?.query || "").trim();
+    if (!companyId || query.length < 2 || query.length > 20_000) {
+      return res.status(400).json({ error: "invalid_company_or_query" });
+    }
+    const topK = integer(req.body.topK, 3, 1, 20);
+    const minSimilarity = Number(req.body.minSimilarity ?? 0);
+    if (!Number.isFinite(minSimilarity) || minSimilarity < 0 || minSimilarity > 1) {
+      return res.status(400).json({ error: "invalid_min_similarity" });
+    }
+    try {
+      const started = Date.now();
+      const results = await rag.searchSimilarChunks({
+        company_id: companyId,
+        query,
+        topK,
+        minSimilarity,
+      });
+      return res.json({
+        success: true,
+        query,
+        results,
+        source_trace: results.map(result => ({
+          source_id: result.source_id,
+          source_name: result.source_name,
+          source_type: result.source_type,
+          similarity: result.similarity,
+        })),
+        latency_ms: Date.now() - started,
+      });
+    } catch (error) {
+      return sendServiceError(res, error);
+    }
+  });
+
+  router.post("/sources/:id/reembed", async (req, res) => {
+    const companyId = resolveCompanyId(req, req.body?.company_id);
+    if (companyId === false) return res.status(403).json({ error: "forbidden_cross_tenant" });
+    if (!companyId) return res.status(400).json({ error: "company_id_required" });
+    const { data: source, error } = await supabase
+      .from("knowledge_sources")
+      .select("id, company_id, status, metadata, embeddings_ready_at")
+      .eq("id", req.params.id)
+      .eq("company_id", companyId)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: "source_read_failed" });
+    if (!source) {
+      return respondTenantMiss({
+        supabase,
+        req,
+        res,
+        table: "knowledge_sources",
+        id: req.params.id,
+        label: "source",
+      });
+    }
+    try {
+      const version = source.metadata?.content_sha256 || source.embeddings_ready_at || "initial";
+      const queued = await knowledge.enqueueKnowledgeJob({
+        companyId,
+        sourceId: source.id,
+        jobType: "embed_source",
+        idempotencyKey: `embed:${source.id}:${rag.model || "default"}:${version}`,
+      });
+      const { error: sourcePendingError } = await supabase
+        .from("knowledge_sources")
+        .update({ status: "pending", error_message: null })
+        .eq("id", source.id)
+        .eq("company_id", companyId);
+      if (sourcePendingError) throw sourcePendingError;
+      return res.status(202).json({
+        success: true,
+        queued: true,
+        restarted: queued.restarted || false,
+        job: { id: queued.job.id, status: queued.job.status },
+      });
+    } catch (queueError) {
+      return sendServiceError(res, queueError);
+    }
+  });
+
+  return router;
 }
 
-async function ingestChunks({ company_id, source_id, text }) {
-  try {
-    const chunks = chunkText(text);
-    if (chunks.length === 0) return { error: "Aucun chunk extrait (texte vide ?)" };
-    const records = chunks.map((c, i) => ({
-      company_id,
-      source_id,
-      chunk_index: i,
-      content: c.content,
-      token_count: c.token_count,
-    }));
-    const { error } = await supabase.from("knowledge_chunks").insert(records);
-    if (error) return { error: error.message };
-    return { chunks_count: records.length };
-  } catch (e) {
-    return { error: e.message };
-  }
+let defaultRouter;
+if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+  const ragService = createRagService({ supabase });
+  const knowledgeService = createKnowledgeService({ supabase, ragService });
+  defaultRouter = createKbRouter({ supabase, ragService, knowledgeService });
+} else {
+  defaultRouter = express.Router();
+  defaultRouter.use((_req, res) => res.status(503).json({ error: "kb_not_configured" }));
 }
 
-export default router;
+export default defaultRouter;
