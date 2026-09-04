@@ -50,7 +50,8 @@ import twilioConfigRouter from "./modules/twilio-config/index.js";
 import learningRouter from "./modules/learning/index.js";
 import knowledgeRouter from "./modules/knowledge/index.js";
 import billingRouter from "./modules/billing/index.js";
-import ticketsRouter from "./modules/tickets/index.js";
+import ticketsRouter, { ticketService } from "./modules/tickets/index.js";
+import { createTicketWorker } from "./modules/tickets/worker.js";
 import adminRouter from "./modules/admin/index.js";
 import voiceLibraryRouter from "./modules/voice-library/index.js";
 import onboardingRouter from "./modules/onboarding/index.js";
@@ -99,6 +100,10 @@ const calendarWorkers = calendarService && calendarSupabase
       service: calendarService,
       logger,
     })
+  : null;
+
+const ticketWorker = ticketService
+  ? createTicketWorker({ service: ticketService, logger })
   : null;
 
 const app = express();
@@ -200,6 +205,11 @@ app.get("/health", (req, res) => {
   const outboundWorker = getOutboundWorkerStatus();
   const postCallWorker = getPostCallWorkerStatus();
   const knowledgeWorker = getKnowledgeWorkerStatus();
+  const ticketWorkerStatus = ticketWorker?.status() || {
+    ready: false,
+    started: false,
+    last_cycle_error: "tickets_not_configured",
+  };
   const customLlmAuth = getCustomLlmAuthStatus();
   const calendarWorker = calendarWorkers?.status() || {
     ready: false,
@@ -211,10 +221,13 @@ app.get("/health", (req, res) => {
     process.env.DISABLE_POST_CALL_WORKER !== "true";
   const calendarWorkerRequired = process.env.DISABLE_CALENDAR_WORKER !== "true";
   const knowledgeWorkerRequired = process.env.DISABLE_KB_WORKER !== "true";
+  const ticketWorkerRequired = process.env.DISABLE_BACKGROUND_JOBS !== "true"
+    && process.env.DISABLE_TICKET_WORKER !== "true";
   const ready = (!outboundWorkerRequired || outboundWorker.ready)
     && (!postCallWorkerRequired || postCallWorker.ready)
     && (!calendarWorkerRequired || calendarWorker.ready)
     && (!knowledgeWorkerRequired || knowledgeWorker.ready)
+    && (!ticketWorkerRequired || ticketWorkerStatus.ready)
     && customLlmAuth.ready;
   res.status(ready ? 200 : 503).json({
     status: ready ? "ok" : "degraded",
@@ -232,6 +245,7 @@ app.get("/health", (req, res) => {
     post_call_worker: postCallWorker,
     calendar_worker: calendarWorker,
     knowledge_worker: knowledgeWorker,
+    ticket_worker: ticketWorkerStatus,
     custom_llm_auth: customLlmAuth,
   });
 });
@@ -282,7 +296,7 @@ app.use(
       : requireAuth(req, res, next),
   billingRouter
 );
-app.use("/api/v1/tickets",        requireAuth, ticketsRouter);
+app.use("/api/v1/tickets",        requireAuth, enforceTenantOwnership, ticketsRouter);
 app.use("/api/v1/voice-library",  requireAuth, voiceLibraryRouter);
 app.use("/api/v1/onboarding",     requireAuth, enforceTenantOwnership, onboardingRouter);
 app.use("/api/v1/import",         requireAuth, importRouter);
@@ -332,6 +346,20 @@ server.on("upgrade", (req, socket, head) => {
 if (process.env.DISABLE_BACKGROUND_JOBS !== "true") {
   startEmailPoller();
   startWeeklyReportJob();
+}
+
+if (
+  process.env.DISABLE_BACKGROUND_JOBS !== "true"
+  && process.env.DISABLE_TICKET_WORKER !== "true"
+) {
+  try {
+    if (!ticketWorker) throw new Error("tickets_not_configured");
+    ticketWorker.start();
+  } catch (error) {
+    logger.error("Ticket worker did not start", {
+      error_code: error?.code || error?.message || "ticket_worker_start_failed",
+    });
+  }
 }
 
 if (process.env.DISABLE_PRIVACY_RETENTION_JOB !== "true") {
