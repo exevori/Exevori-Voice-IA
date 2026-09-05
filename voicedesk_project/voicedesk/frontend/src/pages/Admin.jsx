@@ -8,17 +8,17 @@
 // ============================================================
 
 import React, { useEffect, useState, useCallback } from "react";
-import { useTranslation } from "react-i18next";
 import {
-  Building2, Users, Phone, BookOpen, LogIn, RefreshCw,
-  AlertCircle, CheckCircle2, Loader2, TrendingUp, DollarSign,
-  LifeBuoy, Zap, AlertTriangle, ChevronRight, BarChart3,
-  ShieldOff, ShieldCheck, CreditCard, Activity,
+  Building2, Users, Phone, BookOpen, RefreshCw,
+  AlertCircle, Loader2, TrendingUp, DollarSign,
+  LifeBuoy, AlertTriangle, ChevronRight, Activity,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { Button } from "../components/ui/button.jsx";
 import { Badge } from "../components/ui/badge.jsx";
 import { cn } from "../lib/utils.js";
+import CompanyDetailSheet from "../components/admin/CompanyDetailSheet.jsx";
+import { requestAdminJson } from "../utils/admin-company.js";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -27,6 +27,7 @@ const STATUS_META = {
   trial:     { label: "Essai",      variant: "cyan"    },
   overdue:   { label: "En retard",  variant: "red"     },
   suspended: { label: "Suspendu",   variant: "default" },
+  suspended_overage: { label: "Quota dépassé", variant: "orange" },
   cancelled: { label: "Annulé",     variant: "ghost"   },
 };
 
@@ -56,7 +57,7 @@ function AlertBanner({ alerts }) {
   if (!alerts) return null;
   const items = [
     alerts.clients_overdue > 0 && { msg: `${alerts.clients_overdue} client(s) en retard de paiement`, color: "text-brand-red border-brand-red/20 bg-brand-red/5" },
-    alerts.trials_ending_soon > 0 && { msg: `${alerts.trials_ending_soon} essai(s) se terminent dans 3 jours`, color: "text-brand-orange border-brand-orange/20 bg-brand-orange/5" },
+    alerts.trials_ending_soon > 0 && { msg: `${alerts.trials_ending_soon} essai(s) se terminent dans les 7 jours`, color: "text-brand-orange border-brand-orange/20 bg-brand-orange/5" },
     alerts.sla_breached > 0 && { msg: `${alerts.sla_breached} ticket(s) ont dépassé leur SLA`, color: "text-brand-orange border-brand-orange/20 bg-brand-orange/5" },
   ].filter(Boolean);
 
@@ -74,107 +75,24 @@ function AlertBanner({ alerts }) {
 }
 
 // ── Company Row ───────────────────────────────────────────────
-function CompanyRow({ company, isActive, onImpersonate, onSuspend, onReactivate, token }) {
-  const [expanded, setExpanded] = useState(false);
-  const [profitability, setProfitability] = useState(null);
-  const [loadingProfit, setLoadingProfit] = useState(false);
-
-  const loadProfitability = async () => {
-    if (profitability) { setExpanded(e => !e); return; }
-    setExpanded(true);
-    setLoadingProfit(true);
-    try {
-      const res = await fetch(`${API}/api/v1/admin/companies/${company.id}/profitability`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) setProfitability((await res.json()));
-    } catch {}
-    setLoadingProfit(false);
-  };
-
-  const sMeta = STATUS_META[company.status] || STATUS_META.active;
-
+function CompanyRow({ company, isActive, onOpen }) {
+  const meta = STATUS_META[company.status] || { label: "État inconnu", variant: "orange" };
   return (
-    <div className={cn("border-b border-border transition-colors", isActive ? "bg-brand/5" : "hover:bg-bg-hover")}>
-      <div className="flex items-center gap-3 px-4 py-3.5">
-        {/* Avatar */}
-        <div className="h-9 w-9 rounded-full gradient-brand flex items-center justify-center text-white font-bold text-sm shrink-0">
-          {(company.name || "?")[0].toUpperCase()}
-        </div>
-
-        {/* Infos */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-text-primary">{company.name}</span>
-            {isActive && <Badge variant="purple" className="text-[9px]">Vue active</Badge>}
-            <Badge variant={sMeta.variant} className="text-[9px]">{sMeta.label}</Badge>
-            {company.plan && <span className="text-[10px] text-text-tertiary font-mono">{company.plan}</span>}
-          </div>
-          <div className="text-xs text-text-tertiary truncate mt-0.5">
-            {company.city || "—"} · {company.assistant_name || "Assistante non configurée"}
-          </div>
-        </div>
-
-        {/* Stats */}
-        <div className="hidden lg:flex items-center gap-4 text-xs text-text-tertiary">
-          <span className="flex items-center gap-1"><Phone size={11}/>{company.calls_count ?? 0}</span>
-          <span className="flex items-center gap-1"><BookOpen size={11}/>{company.kb_sources_count ?? 0}</span>
-          <span className="flex items-center gap-1"><Users size={11}/>{company.members_count ?? 0}</span>
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button onClick={loadProfitability}
-            className="text-[10px] px-2 py-1 rounded border border-border text-text-tertiary hover:border-brand hover:text-brand transition-colors">
-            <BarChart3 size={11} />
-          </button>
-          {company.status === "active" || company.status === "trial" ? (
-            <button onClick={() => onSuspend(company.id)}
-              className="text-[10px] px-2 py-1 rounded border border-border text-text-tertiary hover:border-brand-red hover:text-brand-red transition-colors">
-              <ShieldOff size={11} />
-            </button>
-          ) : (
-            <button onClick={() => onReactivate(company.id)}
-              className="text-[10px] px-2 py-1 rounded border border-border text-text-tertiary hover:border-brand-green hover:text-brand-green transition-colors">
-              <ShieldCheck size={11} />
-            </button>
-          )}
-          {isActive ? (
-            <Badge variant="purple" className="text-[9px] px-2">En vue</Badge>
-          ) : (
-            <Button variant="outline" size="sm" onClick={onImpersonate} className="text-xs h-7 px-2.5">
-              <LogIn size={11} className="mr-1" /> Accéder
-            </Button>
-          )}
+    <div className={cn("flex flex-wrap items-center gap-3 border-b border-border px-4 py-3.5", isActive && "bg-brand/5")}>
+      <div className="flex-1 min-w-0">
+        <button type="button" onClick={onOpen} className="text-left text-sm font-semibold text-text-primary hover:text-brand">{company.name}</button>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <Badge variant={meta.variant}>{meta.label}</Badge>
+          {isActive && <Badge variant="purple">Vue active</Badge>}
+          <span className="text-xs text-text-tertiary">{company.city || "—"} · {company.plan || "Forfait non défini"}</span>
         </div>
       </div>
-
-      {/* Profitability panel */}
-      {expanded && (
-        <div className="px-4 pb-3 pt-0 border-t border-border bg-bg-secondary/50">
-          {loadingProfit ? (
-            <div className="flex items-center gap-2 py-3 text-xs text-text-tertiary">
-              <Loader2 size={12} className="animate-spin"/> Chargement de la rentabilité...
-            </div>
-          ) : profitability ? (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 py-3">
-              {[
-                { label: "Revenu/mois", value: `${profitability.monthly_revenue?.toFixed(0) || 0}$` },
-                { label: "Coût infra", value: `${profitability.infra_cost_usd?.toFixed(2) || 0} USD` },
-                { label: "Marge brute", value: `${profitability.gross_margin_percent?.toFixed(0) || 0}%` },
-                { label: "Appels ce mois", value: profitability.calls_this_month || 0 },
-              ].map(item => (
-                <div key={item.label} className="bg-bg-card rounded-lg p-2.5 border border-border">
-                  <p className="text-[10px] text-text-tertiary">{item.label}</p>
-                  <p className="text-sm font-bold text-text-primary mt-0.5">{item.value}</p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-text-tertiary py-3">Données non disponibles</p>
-          )}
-        </div>
-      )}
+      <div className="hidden items-center gap-3 text-xs text-text-tertiary lg:flex">
+        <span className="flex items-center gap-1" title="Appels enregistrés"><Phone size={12} />{company.calls_count}</span>
+        <span className="flex items-center gap-1" title="Sources de connaissances"><BookOpen size={12} />{company.kb_sources_count}</span>
+        <span className="flex items-center gap-1" title="Membres"><Users size={12} />{company.members_count}</span>
+      </div>
+      <Button variant="outline" size="sm" onClick={onOpen}>Voir la fiche <ChevronRight size={13} /></Button>
     </div>
   );
 }
@@ -190,24 +108,19 @@ export default function Admin() {
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState(null);
-  const [actionLoading, setActionLoading] = useState(null);
+  const [selectedCompany, setSelectedCompany] = useState(null);
 
   const load = useCallback(async () => {
     if (!token || !isSuperAdmin) return;
     setLoading(true);
     setError(null);
     try {
-      const [compRes, dashRes] = await Promise.all([
-        fetch(`${API}/api/v1/admin/companies`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(`${API}/api/v1/admin/dashboard`,  { headers: { Authorization: `Bearer ${token}` } }),
+      const [companyData, dashboardData] = await Promise.all([
+        requestAdminJson(`${API}/api/v1/admin/companies`, { token }),
+        requestAdminJson(`${API}/api/v1/admin/dashboard`, { token }),
       ]);
-      if (compRes.ok) {
-        const d = await compRes.json();
-        setCompanies(d.companies || []);
-      }
-      if (dashRes.ok) {
-        setDashboard(await dashRes.json());
-      }
+      setCompanies(companyData.companies || []);
+      setDashboard(dashboardData);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -216,15 +129,6 @@ export default function Admin() {
   }, [token, isSuperAdmin]);
 
   useEffect(() => { load(); }, [load]);
-
-  const doAction = async (url, method = "POST") => {
-    setActionLoading(url);
-    try {
-      await fetch(`${API}${url}`, { method, headers: { Authorization: `Bearer ${token}` } });
-      await load();
-    } catch {}
-    setActionLoading(null);
-  };
 
   const filtered = companies.filter(c => {
     const matchSearch = !search || c.name?.toLowerCase().includes(search.toLowerCase()) || c.city?.toLowerCase().includes(search.toLowerCase());
@@ -268,12 +172,12 @@ export default function Admin() {
         <div className="flex items-center gap-2 text-text-tertiary text-sm py-6">
           <Loader2 size={15} className="animate-spin"/> Chargement...
         </div>
-      ) : (
+      ) : dashboard ? (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <KpiCard
               label="MRR Total" icon={DollarSign} color="text-brand-green"
-              bg="bg-brand-green/5" trend={5}
+              bg="bg-brand-green/5"
               value={`${rev?.mrr_total?.toFixed(0) || 0}$`}
               sub={`ARR estimé ${((rev?.arr_estimated || 0)).toFixed(0)}$`}
             />
@@ -311,7 +215,7 @@ export default function Admin() {
             ))}
           </div>
         </>
-      )}
+      ) : null}
 
       {/* Liste clients */}
       <div className="rounded-xl border border-border bg-bg-card overflow-hidden">
@@ -352,14 +256,19 @@ export default function Admin() {
               key={company.id}
               company={company}
               isActive={impersonatedCompany?.id === company.id}
-              token={token}
-              onImpersonate={() => impersonateCompany(company)}
-              onSuspend={(id) => doAction(`/api/v1/admin/companies/${id}/suspend`)}
-              onReactivate={(id) => doAction(`/api/v1/admin/companies/${id}/reactivate`)}
+              onOpen={() => setSelectedCompany(company)}
             />
           ))
         )}
       </div>
+      {selectedCompany && <CompanyDetailSheet
+        key={selectedCompany.id}
+        company={selectedCompany}
+        token={token}
+        onClose={() => setSelectedCompany(null)}
+        onChanged={() => void load()}
+        onImpersonate={impersonateCompany}
+      />}
     </div>
   );
 }

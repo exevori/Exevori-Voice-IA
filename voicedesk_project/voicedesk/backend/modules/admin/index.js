@@ -9,6 +9,10 @@
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import Stripe from "stripe";
+import { Resend } from "resend";
+import { createAdminCompanyRouter } from "./companies.js";
+import { createAdminCompanyService, monthlySubscriptionAmount } from "./companyService.js";
 
 dotenv.config();
 
@@ -18,6 +22,29 @@ const supabase = createClient(
 );
 
 const router = express.Router();
+const companyService = createAdminCompanyService({
+  supabase,
+  stripe: process.env.STRIPE_SECRET_KEY
+    ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-12-18", timeout: 8000, maxNetworkRetries: 0 })
+    : null,
+  resend: process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null,
+  provisionClient: async input => {
+    const { provisionNewClient } = await import("../onboarding/provision_service.js");
+    return provisionNewClient(input);
+  },
+  clearCompanyCache: async () => {
+    const { clearProfileCache } = await import("../../middleware/auth.js");
+    clearProfileCache();
+  },
+});
+
+// Défense locale en plus de requireAuth + requireRole au montage de l'app.
+router.use((req, res, next) => {
+  if (!req.user) return res.status(401).json({ error: "unauthorized" });
+  if (req.user.role !== "super_admin") return res.status(403).json({ error: "forbidden" });
+  return next();
+});
+router.use(createAdminCompanyRouter({ service: companyService }));
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/v1/admin/companies
@@ -41,6 +68,9 @@ router.get("/companies", async (req, res) => {
         supabase.from("knowledge_sources").select("*", { count: "exact", head: true }).eq("company_id", c.id),
         supabase.from("profiles").select("*", { count: "exact", head: true }).eq("company_id", c.id),
       ]);
+      if ([callsRes, kbRes, membersRes].some(result => result.error)) {
+        throw new Error("company_counts_unavailable");
+      }
       return {
         ...c,
         calls_count: callsRes.count ?? 0,
@@ -71,15 +101,16 @@ router.get("/dashboard", async (req, res) => {
       supabase.from("invoices").select("*").eq("period_start", periodStart),
       getTicketStats(),
     ]);
+    if ([companies, subscriptions, usageRecords, invoicesThisMonth].some(result => result.error)) {
+      throw new Error("admin_dashboard_unavailable");
+    }
 
     // KPIs revenus
     let mrr = 0, mrr_active = 0, mrr_trial = 0, mrr_overdue = 0;
     (subscriptions.data || []).forEach(s => {
-      const monthly = s.billing_cycle === "annual"
-        ? (s.monthly_price || s.annual_price / 12)
-        : s.monthly_price;
+      const monthly = monthlySubscriptionAmount(s);
       mrr += monthly || 0;
-      if (s.payment_status === "active_paid") mrr_active += monthly || 0;
+      if (["active", "active_paid"].includes(s.payment_status)) mrr_active += monthly || 0;
       else if (s.payment_status === "trial") mrr_trial += monthly || 0;
       else if (s.payment_status === "overdue") mrr_overdue += monthly || 0;
     });
@@ -239,56 +270,6 @@ router.post("/credits", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// POST /api/v1/admin/companies/:id/suspend
-// Suspendre un client (accès bloqué)
-// ─────────────────────────────────────────────────────────────
-router.post("/companies/:id/suspend", async (req, res) => {
-  const { id } = req.params;
-  const { reason, suspended_by } = req.body;
-
-  await Promise.all([
-    supabase
-      .from("companies")
-      .update({ status: "suspended", notes_admin: reason })
-      .eq("id", id),
-    supabase
-      .from("subscriptions")
-      .update({ payment_status: "suspended" })
-      .eq("company_id", id),
-    supabase
-      .from("activity_logs")
-      .insert({ company_id: id, action: "company_suspended", details: { reason, suspended_by } }),
-  ]);
-
-  return res.json({ success: true });
-});
-
-// ─────────────────────────────────────────────────────────────
-// POST /api/v1/admin/companies/:id/reactivate
-// Réactiver un client suspendu
-// ─────────────────────────────────────────────────────────────
-router.post("/companies/:id/reactivate", async (req, res) => {
-  const { id } = req.params;
-  const { reactivated_by } = req.body;
-
-  await Promise.all([
-    supabase
-      .from("companies")
-      .update({ status: "active" })
-      .eq("id", id),
-    supabase
-      .from("subscriptions")
-      .update({ payment_status: "active_paid" })
-      .eq("company_id", id),
-    supabase
-      .from("activity_logs")
-      .insert({ company_id: id, action: "company_reactivated", details: { reactivated_by } }),
-  ]);
-
-  return res.json({ success: true });
-});
-
-// ─────────────────────────────────────────────────────────────
 // POST /api/v1/admin/invoices/:id/mark-paid
 // Marquer une facture comme payée (paiement manuel)
 // ─────────────────────────────────────────────────────────────
@@ -347,21 +328,22 @@ async function getTrialsEndingSoon() {
   const now = new Date();
   const sevenDaysFromNow = new Date(now.getTime() + 7 * 86400000);
 
-  const { count } = await supabase
+  const { count, error } = await supabase
     .from("subscriptions")
     .select("*", { count: "exact", head: true })
     .eq("payment_status", "trial")
     .gte("trial_ends_at", now.toISOString())
     .lte("trial_ends_at", sevenDaysFromNow.toISOString());
-
+  if (error) throw new Error("trial_stats_unavailable");
   return count || 0;
 }
 
 async function getTicketStats() {
   const now = new Date();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("tickets")
     .select("status, priority, sla_first_response_due, first_response_at, sla_resolution_due, resolved_at");
+  if (error) throw new Error("ticket_stats_unavailable");
 
   const stats = {
     total: data?.length || 0,
