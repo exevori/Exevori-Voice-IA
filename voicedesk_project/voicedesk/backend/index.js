@@ -52,7 +52,7 @@ import knowledgeRouter from "./modules/knowledge/index.js";
 import billingRouter from "./modules/billing/index.js";
 import ticketsRouter, { ticketService } from "./modules/tickets/index.js";
 import { createTicketWorker } from "./modules/tickets/worker.js";
-import adminRouter from "./modules/admin/index.js";
+import adminRouter, { providerMonitor } from "./modules/admin/index.js";
 import voiceLibraryRouter from "./modules/voice-library/index.js";
 import onboardingRouter from "./modules/onboarding/index.js";
 import importRouter from "./modules/import/index.js";
@@ -346,6 +346,7 @@ server.on("upgrade", (req, socket, head) => {
 if (process.env.DISABLE_BACKGROUND_JOBS !== "true") {
   startEmailPoller();
   startWeeklyReportJob();
+  if (process.env.DISABLE_PROVIDER_MONITOR !== "true") providerMonitor.start();
 }
 
 if (
