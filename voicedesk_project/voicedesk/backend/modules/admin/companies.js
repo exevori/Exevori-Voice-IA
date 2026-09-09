@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function createAdminCompanyRouter({ service, logger = console }) {
+export function createAdminCompanyRouter({ service, provisioningHealth = null, logger = console }) {
   const router = express.Router();
   router.use((req, res, next) => {
     if (!req.user) return res.status(401).json({ error: "unauthorized" });
@@ -43,6 +43,11 @@ export function createAdminCompanyRouter({ service, logger = console }) {
   }
 
   router.get("/companies/:id", handle((req, actor) => service.getCompanyDetail(req.params.id, actor)));
+  if (provisioningHealth) {
+    router.get("/companies/:id/provisioning-health", handle((req, actor) => provisioningHealth.getHealth(req.params.id, actor)));
+    router.post("/companies/:id/provisioning-repair", confirm, requireReason,
+      handle((req, actor) => provisioningHealth.repair(req.params.id, actor, req.actionReason)));
+  }
   for (const action of ["suspend", "reactivate"]) {
     router.post(`/companies/:id/${action}`, confirm, requireReason,
       handle((req, actor) => service.changeAccess(req.params.id, action, actor, req.actionReason)));

@@ -5,6 +5,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Button } from "../ui/button.jsx";
 import { Badge } from "../ui/badge.jsx";
 import { elevenLabsDashboardUrl, money, requestAdminJson, stripeLabel } from "../../utils/admin-company.js";
+import ProvisioningHealthPanel from "./ProvisioningHealthPanel.jsx";
 
 const API = import.meta.env.VITE_API_URL || "";
 const ACTIONS = {
@@ -135,7 +136,7 @@ export default function CompanyDetailSheet({ company, token, onClose, onChanged,
               {!phones.length && data.telephony.legacy_phone?.phone_number && <p className="text-xs text-brand-orange">Ancienne configuration Twilio : {data.telephony.legacy_phone.phone_number}. Rattachement à contrôler.</p>}
               {agentIds.map(id => <div key={id} className="flex flex-wrap items-center gap-2 text-xs"><span className="break-all font-mono text-text-secondary">Agent : {id}</span>{elevenLabsDashboardUrl(id) && <a className="inline-flex items-center gap-1 text-brand" href={elevenLabsDashboardUrl(id)} target="_blank" rel="noopener noreferrer">Dashboard ElevenLabs <ExternalLink size={11} /></a>}</div>)}
               {!agentIds.length && <p className="text-xs text-brand-orange">Aucun agent ElevenLabs enregistré.</p>}
-              <p className="text-xs text-text-tertiary">Ressources enregistrées dans VoiceDesk. Leur présence chez les fournisseurs n’est pas contrôlée par cette vue.</p>
+              <ProvisioningHealthPanel companyId={company.id} token={token} disabled={busy} onBusy={setBusy} onChanged={() => { onChanged(); void load(); }} />
             </Panel>
             <Panel title="Consommation du mois">
               <p className="text-xs text-text-tertiary">Mois civil en UTC · minutes mesurées sur les appels enregistrés</p>

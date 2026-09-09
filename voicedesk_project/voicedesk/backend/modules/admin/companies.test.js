@@ -132,6 +132,16 @@ test("missing costs and unavailable Stripe are explicit, never a fabricated zero
   assert.equal(detail.usage.cost_state, "not_available");
 });
 
+test("provisioning repair authorization reuses payment verification without changing protected business data", async () => {
+  const db = database(); const service = createService(db);
+  await service.authorizeProvisioningRepair(A);
+  assert.equal(db.queries.some(query => query.action !== "select"), false);
+  db.tables.companies[0].status = "suspended";
+  await assert.rejects(service.authorizeProvisioningRepair(A), { code: "company_access_inactive" });
+  db.tables.companies[0].status = "active";
+  await assert.rejects(createService(db, { stripe: null }).authorizeProvisioningRepair(A), { code: "stripe_verification_required" });
+});
+
 test("a Stripe subscription owned by another customer cannot authorize reactivation", async () => {
   const db = database(); db.tables.companies[0].status = "suspended";
   const service = createService(db, { stripe: { subscriptions: { retrieve: async () => ({ id: "sub_alpha", customer: "cus_foreign", status: "active" }) } } });

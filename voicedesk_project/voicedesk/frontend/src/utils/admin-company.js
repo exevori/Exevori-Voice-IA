@@ -15,6 +15,11 @@ const ERRORS = {
   welcome_email_send_failed: "Le courriel n’a pas été confirmé par le service d’envoi. Réessayez avec la même demande.",
   provisioning_in_progress: "Une tentative de provisioning est déjà en cours. Actualisez dans quelques instants.",
   provisioning_resync_failed: "La relance du provisioning a échoué. Consultez l’état de configuration.",
+  provisioning_repair_blocked: "Réparation automatique impossible : les ressources doivent être vérifiées manuellement.",
+  provisioning_changed_retry: "Les ressources ont changé. Relancez le diagnostic.",
+  provisioning_lock_lost: "Une autre tentative a repris le provisionnement. Aucune autre modification ne sera lancée.",
+  provisioning_repair_unconfirmed: "La réponse du fournisseur ne confirme pas la réparation ; son résultat peut être partiel.",
+  provisioning_database_unavailable: "La base de données ne permet pas de confirmer cette opération.",
   assistant_config_required: "La configuration de l’assistante est requise.",
   admin_audit_failed: "Le journal d’audit est indisponible. L’action n’a pas été lancée.",
 };

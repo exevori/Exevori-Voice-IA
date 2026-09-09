@@ -257,5 +257,11 @@ export function createAdminCompanyService({
     return { success: true, reused_existing: result.existing === true, warning };
   }
 
-  return { getCompanyDetail, changeAccess, impersonate, resendWelcome, resyncProvisioning };
+  async function authorizeProvisioningRepair(companyId) {
+    const company = await companyById(companyId);
+    if (!["active", "trial"].includes(company.status)) throw adminError("company_access_inactive", 409);
+    await eligiblePayment(companyId);
+  }
+
+  return { getCompanyDetail, changeAccess, impersonate, resendWelcome, resyncProvisioning, authorizeProvisioningRepair };
 }

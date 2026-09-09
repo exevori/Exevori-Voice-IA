@@ -16,6 +16,9 @@ import { createAdminCompanyService, monthlySubscriptionAmount } from "./companyS
 import { createProviderProbes } from "./providerProbes.js";
 import { createProviderStore } from "./providerStore.js";
 import { createProviderMonitor, createProviderAlertSender, createProviderMonitorRouter } from "./providerMonitor.js";
+import { createProvisioningHealthService } from "./provisioningHealth.js";
+import { createProvisioningStore } from "./provisioningStore.js";
+import { createProvisioningProviders } from "./provisioningProviders.js";
 
 dotenv.config();
 
@@ -52,7 +55,11 @@ router.use((req, res, next) => {
   if (req.user.role !== "super_admin") return res.status(403).json({ error: "forbidden" });
   return next();
 });
-router.use(createAdminCompanyRouter({ service: companyService }));
+const provisioningHealth = createProvisioningHealthService({
+  store: createProvisioningStore(supabase), providers: createProvisioningProviders(),
+  authorizeRepair: companyId => companyService.authorizeProvisioningRepair(companyId),
+});
+router.use(createAdminCompanyRouter({ service: companyService, provisioningHealth }));
 router.use(createProviderMonitorRouter(providerMonitor));
 
 // ─────────────────────────────────────────────────────────────
