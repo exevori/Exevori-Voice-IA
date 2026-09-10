@@ -8,7 +8,7 @@ import { Outlet, NavLink, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   LayoutDashboard, Phone, Calendar, Users, BookOpen, CreditCard,
-  Settings, LifeBuoy, Brain, LogOut,
+  Settings, LifeBuoy, Brain, LogOut, ScrollText,
 } from "lucide-react";
 import LanguageSwitcher from "../common/LanguageSwitcher.jsx";
 import NotificationBell from "../common/NotificationBell.jsx";
@@ -30,14 +30,15 @@ const NAV_ITEMS = [
 const ADMIN_NAV_ITEMS = [
   { path: "/admin",         icon: Brain, key: "admin_dashboard" },
   { path: "/admin/clients", icon: Users, key: "admin_clients" },
+  { path: "/admin/audit", icon: ScrollText, key: "admin_audit", label: "Journal d’audit" },
 ];
 
 export default function Layout() {
   const { t } = useTranslation();
-  const { profile, impersonatedCompany, signOut } = useAuth();
+  const { profile, adminProfile, impersonatedCompany, signOut } = useAuth();
   const navigate = useNavigate();
 
-  const isSuperAdmin = profile?.role === "super_admin";
+  const isSuperAdmin = adminProfile?.role === "super_admin";
   const isImpersonating = isSuperAdmin && !!impersonatedCompany;
   // En impersonation : afficher la nav PME ; sinon, nav admin pour super_admin
   const navItems = isImpersonating ? NAV_ITEMS : (isSuperAdmin ? ADMIN_NAV_ITEMS : NAV_ITEMS);
@@ -96,7 +97,7 @@ export default function Layout() {
                 }
               >
                 <item.icon size={16} />
-                <span>{t(`navigation.${item.key}`, item.key)}</span>
+                <span>{t(`navigation.${item.key}`, item.label || item.key)}</span>
               </NavLink>
             ))}
         </nav>

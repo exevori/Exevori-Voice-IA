@@ -1,4 +1,10 @@
 const ERRORS = {
+  admin_audit_unavailable: "Le journal d’audit est indisponible. L’action n’a pas été lancée.",
+  impersonation_expired: "Cette vue client a expiré ou a été remplacée. Revenez à l’administration.",
+  impersonation_forbidden: "Cette session de vue client n’appartient pas à votre compte.",
+  impersonation_company_mismatch: "Cette action ne concerne pas l’entreprise de la vue client.",
+  invalid_audit_date: "Vérifiez les dates du filtre.",
+  invalid_audit_filter: "Le filtre d’audit est invalide.",
   forbidden: "Cette action est réservée à l’équipe Exevori.",
   company_not_found: "Cette entreprise est introuvable.",
   company_confirmation_required: "Confirmez l’entreprise concernée.",

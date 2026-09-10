@@ -246,7 +246,14 @@ export async function runPrivacyRetentionCycle({
       providerBatches + 1 >= safeMaxProviderBatches;
   }
 
+  const {data: adminSessionCount, error: adminSessionError} = await storage.rpc(
+    "purge_expired_admin_impersonations", {p_limit:safeBatchSize}
+  );
+  if (adminSessionError) throw adminSessionError;
+  const adminSessionsDeleted = Number(adminSessionCount) || 0;
+
   const backlogPossible =
+    adminSessionsDeleted >= safeBatchSize ||
     purgeBacklogPossible ||
     outboundQueueMetadata.backlog_possible ||
     postCallJobs.backlog_possible ||
@@ -261,6 +268,7 @@ export async function runPrivacyRetentionCycle({
     },
     outbound_queue_metadata: outboundQueueMetadata,
     post_call_jobs: postCallJobs,
+    admin_impersonation_sessions: {deleted:adminSessionsDeleted,backlog_possible:adminSessionsDeleted >= safeBatchSize},
     external_deletions: {
       ...providerTotals,
       batches: providerBatches,
@@ -283,6 +291,7 @@ async function runScheduledCycle(options) {
       purge: result.purge,
       outbound_queue_metadata: result.outbound_queue_metadata,
       post_call_jobs: result.post_call_jobs,
+      admin_impersonation_sessions: result.admin_impersonation_sessions,
       external_deletions: result.external_deletions,
     });
     return result;

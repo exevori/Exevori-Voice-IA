@@ -64,7 +64,7 @@ function applicationUrl(value) {
 
 export function createAdminCompanyService({
   supabase, stripe = null, resend = null, provisionClient = null,
-  clearCompanyCache = async () => {}, now = () => new Date(),
+  clearCompanyCache = async () => {}, now = () => new Date(), startImpersonation = null,
   frontendUrl = process.env.FRONTEND_URL, emailFrom = process.env.EMAIL_FROM,
   logger = console,
 }) {
@@ -210,8 +210,8 @@ export function createAdminCompanyService({
 
   async function impersonate(companyId, actor, reason) {
     const company = await companyById(companyId);
-    await audit(companyId, actor, "admin_impersonation_started", { reason });
-    return { success: true, company: pick(company, "id,name,city,assistant_name") };
+    if (!startImpersonation) throw adminError("admin_audit_unavailable");
+    return startImpersonation(pick(company, "id,name,city,assistant_name"), actor, reason);
   }
 
   async function resendWelcome(companyId, actor) {

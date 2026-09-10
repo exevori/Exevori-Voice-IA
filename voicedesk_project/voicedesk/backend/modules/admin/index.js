@@ -19,6 +19,7 @@ import { createProviderMonitor, createProviderAlertSender, createProviderMonitor
 import { createProvisioningHealthService } from "./provisioningHealth.js";
 import { createProvisioningStore } from "./provisioningStore.js";
 import { createProvisioningProviders } from "./provisioningProviders.js";
+import { createAdminAuditService, createAdminAuditRouter } from "./audit.js";
 
 dotenv.config();
 
@@ -28,6 +29,7 @@ const supabase = createClient(
 );
 
 const router = express.Router();
+const adminAuditService = createAdminAuditService({supabase});
 export const providerMonitor = createProviderMonitor({
   store: createProviderStore(supabase),
   probes: createProviderProbes(),
@@ -35,6 +37,7 @@ export const providerMonitor = createProviderMonitor({
 });
 const companyService = createAdminCompanyService({
   supabase,
+  startImpersonation: (company,actor,reason) => adminAuditService.start(company,actor,reason),
   stripe: process.env.STRIPE_SECRET_KEY
     ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-12-18", timeout: 8000, maxNetworkRetries: 0 })
     : null,
@@ -61,6 +64,7 @@ const provisioningHealth = createProvisioningHealthService({
 });
 router.use(createAdminCompanyRouter({ service: companyService, provisioningHealth }));
 router.use(createProviderMonitorRouter(providerMonitor));
+router.use(createAdminAuditRouter(adminAuditService));
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/v1/admin/companies

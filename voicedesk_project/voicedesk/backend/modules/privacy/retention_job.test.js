@@ -31,6 +31,7 @@ test("runPrivacyRetentionCycle drains full local and provider batches", async ()
   const client = {
     async rpc(name, args) {
       calls.push(["rpc", name, args]);
+      if (name === "purge_expired_admin_impersonations") return {data:3,error:null};
       if (name === "purge_expired_outbound_queue_metadata") {
         outboundPurgeCall += 1;
         return {
@@ -104,6 +105,7 @@ test("runPrivacyRetentionCycle drains full local and provider batches", async ()
     }],
     ["providers", 7, true],
     ["providers", 7, true],
+    ["rpc", "purge_expired_admin_impersonations", {p_limit:500}],
   ]);
   assert.equal(result.purge.calls_deleted, 502);
   assert.equal(result.purge.call_recording_transcripts_cleared, 502);
@@ -116,6 +118,7 @@ test("runPrivacyRetentionCycle drains full local and provider batches", async ()
   assert.equal(result.post_call_jobs.batches, 2);
   assert.equal(result.post_call_jobs.backlog_possible, false);
   assert.equal(result.external_deletions.completed, 8);
+  assert.deepEqual(result.admin_impersonation_sessions,{deleted:3,backlog_possible:false});
   assert.equal(result.external_deletions.batches, 2);
   assert.equal(result.backlog_possible, false);
 });

@@ -21,6 +21,7 @@ import Knowledge from "./pages/Knowledge.jsx";
 import Reports from "./pages/Reports.jsx";
 import Settings from "./pages/Settings.jsx";
 import Admin from "./pages/Admin.jsx";
+import AdminAudit from "./pages/AdminAudit.jsx";
 import Outbound from "./pages/Outbound.jsx";
 import CalendarPage from "./pages/Calendar.jsx";
 import Tickets from "./pages/Tickets.jsx";
@@ -70,6 +71,7 @@ function App() {
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="admin" element={<AdminRoute><Admin /></AdminRoute>} />
             <Route path="admin/clients" element={<AdminRoute><Admin /></AdminRoute>} />
+            <Route path="admin/audit" element={<AdminRoute><AdminAudit /></AdminRoute>} />
             <Route path="crm" element={<Contacts />} />
             <Route path="contacts" element={<Contacts />} />
             <Route path="calls" element={<Calls />} />

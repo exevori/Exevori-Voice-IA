@@ -67,14 +67,15 @@ export default function CompanyDetailSheet({ company, token, onClose, onChanged,
     if (busy) return;
     setBusy(true); setError(null); setNotice(null);
     try {
+      if (action === "impersonate") {
+        await onImpersonate(company, reason.trim(), requestId);
+        onClose(); navigate("/dashboard");
+        return;
+      }
       const result = await requestAdminJson(`${API}/api/v1/admin/companies/${company.id}/${action}`, {
         token, method: "POST", headers: { "X-Request-Id": requestId },
         body: JSON.stringify({ confirm_company_id: company.id, reason: reason.trim() }),
       });
-      if (action === "impersonate") {
-        onImpersonate(result.company); onClose(); navigate("/dashboard");
-        return;
-      }
       const message = action === "resend-welcome"
         ? `Courriel accepté pour envoi à ${result.recipient}.`
         : action === "resync-provisioning" && result.reused_existing

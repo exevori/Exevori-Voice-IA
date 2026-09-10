@@ -16,6 +16,8 @@
 
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import { createAdminAuditService } from "../modules/admin/audit.js";
+import { createAdminAuditMiddleware } from "./adminAudit.js";
 
 dotenv.config();
 
@@ -23,6 +25,7 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+const adminAudit = createAdminAuditMiddleware({ service:createAdminAuditService({supabase}) });
 
 // Cache simple des profiles (TTL 60s) pour éviter de hammer la DB
 const profileCache = new Map();
@@ -66,7 +69,7 @@ export async function requireAuth(req, res, next) {
     }
 
     // Charger le profile (avec cache)
-    let profile = getCachedProfile(user.id);
+    let profile = req.get("X-Impersonation-Session") ? null : getCachedProfile(user.id);
 
     if (!profile) {
       const { data, error: profileError } = await supabase
@@ -113,7 +116,7 @@ export async function requireAuth(req, res, next) {
       profile,
     };
 
-    next();
+    return await adminAudit(req, res, next);
   } catch (err) {
     console.error("[AUTH MIDDLEWARE]", err);
     return res.status(500).json({ error: "auth_error", message: "Erreur d'authentification" });

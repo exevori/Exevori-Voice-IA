@@ -6,6 +6,9 @@
 import React, { useEffect, useState } from "react";
 import { Building2, Eye, X, ChevronDown } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext.jsx";
+import { requestAdminJson } from "../../utils/admin-company.js";
+import { Button } from "../ui/button.jsx";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "../ui/sheet.jsx";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -16,31 +19,43 @@ import {
 } from "../ui/dropdown-menu.jsx";
 
 export default function ImpersonationSwitcher() {
-  const { token, impersonatedCompany, impersonateCompany } = useAuth();
+  const { token, impersonatedCompany, impersonateCompany, impersonationSession, impersonationError } = useAuth();
   const [companies, setCompanies] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [selected,setSelected] = useState(null);
+  const [reason,setReason] = useState("");
+  const [requestId,setRequestId] = useState(null);
+  const [busy,setBusy] = useState(false);
+  const [error,setError] = useState("");
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || impersonatedCompany) return;
+    const controller = new AbortController();
     setLoading(true);
-    fetch("/api/v1/admin/companies", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => r.json())
+    requestAdminJson(`${import.meta.env.VITE_API_URL || ""}/api/v1/admin/companies`,{token,signal:controller.signal})
       .then((d) => setCompanies(d.companies || []))
-      .catch(() => setCompanies([]))
-      .finally(() => setLoading(false));
-  }, [token]);
+      .catch(err => { if (!controller.signal.aborted) setError(err.message); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [token,impersonatedCompany]);
 
   const handleSelect = (c) => {
-    impersonateCompany(c);
-    // soft reload pour rafraîchir les data du dashboard
-    window.location.href = "/dashboard";
+    setSelected(c); setReason(""); setError(""); setRequestId(crypto.randomUUID());
   };
 
-  const handleExit = () => {
-    impersonateCompany(null);
-    window.location.href = "/admin";
+  const handleExit = async () => {
+    setBusy(true); setError("");
+    try { await impersonateCompany(null); window.location.href = "/admin"; }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  };
+  const confirm = async event => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true); setError("");
+    try { await impersonateCompany(selected,reason.trim(),requestId); window.location.href = "/dashboard"; }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
   };
 
   if (impersonatedCompany) {
@@ -52,10 +67,13 @@ export default function ImpersonationSwitcher() {
         <Eye size={14} className="text-brand-purple" />
         <span className="text-text-secondary">Vue PME :</span>
         <span className="font-medium text-text-primary">{impersonatedCompany.name}</span>
+        <span className="text-text-tertiary">jusqu’à {new Date(impersonationSession.expires_at).toLocaleTimeString("fr-CA",{hour:"2-digit",minute:"2-digit"})}</span>
+        {(error || impersonationError) && <span role="alert" className="text-brand-red">{error || impersonationError}</span>}
         <button
           onClick={handleExit}
+          disabled={busy}
           className="ml-1 rounded p-0.5 text-text-tertiary hover:text-text-primary hover:bg-white/5 transition-colors"
-          title="Quitter le mode démo"
+          title="Terminer la vue client et enregistrer sa fin"
           data-testid="impersonation-exit"
         >
           <X size={14} />
@@ -65,7 +83,7 @@ export default function ImpersonationSwitcher() {
   }
 
   return (
-    <DropdownMenu>
+    <><DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           data-testid="impersonation-trigger"
@@ -77,7 +95,8 @@ export default function ImpersonationSwitcher() {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-72">
-        <DropdownMenuLabel>PMEs démo</DropdownMenuLabel>
+        <DropdownMenuLabel>Vue client auditée — 30 minutes</DropdownMenuLabel>
+        {error && <p role="alert" className="p-3 text-xs text-brand-red">{error}</p>}
         <DropdownMenuSeparator />
         {loading && (
           <div className="px-3 py-2 text-xs text-text-tertiary">Chargement…</div>
@@ -104,5 +123,20 @@ export default function ImpersonationSwitcher() {
           ))}
       </DropdownMenuContent>
     </DropdownMenu>
+    <Sheet open={!!selected} onOpenChange={open=>{if(!open && !busy)setSelected(null);}}>
+      <SheetContent>
+        <SheetHeader><SheetTitle>Ouvrir la vue de {selected?.name}</SheetTitle>
+          <SheetDescription>Le début, la fin et les actions sont journalisés sous votre identité administrateur. L’accès est limité à cette entreprise.</SheetDescription>
+        </SheetHeader>
+        <form onSubmit={confirm} className="space-y-4 p-6">
+          <label className="block text-sm text-text-primary">Motif de l’accès
+            <textarea required minLength={3} maxLength={500} value={reason} onChange={e=>setReason(e.target.value)} className="mt-2 w-full rounded border border-border bg-bg-input p-3" />
+          </label>
+          <p className="text-xs text-text-secondary">N’inscrivez aucun secret ni renseignement personnel dans le motif.</p>
+          {error && <p role="alert" className="text-brand-red">{error}</p>}
+          <Button disabled={busy || reason.trim().length < 3} type="submit">{busy ? "Ouverture…" : "Confirmer la vue client"}</Button>
+        </form>
+      </SheetContent>
+    </Sheet></>
   );
 }

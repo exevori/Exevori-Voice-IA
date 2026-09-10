@@ -236,15 +236,21 @@ test("provisioning busy and suspended access block the admin relaunch", async ()
 
 test("HTTP actions require confirmation and record the authenticated admin, ignoring spoofed actor", async () => {
   const db = database();
+  const starts = [];
   const headers = { "x-role": "super_admin", "content-type": "application/json", "X-Request-Id": REQUEST };
-  await withServer(createService(db), async url => {
+  await withServer(createService(db,{startImpersonation:async (company,actor,reason) => {
+    starts.push({company,actor,reason}); return {success:true,company,session:{id:REQUEST}};
+  }}), async url => {
     assert.equal((await fetch(`${url}/companies/${A}/suspend`, { method: "POST", headers, body: JSON.stringify({ reason: "Support" }) })).status, 400);
     const result = await fetch(`${url}/companies/${A}/impersonate`, { method: "POST", headers, body: JSON.stringify({ confirm_company_id: A, reason: "Diagnostic", actor_id: B }) });
     assert.equal(result.status, 200);
     assert.equal(result.headers.get("cache-control"), "no-store");
     assert.equal((await result.json()).company.id, A);
   });
-  assert.equal(db.tables.audit_log[0].actor_user_id, ADMIN);
+  assert.equal(starts[0].actor.id, ADMIN);
+  assert.equal(starts[0].actor.requestId, REQUEST);
+  assert.equal(starts[0].company.id, A);
+  assert.equal(starts[0].reason,"Diagnostic");
 });
 
 test("database failure cannot produce a successful empty company detail or expose SQL errors", async () => {

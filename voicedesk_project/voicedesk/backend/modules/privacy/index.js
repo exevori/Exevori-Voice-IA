@@ -946,7 +946,7 @@ export function createPrivacyRouter({
       await writeAuditLog(supabase, {
         companyId,
         actorUserId: req.user.id,
-        actorRole: req.user.role,
+        actorRole: req.auditActor?.role || req.user.role,
         action: "privacy_data_exported",
         entityType: exported.targetType,
         entityId: contactId,
@@ -1026,7 +1026,7 @@ export function createPrivacyRouter({
         p_company_id: companyId,
         p_contact_id: contactId,
         p_actor_user_id: req.user.id,
-        p_actor_role: req.user.role,
+        p_actor_role: req.auditActor?.role || req.user.role,
         p_reason: sanitizeReason(reason),
         p_request_id: requestId,
       });
