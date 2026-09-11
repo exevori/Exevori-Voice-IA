@@ -6,7 +6,7 @@ import React, { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
+const API = import.meta.env.VITE_API_URL || "";
 
 export default function InviteAccept() {
   const { t } = useTranslation();
@@ -17,6 +17,7 @@ export default function InviteAccept() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -41,8 +42,8 @@ export default function InviteAccept() {
       setError(t("auth.invite.passwordMismatch"));
       return;
     }
-    if (password.length < 8) {
-      setError(t("auth.invite.minChars"));
+    if (password.length < 12 || !fullName.trim()) {
+      setError("Nom requis et mot de passe d’au moins 12 caractères.");
       return;
     }
 
@@ -53,11 +54,11 @@ export default function InviteAccept() {
       const res = await fetch(`${API}/api/v1/auth/invite/accept`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, password }),
+        body: JSON.stringify({ token, password, full_name:fullName.trim() }),
       });
       const data = await res.json();
 
-      if (data.success) {
+      if (res.ok && data.success) {
         // Redirection vers login
         navigate("/login?invitation=accepted");
       } else {
@@ -106,6 +107,7 @@ export default function InviteAccept() {
         </div>
 
         <form onSubmit={handleSubmit} className="auth-form">
+          <label>Votre nom<input value={fullName} onChange={e=>setFullName(e.target.value)} required maxLength={120} autoComplete="name" /></label>
           <div className="form-group">
             <label>{t("auth.invite.createPassword")}</label>
             <input
@@ -113,10 +115,11 @@ export default function InviteAccept() {
               value={password}
               onChange={e => setPassword(e.target.value)}
               required
-              minLength={8}
-              autoFocus
+              minLength={12}
+              maxLength={128}
+              autoComplete="new-password"
             />
-            <small>{t("auth.invite.minChars")}</small>
+            <small>Au moins 12 caractères.</small>
           </div>
 
           <div className="form-group">

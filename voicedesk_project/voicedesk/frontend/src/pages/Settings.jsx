@@ -12,7 +12,7 @@
 //   7. Notifications    (COMING SOON — Phase 6E)
 // ============================================================
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import {
@@ -23,7 +23,8 @@ import { useAuth } from "../contexts/AuthContext.jsx";
 import { Badge } from "../components/ui/badge.jsx";
 import { Button } from "../components/ui/button.jsx";
 import { Input } from "../components/ui/input.jsx";
-import EmailAccountsTab from "../components/settings/EmailAccountsTab.jsx";
+import {ProfileSettings,SecuritySettings,CompanyPreferences,TeamSettings} from "../components/settings/AccountSettings.jsx";
+import {settingsTab,assistantPatch} from "../utils/account-settings.js";
 import TelephonyTab from "../components/settings/TelephonyTab.jsx";
 import NotificationsTab from "../components/settings/NotificationsTab.jsx";
 import { cn } from "../lib/utils.js";
@@ -31,22 +32,27 @@ import { cn } from "../lib/utils.js";
 const API = import.meta.env.VITE_API_URL || "";
 
 const TABS = [
-  { key: "assistant",  icon: Bot,      labelKey: "settings.tabs.assistant",  fallback: "Assistant Léa", phase: null },
-  { key: "company",    icon: Building2, labelKey: "settings.tabs.company",   fallback: "Entreprise",    phase: null },
-  { key: "team",       icon: Users,    labelKey: "settings.tabs.team",       fallback: "Équipe",        phase: null },
-  { key: "email-accounts", icon: Mail,     labelKey: "settings.tabs.emails",  fallback: "Comptes courriel", phase: null },
-  { key: "calendar",   icon: Calendar, labelKey: "settings.tabs.calendar",   fallback: "Calendrier",    phase: "6C" },
-  { key: "telephony",  icon: Phone,    labelKey: "settings.tabs.telephony",  fallback: "Téléphonie",    phase: null },
-  { key: "notifications", icon: Bell,  labelKey: "settings.tabs.notifications", fallback: "Notifications", phase: null },
+  {key:"profile",icon:Users,labelKey:"settings.tabs.profile",fallback:"Mon profil"},
+  {key:"security",icon:ShieldCheck,labelKey:"settings.tabs.security",fallback:"Sécurité"},
+  {key:"assistant",icon:Bot,labelKey:"settings.tabs.assistant",fallback:"Assistante"},
+  {key:"company",icon:Building2,labelKey:"settings.tabs.company",fallback:"Entreprise"},
+  {key:"team",icon:Users,labelKey:"settings.tabs.team",fallback:"Équipe"},
+  {key:"integrations",icon:Calendar,labelKey:"settings.tabs.integrations",fallback:"Intégrations"},
+  {key:"privacy",icon:ShieldCheck,labelKey:"settings.tabs.privacy",fallback:"Confidentialité"},
+  {key:"telephony",icon:Phone,labelKey:"settings.tabs.telephony",fallback:"Téléphonie"},
+  {key:"notifications",icon:Bell,labelKey:"settings.tabs.notifications",fallback:"Notifications"},
 ];
 
 export default function Settings() {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [active, setActive] = useState(searchParams.get("tab") || "assistant");
+  const {token,effectiveCompanyId,profile}=useAuth();
+  const active=settingsTab(searchParams.get("tab"));
+  const canManage=["company_admin","super_admin"].includes(profile?.role);
+  const requestedCompany=searchParams.get("company_id");
+  const teamCompanyId=profile?.role === "super_admin" && /^[0-9a-f-]{36}$/i.test(requestedCompany || "") ? requestedCompany : effectiveCompanyId;
 
   const goTab = (k) => {
-    setActive(k);
     setSearchParams({ tab: k }, { replace: true });
   };
 
@@ -98,12 +104,14 @@ export default function Settings() {
         </nav>
 
         {/* Tab content */}
-        <div className="space-y-4">
-          {active === "assistant"        && <AssistantTab />}
-          {active === "company"          && <CompanyTab />}
-          {active === "team"             && <TeamTab />}
-          {active === "email-accounts"   && <EmailAccountsTab />}
-          {active === "calendar"         && <ComingSoonTab phase="6C" labelKey="settings.tabs.calendar" fallback="Calendrier" desc="Liez Google Calendar ou Outlook Calendar pour permettre à Léa de prendre des RDV." />}
+        <div className="space-y-4" key={active+":"+effectiveCompanyId+":"+token}>
+          {active === "profile" && <ProfileSettings/>}
+          {active === "security" && <SecuritySettings/>}
+          {active === "privacy" && <CompanyPreferences/>}
+          {active === "integrations" && <CompanyPreferences integration/>}
+          {active === "assistant"        && <fieldset disabled={!canManage}><AssistantTab /></fieldset>}
+          {active === "company"          && <fieldset disabled={!canManage}><CompanyTab /></fieldset>}
+          {active === "team"             && <TeamSettings companyId={teamCompanyId} />}
           {active === "telephony"        && <TelephonyTab />}
           {active === "notifications"    && <NotificationsTab />}
         </div>
@@ -130,9 +138,9 @@ function AssistantTab() {
     fetch(`${API}/api/v1/config?company_id=${effectiveCompanyId}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((r) => r.json())
+      .then(async(r) => {const d=await r.json();if(!r.ok)throw new Error("Configuration indisponible.");return d;})
       .then((d) => { setData(d); setForm(d.config || {}); })
-      .catch(() => {})
+      .catch(e => setFeedback({type:"error",msg:e.message}))
       .finally(() => setLoading(false));
   }, [token, effectiveCompanyId]);
 
@@ -144,12 +152,17 @@ function AssistantTab() {
       const r = await fetch(`${API}/api/v1/config`, {
         method: "PATCH",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ company_id: effectiveCompanyId, ...form }),
+        body: JSON.stringify({ company_id: effectiveCompanyId, ...assistantPatch(form) }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      if (!r.ok) throw new Error(d.error === "settings_busy_or_missing"
+        ? "Configuration en cours de synchronisation ou absente. Réessayez après deux minutes."
+        : "Configuration non enregistrée. Vérifiez les champs et réessayez.");
       setData((prev) => ({ ...prev, config: d.config }));
-      setFeedback({ type: "success", msg: t("settings.assistant.saved", "Modifications enregistrées") });
+      setForm(d.config);
+      setFeedback(d.sync_status === "failed"
+        ? {type:"error",msg:"Configuration enregistrée, mais synchronisation ElevenLabs non confirmée. Réenregistrez pour réessayer."}
+        : {type:"success",msg:d.sync_status === "not_provisioned" ? "Configuration enregistrée. Elle sera appliquée lors de l’activation de votre assistante." : "Configuration enregistrée et agent synchronisé."});
     } catch (e) {
       setFeedback({ type: "error", msg: e.message });
     } finally {
@@ -162,6 +175,7 @@ function AssistantTab() {
   if (!data.config) {
     return (
       <Card>
+        {feedback && <Feedback feedback={feedback}/>}
         <EmptyState
           icon={Bot}
           title={t("settings.assistant.noConfig", "Configuration Léa non initialisée")}
@@ -174,6 +188,7 @@ function AssistantTab() {
   return (
     <>
       <Card testId="assistant-tab">
+        {["failed","in_progress"].includes(data.config.settings_sync_status) && <p role="alert" className="text-sm text-amber-300">Synchronisation de la voix : {data.config.settings_sync_status === "in_progress" ? "en cours ; réessayez après deux minutes si elle reste bloquée." : "à relancer en enregistrant à nouveau."}</p>}
         <SectionTitle icon={Bot} title={t("settings.assistant.identity", "Identité")} />
         <Grid cols={2}>
           <Field label={t("settings.assistant.name", "Nom de l'assistante")}>
@@ -227,6 +242,11 @@ function AssistantTab() {
         </Field>
       </Card>
 
+      <Card>
+        <Field label="Seuil de pertinence des connaissances (0 à 1)" hint="Ce seuil filtre les passages du RAG. Ce n’est pas une probabilité de vérité : une valeur élevée réduit les réponses disponibles.">
+          <Input type="number" min={0} max={1} step={0.05} value={form.rag_min_similarity ?? 0.25} onChange={e=>update("rag_min_similarity",Number(e.target.value))}/>
+        </Field>
+      </Card>
       <SaveBar feedback={feedback} saving={saving} onSave={save} testId="assistant-save" />
     </>
   );
@@ -249,8 +269,9 @@ function CompanyTab() {
     fetch(`${API}/api/v1/company?company_id=${effectiveCompanyId}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((r) => r.json())
+      .then(async(r) => {const d=await r.json();if(!r.ok)throw new Error("Entreprise indisponible.");return d;})
       .then((d) => setForm(d.company || {}))
+      .catch(e=>setFeedback({type:"error",msg:e.message}))
       .finally(() => setLoading(false));
   }, [token, effectiveCompanyId]);
 
@@ -277,7 +298,7 @@ function CompanyTab() {
   };
 
   if (loading) return <LoadingCard testId="company-loading" />;
-  if (!form) return null;
+  if (!form) return <Card>{feedback && <Feedback feedback={feedback}/>}</Card>;
 
   return (
     <>
@@ -327,201 +348,6 @@ function CompanyTab() {
 
 // ════════════════════════════════════════════════════════════
 //  TAB 3 — ÉQUIPE
-// ════════════════════════════════════════════════════════════
-function TeamTab() {
-  const { t } = useTranslation();
-  const { token, effectiveCompanyId, profile } = useAuth();
-  const [data, setData] = useState({ members: [], invitations: [] });
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState(null);
-
-  // Invite form
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("company_member");
-
-  const fetchTeam = () => {
-    if (!token || !effectiveCompanyId) return;
-    setLoading(true);
-    fetch(`${API}/api/v1/team?company_id=${effectiveCompanyId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => r.json())
-      .then(setData)
-      .finally(() => setLoading(false));
-  };
-  useEffect(fetchTeam, [token, effectiveCompanyId]);
-
-  const handleInvite = async () => {
-    if (!inviteEmail.trim()) return;
-    setBusy(true); setFeedback(null);
-    try {
-      const r = await fetch(`${API}/api/v1/team/invitations`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          company_id: effectiveCompanyId,
-          email: inviteEmail.trim().toLowerCase(),
-          role: inviteRole,
-        }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      setInviteEmail("");
-      setFeedback({ type: "success", msg: t("settings.team.invited", "Invitation envoyée à {{email}}", { email: d.invitation?.email || inviteEmail }) });
-      fetchTeam();
-    } catch (e) {
-      setFeedback({ type: "error", msg: e.message });
-    } finally {
-      setBusy(false);
-      setTimeout(() => setFeedback(null), 5000);
-    }
-  };
-
-  const cancelInvite = async (id) => {
-    if (!window.confirm(t("settings.team.cancelConfirm", "Annuler cette invitation ?"))) return;
-    try {
-      const r = await fetch(`${API}/api/v1/team/invitations/${id}/cancel`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      fetchTeam();
-    } catch (e) {
-      setFeedback({ type: "error", msg: e.message });
-    }
-  };
-
-  const canInvite = profile?.role === "company_admin" || profile?.role === "super_admin";
-
-  if (loading) return <LoadingCard testId="team-loading" />;
-
-  return (
-    <>
-      {canInvite && (
-        <Card testId="team-invite-card">
-          <SectionTitle icon={Send} title={t("settings.team.inviteTitle", "Inviter un membre")} />
-          <div className="flex flex-col gap-2 md:flex-row md:items-end">
-            <div className="flex-1">
-              <Field label={t("settings.team.inviteEmail", "Courriel à inviter")}>
-                <Input
-                  type="email"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  placeholder="prenom@entreprise.ca"
-                  data-testid="invite-email-input"
-                  onKeyDown={(e) => { if (e.key === "Enter" && !busy) handleInvite(); }}
-                />
-              </Field>
-            </div>
-            <div className="md:w-44">
-              <Field label={t("settings.team.role", "Rôle")}>
-                <Select value={inviteRole} onChange={setInviteRole} testId="invite-role-select"
-                  options={[
-                    { value: "company_member", label: t("settings.team.member", "Membre") },
-                    { value: "company_admin",  label: t("settings.team.admin",  "Administrateur") },
-                  ]}
-                />
-              </Field>
-            </div>
-            <Button onClick={handleInvite} disabled={!inviteEmail.trim() || busy} data-testid="invite-submit">
-              {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-              {t("settings.team.send", "Envoyer")}
-            </Button>
-          </div>
-        </Card>
-      )}
-
-      <Card testId="team-members-card">
-        <SectionTitle icon={Users} title={t("settings.team.members", "Membres ({{n}})", { n: data.members.length })} />
-        {data.members.length === 0 ? (
-          <EmptyState icon={Users} title={t("settings.team.noMembers", "Aucun membre actif")} desc={t("settings.team.inviteFirst", "Invitez votre premier collaborateur ci-dessus.")} />
-        ) : (
-          <div className="divide-y divide-border" data-testid="team-members-list">
-            {data.members.map((m) => (
-              <div key={m.id} className="flex items-center justify-between gap-3 py-2.5" data-testid={`member-${m.user_id}`}>
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <Avatar name={m.full_name || m.email} />
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-text-primary truncate">{m.full_name || "—"}</div>
-                    <div className="text-[11px] text-text-tertiary truncate">{m.email}</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Badge variant={m.role === "company_admin" || m.role === "super_admin" ? "purple" : "default"} className="text-[10px]">
-                    {m.role === "super_admin" ? "Super Admin" : m.role === "company_admin" ? "Admin" : "Membre"}
-                  </Badge>
-                  <Badge variant={m.status === "active" ? "green" : "ghost"} className="text-[10px]">
-                    {m.status === "active" ? t("settings.team.active", "Actif") : t("settings.team.suspended", "Suspendu")}
-                  </Badge>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {data.invitations.length > 0 && (
-        <Card testId="team-pending-invites">
-          <SectionTitle icon={Send} title={t("settings.team.pending", "Invitations en attente ({{n}})", { n: data.invitations.length })} />
-          <div className="divide-y divide-border">
-            {data.invitations.map((inv) => (
-              <div key={inv.id} className="flex items-center justify-between gap-3 py-2.5" data-testid={`invite-${inv.id}`}>
-                <div className="min-w-0">
-                  <div className="text-sm text-text-primary truncate">{inv.email}</div>
-                  <div className="text-[11px] text-text-tertiary">
-                    {t("settings.team.role", "Rôle")}: {inv.role === "company_admin" ? "Admin" : "Membre"} · {t("settings.team.invitedOn", "Envoyée")} {new Date(inv.created_at).toLocaleDateString("fr-CA")}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={inv.status === "pending" ? "default" : "ghost"} className="text-[10px]">
-                    {inv.status === "pending" ? t("settings.team.invPending", "En attente") : t("settings.team.invExpired", "Expirée")}
-                  </Badge>
-                  {canInvite && (
-                    <button
-                      onClick={() => cancelInvite(inv.id)}
-                      data-testid={`cancel-invite-${inv.id}`}
-                      className="rounded-md p-1.5 text-text-tertiary hover:text-red-300 hover:bg-brand-red/10 transition-colors"
-                      title={t("settings.team.cancel", "Annuler")}
-                    >
-                      <X size={13} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {feedback && <Feedback feedback={feedback} />}
-    </>
-  );
-}
-
-// ════════════════════════════════════════════════════════════
-//  COMING SOON tab generic
-// ════════════════════════════════════════════════════════════
-function ComingSoonTab({ phase, labelKey, fallback, desc }) {
-  const { t } = useTranslation();
-  return (
-    <Card testId={`coming-soon-${phase.toLowerCase()}`}>
-      <div className="flex items-center gap-3 mb-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-purple/15 text-brand-purple">
-          <SettingsIcon size={16} />
-        </div>
-        <div>
-          <h2 className="text-sm font-semibold text-text-primary">{t(labelKey, fallback)}</h2>
-          <Badge variant="purple" className="text-[10px] mt-0.5">{t("settings.comingSoon", "Bientôt — Phase {{p}}", { p: phase })}</Badge>
-        </div>
-      </div>
-      <p className="text-sm text-text-secondary leading-relaxed">{desc}</p>
-    </Card>
-  );
-}
-
-// ════════════════════════════════════════════════════════════
-//  Shared UI primitives
 // ════════════════════════════════════════════════════════════
 function Card({ children, testId }) {
   return <div className="rounded-xl border border-border bg-bg-card/60 backdrop-blur-sm p-5" data-testid={testId}>{children}</div>;

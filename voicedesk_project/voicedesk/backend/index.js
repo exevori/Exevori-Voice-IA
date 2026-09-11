@@ -45,6 +45,7 @@ import {
 import reportsRouter from "./modules/reports/index.js";
 import companyRouter from "./modules/company/index.js";
 import teamRouter from "./modules/team/index.js";
+import accountRouter from "./modules/account/index.js";
 import emailAccountsRouter from "./modules/email-accounts/index.js";
 import twilioConfigRouter from "./modules/twilio-config/index.js";
 import learningRouter from "./modules/learning/index.js";
@@ -273,7 +274,7 @@ app.get(
 );
 
 // ── ROUTES PROTÉGÉES (requireAuth) ──
-app.use("/api/v1/config",         requireAuth, configRouter);
+app.use("/api/v1/config",         requireAuth, enforceTenantOwnership, configRouter);
 app.use("/api/v1/dashboard",      requireAuth, dashboardRouter);
 app.use("/api/v1/contacts",       requireAuth, enforceTenantOwnership, crmRouter);
 app.use("/api/v1/calls",          requireAuth, enforceTenantOwnership, callsRouter);
@@ -282,6 +283,7 @@ app.use("/api/v1/kb",             requireAuth, enforceTenantOwnership, kbRouter)
 app.use("/api/v1/reports",        requireAuth, enforceTenantOwnership, reportsRouter);
 app.use("/api/v1/company",        requireAuth, enforceTenantOwnership, companyRouter);
 app.use("/api/v1/team",           requireAuth, teamRouter);
+app.use("/api/v1/account",        requireAuth, accountRouter);
 app.use("/api/v1/email-accounts", requireAuth, enforceTenantOwnership, emailAccountsRouter);
 app.use("/api/v1/twilio-config",  requireAuth, enforceTenantOwnership, twilioConfigRouter);
 app.use("/api/v1/calendar",       requireAuth, enforceTenantOwnership, calendarRouter);

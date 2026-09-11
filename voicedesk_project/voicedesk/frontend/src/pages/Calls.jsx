@@ -353,7 +353,7 @@ function CallDetailSheet({ callId, open, onClose, token, t, lang, assistantName,
 
               <section>
                 <h4>Enregistrement</h4>
-                <CallRecordingPlayer callId={c.id} token={token} hasExternalId={!!c.external_id} />
+                <CallRecordingPlayer callId={c.id} token={token} hasExternalId={!!(c.elevenlabs_conversation_id || c.external_id)} />
               </section>
 
               {/* Transcript */}

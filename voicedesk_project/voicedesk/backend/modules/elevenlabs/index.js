@@ -30,6 +30,7 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import { supabase } from "../voice/lifecycle.js";
 import { searchSimilarChunks } from "../kb/rag.js";
+import { assistantIdentity } from "../config/identity.js";
 import { streamChat } from "../voice/llm.js";
 import { resolveInboundPolicy } from "../voice/inboundPolicy.js";
 import {
@@ -278,14 +279,14 @@ const llmHandler = async (req, res) => {
   // 2. Config assistante
   const { data: cfg } = await supabase
     .from("assistant_configs")
-    .select("assistant_name, system_prompt_voice_fr, system_prompt_fr")
+    .select("assistant_name, tone, system_prompt_voice_fr, system_prompt_fr, rag_min_similarity")
     .eq("company_id", companyId)
     .maybeSingle();
 
   const assistantName = cfg?.assistant_name || "Léa";
   let systemPrompt = cfg?.system_prompt_voice_fr || cfg?.system_prompt_fr
     || `Tu es ${assistantName}, assistante vocale d'une PME québécoise. Réponds en français du Québec, ton chaleureux et professionnel, phrases courtes adaptées à l'audio.`;
-  systemPrompt = prefixConsentSystemRuleFr(systemPrompt);
+  systemPrompt = prefixConsentSystemRuleFr(systemPrompt + assistantIdentity(cfg || {}));
 
   if (direction === "outbound") {
     let missionPrompt;
@@ -341,7 +342,7 @@ const llmHandler = async (req, res) => {
         company_id: companyId,
         query: userText,
         topK: 3,
-        minSimilarity: 0.25,
+        minSimilarity: cfg?.rag_min_similarity ?? 0.25,
       });
       ragChunks = (chunks || []).length;
       if (ragChunks > 0) {

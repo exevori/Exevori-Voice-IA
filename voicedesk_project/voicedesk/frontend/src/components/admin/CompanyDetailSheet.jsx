@@ -148,6 +148,7 @@ export default function CompanyDetailSheet({ company, token, onClose, onChanged,
             <Panel title="Actions administrateur">
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" disabled={busy || loading} onClick={() => chooseAction("impersonate")}>Ouvrir l’espace client</Button>
+                <Button size="sm" variant="outline" disabled={busy || loading} onClick={() => navigate("/settings?tab=team&company_id="+encodeURIComponent(current.id))}>Équipe et propriétaire</Button>
                 {current.status !== "cancelled" && <Button size="sm" variant={suspended ? "outline" : "destructive"} disabled={busy || loading} onClick={() => chooseAction(suspended ? "reactivate" : "suspend")}>{suspended ? "Réactiver l’accès" : "Suspendre l’accès"}</Button>}
                 <Button size="sm" variant="outline" disabled={busy || loading || suspended || current.status === "cancelled"} onClick={() => chooseAction("resend-welcome")}>Renvoyer la bienvenue</Button>
                 <Button size="sm" variant="outline" disabled={busy || loading || suspended || current.status === "cancelled"} onClick={() => chooseAction("resync-provisioning")}>Relancer le provisioning</Button>

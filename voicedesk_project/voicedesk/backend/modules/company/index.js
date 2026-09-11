@@ -7,6 +7,8 @@
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import { requireRole } from "../../middleware/auth.js";
+import { companyScope } from "../account/security.js";
 
 dotenv.config();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -21,9 +23,8 @@ const ALLOWED_FIELDS = [
 
 // GET /api/v1/company?company_id=...
 router.get("/", async (req, res) => {
-  const { company_id } = req.query;
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
   try {
+    const company_id = companyScope(req.user,req.query.company_id);
     const { data, error } = await supabase
       .from("companies")
       .select("id, name, contact_name, contact_email, phone, city, province, country, sector, size, website, preferred_language, plan, status, created_at, updated_at")
@@ -33,13 +34,12 @@ router.get("/", async (req, res) => {
     if (!data) return res.status(404).json({ error: "Entreprise introuvable" });
     return res.json({ company: data });
   } catch (err) {
-    console.error("[COMPANY] GET error:", err);
-    return res.status(500).json({ error: err.message });
+    return res.status(err.status || 503).json({ error: err.status ? err.code : "company_unavailable" });
   }
 });
 
 // PATCH /api/v1/company — whitelist stricte
-router.patch("/", async (req, res) => {
+router.patch("/", requireRole("company_admin", "super_admin"), async (req, res) => {
   const { company_id, ...patch } = req.body;
   if (!company_id) return res.status(400).json({ error: "company_id requis" });
 

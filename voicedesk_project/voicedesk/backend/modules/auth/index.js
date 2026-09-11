@@ -11,6 +11,8 @@ import crypto from "crypto";
 import dotenv from "dotenv";
 import { buildInvitationEmail, buildPasswordResetEmail } from "../../../frontend/src/utils/auth-helpers.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
+import { createInviteAcceptance } from "./inviteAcceptance.js";
+import { route } from "../account/security.js";
 
 dotenv.config();
 
@@ -48,6 +50,10 @@ router.post("/register", async (req, res) => {
   if (password.length < 8)
     return res.status(400).json({ error: "Mot de passe min 8 caractères" });
 
+  // Deployment guard: do not create an Auth user/company against a missing migration.
+  const {error: settingsSchemaError} = await supabase.from("company_settings").select("company_id").limit(0);
+  if (settingsSchemaError) return res.status(503).json({error:"registration_temporarily_unavailable"});
+
   const { data: existing } = await supabase
     .from("profiles").select("id").eq("email", contact_email).maybeSingle();
   if (existing) return res.status(409).json({ error: "Un compte existe déjà avec ce courriel" });
@@ -82,6 +88,8 @@ router.post("/register", async (req, res) => {
       role: "company_admin", status: "active",
     });
     if (pErr) throw new Error(`Profil : ${pErr.message}`);
+    const {error: ownerError} = await supabase.from("company_settings").insert({company_id:companyId,owner_user_id:userId});
+    if (ownerError) throw new Error("Initialisation du propriétaire impossible");
 
     // 4. Subscription trial 14 jours
     const trialEnd = new Date();
@@ -327,69 +335,10 @@ router.get("/invite/verify/:token", async (req, res) => {
 // POST /api/v1/auth/invite/accept
 // Accepter une invitation + créer mot de passe
 // ─────────────────────────────────────────────────────────────
-router.post("/invite/accept", async (req, res) => {
-  const { token, password } = req.body;
-
-  if (!token || !password || password.length < 8) {
-    return res.status(400).json({ error: "Token et mot de passe (min 8 caractères) requis" });
-  }
-
-  try {
-    const { data: invitation } = await supabase
-      .from("invitations")
-      .select("*, companies(*)")
-      .eq("token", token)
-      .single();
-
-    if (!invitation || invitation.status !== "pending") {
-      return res.status(400).json({ error: "Invitation invalide" });
-    }
-
-    if (new Date(invitation.expires_at) < new Date()) {
-      return res.status(400).json({ error: "Invitation expirée" });
-    }
-
-    // Créer le user Supabase Auth
-    const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
-      email: invitation.email,
-      password,
-      email_confirm: true,
-    });
-
-    if (authErr) throw authErr;
-
-    // Créer le profile
-    await supabase.from("profiles").insert({
-      user_id: authData.user.id,
-      company_id: invitation.company_id,
-      full_name: invitation.companies.contact_name,
-      email: invitation.email,
-      role: invitation.role,
-      status: "active",
-    });
-
-    // Marquer invitation comme acceptée
-    await supabase
-      .from("invitations")
-      .update({ status: "accepted", accepted_at: new Date() })
-      .eq("id", invitation.id);
-
-    // Activer le compte
-    await supabase
-      .from("companies")
-      .update({ status: "active" })
-      .eq("id", invitation.company_id);
-
-    return res.json({
-      success: true,
-      user_id: authData.user.id,
-      company_id: invitation.company_id,
-    });
-  } catch (err) {
-    console.error("[AUTH] Accept invite error:", err);
-    return res.status(500).json({ error: err.message });
-  }
-});
+const acceptInvitation = createInviteAcceptance({supabase});
+router.post("/invite/accept", route(async(req,res) => {
+  res.json(await acceptInvitation(req.body));
+}));
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/v1/auth/reset-password
@@ -420,42 +369,12 @@ router.post("/reset-password", async (req, res) => {
 // GET /api/v1/auth/me
 // Profil de l'utilisateur connecté (rôle + company)
 // ─────────────────────────────────────────────────────────────
-router.get("/me", async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: "Non authentifié" });
-
-  const token = authHeader.replace("Bearer ", "");
-
-  try {
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) return res.status(401).json({ error: "Token invalide" });
-
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("*, companies(*)")
-      .eq("user_id", user.id)
-      .single();
-
-    if (!profile) return res.status(404).json({ error: "Profil introuvable" });
-
-    // Mettre à jour last_login_at
-    await supabase
-      .from("profiles")
-      .update({ last_login_at: new Date() })
-      .eq("id", profile.id);
-
-    return res.json({
-      user_id: user.id,
-      profile_id: profile.id,
-      email: profile.email,
-      full_name: profile.full_name,
-      role: profile.role,
-      company_id: profile.company_id,
-      company: profile.companies,
-    });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
+router.get("/me", requireAuth, (req,res) => {
+  const {profile,id,email} = req.user;
+  res.set("Cache-Control","no-store").json({
+    user_id:id,profile_id:profile.id,email,full_name:profile.full_name,role:profile.role,
+    company_id:profile.company_id,company:profile.companies,
+  });
 });
 
 // ─────────────────────────────────────────────────────────────

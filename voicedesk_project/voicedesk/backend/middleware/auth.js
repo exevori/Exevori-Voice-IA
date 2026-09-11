@@ -18,6 +18,7 @@ import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { createAdminAuditService } from "../modules/admin/audit.js";
 import { createAdminAuditMiddleware } from "./adminAudit.js";
+import { requireLiveSession, syncVerifiedProfileEmail } from "../modules/account/security.js";
 
 dotenv.config();
 
@@ -27,26 +28,8 @@ const supabase = createClient(
 );
 const adminAudit = createAdminAuditMiddleware({ service:createAdminAuditService({supabase}) });
 
-// Cache simple des profiles (TTL 60s) pour éviter de hammer la DB
-const profileCache = new Map();
-const CACHE_TTL = 60 * 1000;
-
-function getCachedProfile(userId) {
-  const cached = profileCache.get(userId);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached.profile;
-  }
-  return null;
-}
-
-function setCachedProfile(userId, profile) {
-  profileCache.set(userId, { profile, timestamp: Date.now() });
-}
-
-export function clearProfileCache(userId) {
-  if (userId) profileCache.delete(userId);
-  else profileCache.clear();
-}
+// Compatibility export for admin actions; authorization profiles are always fresh.
+export function clearProfileCache() {}
 
 // ─────────────────────────────────────────────────────────────
 // requireAuth — Vérifie le JWT et charge le profile
@@ -68,13 +51,14 @@ export async function requireAuth(req, res, next) {
       return res.status(401).json({ error: "invalid_token", message: "Token invalide ou expiré" });
     }
 
-    // Charger le profile (avec cache)
-    let profile = req.get("X-Impersonation-Session") ? null : getCachedProfile(user.id);
+    const sessionId = await requireLiveSession(supabase, token, user.id);
+    // Roles/status must be fresh across all backend replicas after revocation.
+    let profile = null;
 
     if (!profile) {
       const { data, error: profileError } = await supabase
         .from("profiles")
-        .select("*, companies(id, name, status, plan)")
+        .select("*, companies(id, name, city, assistant_name, status, plan)")
         .eq("user_id", user.id)
         .single();
 
@@ -83,7 +67,6 @@ export async function requireAuth(req, res, next) {
       }
 
       profile = data;
-      setCachedProfile(user.id, profile);
     }
 
     // Vérifier que le profile est actif
@@ -107,6 +90,7 @@ export async function requireAuth(req, res, next) {
       }
     }
 
+    profile = await syncVerifiedProfileEmail(supabase,user,profile);
     // Injecter dans req
     req.user = {
       id: user.id,
@@ -114,11 +98,13 @@ export async function requireAuth(req, res, next) {
       role: profile.role,
       company_id: profile.company_id,
       profile,
+      session_id: sessionId,
     };
 
     return await adminAudit(req, res, next);
   } catch (err) {
-    console.error("[AUTH MIDDLEWARE]", err);
+    if (err.status) return res.status(err.status).json({error:err.code});
+    console.error("[AUTH MIDDLEWARE] authentication unavailable");
     return res.status(500).json({ error: "auth_error", message: "Erreur d'authentification" });
   }
 }

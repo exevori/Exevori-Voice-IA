@@ -1,86 +1,53 @@
-// ============================================================
-// EXEVORI VOICE IA — Endpoint écoute des enregistrements
-// Fichier : backend/modules/calls/recording.js
-//
-// À monter dans backend/index.js APRÈS callsRouter :
-//   import { recordingRouter } from "./modules/calls/recording.js";
-//   app.use("/api/v1/calls", requireAuth, enforceTenantOwnership, recordingRouter);
-// ============================================================
+import express from 'express';
+import {createClient} from '@supabase/supabase-js';
+import {Readable} from 'node:stream';
+import {pipeline} from 'node:stream/promises';
+import {UUID,query,fail,route} from '../account/security.js';
 
-import express from "express";
-import { createClient } from "@supabase/supabase-js";
-
-const router   = express.Router();
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-const EL_KEY   = process.env.ELEVENLABS_API_KEY;
-const EL_BASE  = "https://api.elevenlabs.io";
-
-async function respondTenantMiss(res, id, isSuperAdmin) {
-  if (!isSuperAdmin) {
-    const { data, error } = await supabase
-      .from("calls")
-      .select("id")
-      .eq("id", id)
-      .maybeSingle();
-    if (error) return res.status(500).json({ error: error.message });
-    if (data) return res.status(403).json({ error: "Accès refusé" });
-  }
-  return res.status(404).json({ error: "Appel introuvable" });
-}
-
-// GET /api/v1/calls/:id/recording
-// Proxy streaming MP3 depuis ElevenLabs → client
-router.get("/:id/recording", async (req, res) => {
-  const { id }      = req.params;
-  const isSuperAdmin = req.user?.role === "super_admin";
-
-  let callQuery = supabase
-    .from("calls")
-    .select("id, company_id, elevenlabs_conversation_id, caller_name")
-    .eq("id", id);
-  if (!isSuperAdmin) {
-    callQuery = callQuery.eq("company_id", req.user.company_id);
-  }
-  const { data: call, error } = await callQuery.maybeSingle();
-
-  if (error) return res.status(500).json({ error: error.message });
-  if (!call) return respondTenantMiss(res, id, isSuperAdmin);
-  if (!EL_KEY) return res.status(503).json({ error: "ELEVENLABS_API_KEY non configuré" });
-  if (!call.elevenlabs_conversation_id) return res.status(404).json({ error: "no_recording", message: "Aucun enregistrement pour cet appel" });
-
-  let elRes;
-  try {
-    elRes = await fetch(`${EL_BASE}/v1/convai/conversations/${encodeURIComponent(call.elevenlabs_conversation_id)}/audio`, {
-      headers: { "xi-api-key": EL_KEY },
-    });
-  } catch {
-    return res.status(502).json({ error: "Impossible de joindre ElevenLabs" });
-  }
-
-  if (elRes.status === 404)
-    return res.status(404).json({ error: "no_recording", message: "Enregistrement non disponible" });
-  if (!elRes.ok)
-    return res.status(502).json({ error: `ElevenLabs ${elRes.status}` });
-
-  res.setHeader("Content-Type",        elRes.headers.get("content-type") || "audio/mpeg");
-  res.setHeader("Accept-Ranges",       "bytes");
-  res.setHeader("Content-Disposition", `inline; filename="appel-${call.caller_name || id}.mp3"`);
-  const len = elRes.headers.get("content-length");
-  if (len) res.setHeader("Content-Length", len);
-
-  // Streaming avec backpressure
-  const reader = elRes.body.getReader();
-  const pump   = async () => {
+export function createRecordingRouter({supabase,fetchImpl=fetch,apiKey=process.env.ELEVENLABS_API_KEY}) {
+  const router = express.Router();
+  router.get('/:id/recording',route(async(req,res)=>{
+    if (!req.user) fail('unauthorized',401);
+    if (!UUID.test(req.params.id)) fail('invalid_call_id');
+    let lookup = supabase.from('calls').select('id,company_id,elevenlabs_conversation_id,created_at,retention_days').eq('id',req.params.id);
+    if (req.user.role !== 'super_admin') lookup = lookup.eq('company_id',req.user.company_id);
+    const call = await query(lookup.maybeSingle());
+    if (!call) {
+      const exists = req.user.role === 'super_admin' ? null : await query(supabase.from('calls').select('id').eq('id',req.params.id).maybeSingle());
+      fail(exists ? 'forbidden_company' : 'call_not_found',exists ? 403 : 404);
+    }
+    const settings = await query(supabase.from('company_settings').select('recordings_visible').eq('company_id',call.company_id).maybeSingle());
+    if (settings?.recordings_visible === false) fail('recordings_hidden',403);
+    if (req.query.acknowledge !== 'true') fail('recording_acknowledgement_required',400);
+    if (!call.elevenlabs_conversation_id || !(Date.parse(call.created_at)+(call.retention_days || 90)*86400000 > Date.now())) fail('no_recording',404);
+    const deletion = await query(supabase.from('privacy_external_deletions').select('id')
+      .eq('company_id',call.company_id).eq('provider','elevenlabs').eq('resource_type','conversation')
+      .eq('external_id',call.elevenlabs_conversation_id).limit(1));
+    if (deletion?.length) fail('recording_removed_for_privacy',403);
+    if (!apiKey) fail('recording_provider_unavailable',503);
+    await query(supabase.from('audit_log').insert({company_id:call.company_id,
+      actor_user_id:req.auditActor?.id || req.user.id,actor_role:req.auditActor?.role || req.user.role,
+      action:'calls.recording_access',entity_type:'call',entity_id:call.id,
+      impersonation_session_id:req.get('X-Impersonation-Session') || null,details:{acknowledged:true}}));
+    const controller = new AbortController();
+    const timer = setTimeout(()=>controller.abort(),60000);
+    const close = ()=>controller.abort();
+    res.on('close',close);
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) { res.end(); break; }
-        const ok = res.write(value);
-        if (!ok) await new Promise(r => res.once("drain", r));
-      }
-    } catch { res.end(); }
-  };
-  pump();
-});
-
-export { router as recordingRouter };
+      const upstream = await fetchImpl('https://api.elevenlabs.io/v1/convai/conversations/'+encodeURIComponent(call.elevenlabs_conversation_id)+'/audio',{
+        headers:{'xi-api-key':apiKey},signal:controller.signal,
+      });
+      if (upstream.status === 404) fail('no_recording',404);
+      if (!upstream.ok || !upstream.body) fail('recording_provider_unavailable',502);
+      res.set('Content-Type','audio/mpeg').set('Content-Disposition','inline; filename="appel-'+call.id+'.mp3"');
+      await pipeline(Readable.fromWeb(upstream.body),res);
+    } catch (error) {
+      if (res.headersSent) { res.destroy(); return; }
+      throw error;
+    } finally { clearTimeout(timer); res.off('close',close); }
+  }));
+  return router;
+}
+const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false,autoRefreshToken:false}}) : null;
+export const recordingRouter = createRecordingRouter({supabase});

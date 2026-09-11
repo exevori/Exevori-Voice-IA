@@ -141,7 +141,8 @@ export function AuthProvider({ children }) {
   },[impersonationSession]);
   const effectiveCompanyId = (profile?.role === "super_admin" ? impersonatedCompany?.id : null) || profile?.company_id || null;
   return <AuthContext.Provider value={{user,profile:clientViewProfile(profile,impersonationSession,impersonatedCompany),adminProfile:profile,token,loading,isPasswordRecovery,signIn,signOut,clearPasswordRecovery,
-    impersonatedCompany,impersonateCompany,impersonationSession,impersonationError,effectiveCompanyId}}>
+    impersonatedCompany,impersonateCompany,impersonationSession,impersonationError,effectiveCompanyId,
+    refreshProfile:()=>loadProfile(token,user.id)}}>
     {authError && user && !isPasswordRecovery ? <div role="alert" className="p-8 text-text-primary">{authError}
       <button className="ml-4 underline" onClick={()=>window.location.reload()}>Réessayer</button>
       <button className="ml-4 underline" onClick={()=>{void signOut();}}>Se déconnecter</button>

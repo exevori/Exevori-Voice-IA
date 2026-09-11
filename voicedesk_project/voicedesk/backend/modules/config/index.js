@@ -7,6 +7,12 @@
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { requireRole } from "../../middleware/auth.js";
+import { companyScope } from "../account/security.js";
+import { createAssistantSettingsService } from "./settingsService.js";
+import { publicAssistantConfig } from "./validation.js";
 import {
   prefixRecordingConsentEn,
   prefixRecordingConsentFr,
@@ -20,6 +26,7 @@ const supabase = createClient(
 );
 
 const router = express.Router();
+const assistantSettings = createAssistantSettingsService({supabase});
 
 // Voix ElevenLabs recommandées par défaut
 // Note : la liste complète et configurable est dans voice_library (Supabase)
@@ -82,9 +89,8 @@ const TONES = {
 // Récupérer la configuration actuelle de l'assistante
 // ─────────────────────────────────────────────────────────────
 router.get("/", async (req, res) => {
-  const { company_id } = req.query;
-
   try {
+    const company_id = companyScope(req.user,req.query.company_id);
     const { data, error } = await supabase
       .from("assistant_configs")
       .select("*")
@@ -103,13 +109,13 @@ router.get("/", async (req, res) => {
     }
 
     return res.json({
-      config: data,
+      config: publicAssistantConfig(data),
       available_voices: RECOMMENDED_VOICES,
       available_tones: TONES,
     });
   } catch (err) {
     console.error("[CONFIG] Get error:", err);
-    return res.status(500).json({ error: err.message });
+    return res.status(err.status || 503).json({ error: err.status ? err.code : "config_unavailable" });
   }
 });
 
@@ -117,7 +123,7 @@ router.get("/", async (req, res) => {
 // POST /api/v1/config
 // Créer la configuration initiale (pendant onboarding)
 // ─────────────────────────────────────────────────────────────
-router.post("/", async (req, res) => {
+router.post("/", requireRole("company_admin", "super_admin"), async (req, res) => {
   const {
     company_id,
     assistant_name,
@@ -157,6 +163,7 @@ router.post("/", async (req, res) => {
       .select("system_prompt_fr, system_prompt_voice_fr")
       .eq("company_id", company_id)
       .maybeSingle();
+    if (existingConfig) return res.status(409).json({error:"assistant_exists_use_patch"});
 
     // Générer les prompts système par défaut si non fournis
     const defaultGreetingFR = prefixRecordingConsentFr(
@@ -208,7 +215,7 @@ Suggest scheduling a meeting if relevant.`;
 
     const { data, error } = await supabase
       .from("assistant_configs")
-      .upsert({
+      .insert({
         company_id,
         assistant_name,
         assistant_gender,
@@ -236,13 +243,13 @@ Suggest scheduling a meeting if relevant.`;
         system_prompt_voice_fr: finalVoicePrompt,
         system_prompt_en: defaultSystemPromptEN,
         updated_at: new Date(),
-      }, { onConflict: "company_id" })
+      })
       .select()
       .single();
 
     if (error) throw error;
 
-    return res.json({ success: true, config: data });
+    return res.json({ success: true, config: publicAssistantConfig(data) });
   } catch (err) {
     console.error("[CONFIG] Create error:", err);
     return res.status(500).json({ error: err.message });
@@ -253,28 +260,13 @@ Suggest scheduling a meeting if relevant.`;
 // PATCH /api/v1/config
 // Mettre à jour la configuration partiellement
 // ─────────────────────────────────────────────────────────────
-router.patch("/", async (req, res) => {
-  const { company_id, ...updates } = req.body;
-
-  if (!company_id) return res.status(400).json({ error: "company_id requis" });
-
+router.patch("/", requireRole("company_admin", "super_admin"), async (req, res) => {
   try {
-    // Filtrer les champs interdits
-    delete updates.id;
-    delete updates.created_at;
-    updates.updated_at = new Date();
-
-    const { data, error } = await supabase
-      .from("assistant_configs")
-      .update(updates)
-      .eq("company_id", company_id)
-      .select()
-      .single();
-
-    if (error) throw error;
-    return res.json({ success: true, config: data });
+    const company_id = companyScope(req.user,req.body.company_id);
+    const result = await assistantSettings.save(company_id,req.body);
+    return res.json({ success: result.sync_status !== "failed", sync_status:result.sync_status, config:publicAssistantConfig(result.config) });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(err.status || 500).json({ error: err.code || "config_update_failed" });
   }
 });
 
@@ -324,14 +316,18 @@ router.get("/tones", (req, res) => {
 // POST /api/v1/config/test-voice
 // Tester la voix avec un texte personnalisé
 // ─────────────────────────────────────────────────────────────
-router.post("/test-voice", async (req, res) => {
+router.post("/test-voice", requireRole("company_admin", "super_admin"), async (req, res) => {
   const { voice_id, text = "Bonjour, comment puis-je vous aider aujourd'hui?" } = req.body;
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(voice_id || "") || typeof text !== "string" || !text.trim() || text.length > 1000) {
+    return res.status(400).json({error:"invalid_voice_preview"});
+  }
 
   try {
     const response = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${voice_id}/stream`,
       {
         method: "POST",
+        signal: AbortSignal.timeout(15000),
         headers: {
           "xi-api-key": process.env.ELEVENLABS_API_KEY,
           "Content-Type": "application/json",
@@ -347,9 +343,10 @@ router.post("/test-voice", async (req, res) => {
     if (!response.ok) throw new Error("ElevenLabs API error");
 
     res.setHeader("Content-Type", "audio/mpeg");
-    response.body.pipe(res);
+    await pipeline(Readable.fromWeb(response.body),res);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    if (!res.headersSent) return res.status(502).json({ error: "voice_preview_unavailable" });
+    res.destroy();
   }
 });
 

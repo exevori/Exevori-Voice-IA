@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { transactionalSender } from "../account/service.js";
 import {
   CalendlyApiError,
   cancelScheduledEvent,
@@ -1350,7 +1351,7 @@ export function createCalendarService({
       payload.cancel_url ? `<a href="${escapeHtml(payload.cancel_url)}">Annuler</a>` : "",
     ].filter(Boolean).join(" &nbsp; ");
     const result = await resend.emails.send({
-      from: process.env.EMAIL_FROM || "VoiceDesk <bonjour@voicedesk.ca>",
+      ...await transactionalSender(supabase,row.company_id,process.env.EMAIL_FROM || "VoiceDesk <bonjour@voicedesk.ca>"),
       to: row.recipient_email,
       subject: `${isReminder ? "Rappel — " : "Confirmation — "}${payload.type || "Rendez-vous"}`,
       html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#1f2937">
