@@ -7,6 +7,7 @@
 // ============================================================
 
 import crypto from "node:crypto";
+import { confirmOnboardingCall } from "../onboarding/callProof.js";
 
 import express from "express";
 
@@ -340,7 +341,16 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Aucun appel réseau/LLM ni effet CRM ne se trouve avant cette réponse.
+    // No completion on a browser assertion: the signed provider metadata must
+    // match an armed test, its actual start time, tenant and assigned number.
+    // A database failure returns 503 so the provider can redeliver idempotently.
+    try {
+      await confirmOnboardingCall({supabase,signatureStatus:sigStatus,
+        companyId,callId:ingestion.callId,data});
+    } catch {
+      return res.status(503).json({success:false,error:"onboarding_confirmation_unavailable"});
+    }
+    // Aucun appel réseau fournisseur/LLM ni effet CRM avant cette réponse.
     return res.status(200).json({
       success: true,
       queued: true,

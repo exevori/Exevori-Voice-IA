@@ -1,370 +1,163 @@
-// ============================================================
-// EXEVORI VOICE IA — Page Onboarding client (5 étapes)
-// Fichier : frontend/src/pages/Onboarding.jsx
-// ============================================================
+import React,{useEffect,useRef,useState} from 'react';
+import {Link,useNavigate} from 'react-router-dom';
+import {useAuth} from '../contexts/AuthContext.jsx';
+import {Button} from '../components/ui/button.jsx';
+import {Loader2,CheckCircle2,Phone} from 'lucide-react';
+import {onboardingRequest,onboardingError,pollOnboarding,TIMEOUT_MS} from '../utils/onboarding.js';
 
-import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { useAuth } from "../contexts/AuthContext.jsx";
-import {
-  Bot, Volume2, BookOpen, Phone, CheckCircle2,
-  Loader2, ArrowRight, ArrowLeft, Sparkles
-} from "lucide-react";
-import { Button } from "../components/ui/button.jsx";
-
-const API = import.meta.env.VITE_API_URL || "";
-
-const STEPS = [
-  { id: 1, label: "Votre assistante",  icon: Bot,          desc: "Nom, ton et personnalité" },
-  { id: 2, label: "Voix",              icon: Volume2,       desc: "Choisir la voix de l'assistante" },
-  { id: 3, label: "Connaissances",     icon: BookOpen,      desc: "Services et FAQ de base" },
-  { id: 4, label: "Activation",        icon: Phone,         desc: "Obtenir votre numéro de téléphone" },
-  { id: 5, label: "Prêt !",            icon: CheckCircle2,  desc: "Votre assistante est en ligne" },
-];
-
-export default function Onboarding() {
-  const { token, effectiveCompanyId } = useAuth();
-  const navigate = useNavigate();
-
-  const [currentStep, setCurrentStep] = useState(1);
-  const [loading, setLoading] = useState(false);
-  const [provisioning, setProvisioning] = useState(false);
-  const [provisionResult, setProvisionResult] = useState(null);
-  const [error, setError] = useState(null);
-
-  // Étape 1
-  const [assistantName, setAssistantName] = useState("Léa");
-  const [tone, setTone] = useState("professional");
-
-  // Étape 2
-  const [voices, setVoices] = useState([]);
-  const [selectedVoice, setSelectedVoice] = useState(null);
-
-  // Étape 3
-  const [faqEntries, setFaqEntries] = useState([
-    { question: "", answer: "" },
-  ]);
-
-  // Étape 4 — provisioning
-  const [areaCode, setAreaCode] = useState("581");
-
-  // Charger les voix disponibles
-  useEffect(() => {
-    if (currentStep === 2 && token) {
-      fetch(`${API}/api/v1/voice-library?active=true`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then(r => r.json())
-        .then(d => setVoices(d.voices || []))
-        .catch(() => {});
-    }
-  }, [currentStep, token]);
-
-  const post = async (path, body) => {
-    const res = await fetch(`${API}/api/v1/onboarding${path}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ company_id: effectiveCompanyId, ...body }),
-    });
-    if (!res.ok) {
-      const d = await res.json();
-      throw new Error(d.error || "Erreur serveur");
-    }
-    return res.json();
-  };
-
-  const nextStep = async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      if (currentStep === 1) {
-        await post("/step/1", { assistant_name: assistantName, tone });
-      } else if (currentStep === 2) {
-        if (!selectedVoice) throw new Error("Veuillez choisir une voix");
-        await post("/step/2", { voice_library_id: selectedVoice });
-      } else if (currentStep === 3) {
-        const entries = faqEntries.filter(e => e.question && e.answer);
-        await post("/step/3", { knowledge_entries: entries.map(e => ({ ...e, category: "FAQ" })) });
-      } else if (currentStep === 4) {
-        // Provisioning — peut prendre 15-30 secondes
-        setProvisioning(true);
-        const result = await post("/step/5", { area_code: areaCode });
-        setProvisionResult(result);
-        setProvisioning(false);
+const LABELS=['Assistante','Voix','Connaissances','Activation','Appel test'];
+const input='w-full rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary';
+export default function OnboardingPage(){
+  const {token,effectiveCompanyId,profile}=useAuth();
+  if(!token||!effectiveCompanyId)return <p role="status">Sélectionnez une entreprise pour configurer son assistante.</p>;
+  return <OnboardingFlow key={effectiveCompanyId+':'+token} token={token} companyId={effectiveCompanyId}
+    canEdit={['company_admin','super_admin'].includes(profile?.role)}/>;
+}
+function OnboardingFlow({token,companyId,canEdit}){
+  const navigate=useNavigate();
+  const [state,setState]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+  const [watch,setWatch]=useState(null),[voices,setVoices]=useState([]),[voiceError,setVoiceError]=useState('');
+  const [name,setName]=useState('Léa'),[tone,setTone]=useState('professional'),[voice,setVoice]=useState('');
+  const [faq,setFaq]=useState([{question:'',answer:''}]),[area,setArea]=useState('581'),[phone,setPhone]=useState('');
+  const alive=useRef(true),lifetime=useRef(new AbortController());
+  const step=state?.progress.current_step||1;
+  const request=(path,options={})=>onboardingRequest(path,{token,companyId,signal:lifetime.current.signal,...options});
+  function hydrate(next){
+    setState(next);setName(next.config.assistant_name);setTone(next.config.tone);
+    setVoice(next.config.voice_library_id||'');setFaq(next.knowledge_entries.length?next.knowledge_entries:[{question:'',answer:''}]);
+    setArea(next.area_code);setPhone(next.test.phone||'');
+  }
+  async function refresh(resume=true){
+    setError('');
+    try{
+      const next=await request('');if(!alive.current)return;
+      hydrate(next);
+      if(resume&&next.status==='in_progress')setWatch({kind:'activation',id:Date.now()});
+      else if(resume&&next.test.status==='waiting')setWatch({kind:'test',id:Date.now()});
+    }catch(e){if(alive.current&&e.name!=='AbortError')setError(onboardingError(e));}
+  }
+  useEffect(()=>{
+    alive.current=true;lifetime.current=new AbortController();refresh();
+    return()=>{alive.current=false;lifetime.current.abort();};
+  },[token,companyId]);
+  useEffect(()=>{
+    if(step!==2)return;
+    const controller=new AbortController();
+    setVoiceError('');
+    const api=(import.meta.env.VITE_API_URL||'').replace(/\/$/,'');
+    fetch(api+'/api/v1/voice-library',{headers:{Authorization:'Bearer '+token},signal:AbortSignal.any([controller.signal,AbortSignal.timeout(15000)])})
+      .then(async response=>{if(!response.ok)throw new Error();return response.json();})
+      .then(data=>{if(!controller.signal.aborted){setVoices(data.voices||[]);if(!data.voices?.length)setVoiceError('Aucune voix active. Contactez le support.');}})
+      .catch(()=>{if(!controller.signal.aborted)setVoiceError('Impossible de charger les voix. Actualisez cette page ou contactez le support.');});
+    return()=>controller.abort();
+  },[step,token]);
+  useEffect(()=>{
+    if(!watch)return;
+    const controller=new AbortController();
+    pollOnboarding({kind:watch.kind,signal:controller.signal,
+      request:signal=>request('/provisioning-status',{signal}),
+      onState:next=>{if(alive.current)setState(next);}})
+      .then(()=>{if(!controller.signal.aborted)setError('');})
+      .catch(e=>{if(!controller.signal.aborted)setError(onboardingError(e));})
+      .finally(()=>{if(!controller.signal.aborted)setWatch(null);});
+    return()=>controller.abort();
+  },[watch,token,companyId]);
+  async function submit(path,body,kind){
+    setBusy(true);setError('');
+    if(kind)setWatch({kind,id:Date.now()});
+    try{
+      const next=await request(path,{body,timeout:TIMEOUT_MS});
+      if(alive.current){hydrate(next);if(kind==='test')setWatch({kind,id:Date.now()});}
+    }catch(e){
+      if(alive.current){
+        setError(e.name==='TimeoutError'?onboardingError('polling_timeout'):onboardingError(e));
+        // Reload authoritative data after an unknown/partial outcome (e.g. FAQ
+        // saved but embeddings failed). Never automatically resubmit a mutation.
+        try{const next=await request('');if(alive.current)hydrate(next);}catch{}
       }
-      setCurrentStep(s => Math.min(s + 1, 5));
-    } catch (err) {
-      setError(err.message);
-      setProvisioning(false);
-    } finally {
-      setLoading(false);
+    }finally{if(alive.current)setBusy(false);}
+  }
+  function next(){
+    if(step===1)return submit('/step/1',{assistant_name:name,tone});
+    if(step===2)return submit('/step/2',{voice_library_id:voice});
+    if(step===3){
+      const entries=faq.filter(e=>e.question.trim()||e.answer.trim());
+      if(entries.some(e=>!e.question.trim()||!e.answer.trim())){setError(onboardingError('invalid_faq'));return;}
+      return submit('/step/3',{knowledge_entries:entries});
     }
-  };
-
-  const addFaqEntry = () => setFaqEntries(e => [...e, { question: "", answer: "" }]);
-  const updateFaq = (i, field, val) =>
-    setFaqEntries(e => e.map((entry, idx) => idx === i ? { ...entry, [field]: val } : entry));
-  const removeFaq = (i) => setFaqEntries(e => e.filter((_, idx) => idx !== i));
-
-  // ── Rendu des étapes ──────────────────────────────────────
-  const renderStep = () => {
-    switch (currentStep) {
-      case 1:
-        return (
-          <div className="space-y-4">
-            <div>
-              <label className="text-xs text-text-tertiary block mb-1.5">Nom de votre assistante</label>
-              <input
-                value={assistantName}
-                onChange={e => setAssistantName(e.target.value)}
-                placeholder="Ex: Léa, Sophie, Marie..."
-                className="w-full rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary outline-none focus:border-brand"
-              />
-              <p className="text-[11px] text-text-tertiary mt-1">Ce nom sera utilisé pour se présenter aux appelants.</p>
-            </div>
-            <div>
-              <label className="text-xs text-text-tertiary block mb-1.5">Ton de l'assistante</label>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { key: "professional", label: "Professionnel" },
-                  { key: "friendly",     label: "Chaleureux" },
-                  { key: "formal",       label: "Formel" },
-                ].map(t => (
-                  <button key={t.key} onClick={() => setTone(t.key)}
-                    className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
-                      tone === t.key
-                        ? "border-brand bg-brand/10 text-brand font-medium"
-                        : "border-border text-text-secondary hover:border-brand/50"
-                    }`}>
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        );
-
-      case 2:
-        return (
-          <div className="space-y-3">
-            <p className="text-sm text-text-secondary">
-              Choisissez la voix qui représentera votre entreprise.
-            </p>
-            {voices.length === 0 ? (
-              <div className="flex items-center gap-2 text-text-tertiary text-sm py-4">
-                <Loader2 size={15} className="animate-spin" /> Chargement des voix...
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-2 max-h-72 overflow-y-auto pr-1">
-                {voices.map(v => (
-                  <button key={v.id} onClick={() => setSelectedVoice(v.id)}
-                    className={`flex items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors ${
-                      selectedVoice === v.id
-                        ? "border-brand bg-brand/10"
-                        : "border-border hover:border-brand/50"
-                    }`}>
-                    <Volume2 size={16} className={selectedVoice === v.id ? "text-brand" : "text-text-tertiary"} />
-                    <div>
-                      <p className="text-sm font-medium text-text-primary">{v.display_name || v.name}</p>
-                      <p className="text-xs text-text-tertiary">{v.accent || v.gender || "—"} · {v.languages_supported?.[0] || "fr-CA"}</p>
-                    </div>
-                    {selectedVoice === v.id && <CheckCircle2 size={16} className="ml-auto text-brand" />}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-
-      case 3:
-        return (
-          <div className="space-y-3">
-            <p className="text-sm text-text-secondary">
-              Ajoutez les questions-réponses de base pour que votre assistante puisse répondre correctement.
-            </p>
-            <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
-              {faqEntries.map((entry, i) => (
-                <div key={i} className="rounded-lg border border-border p-3 space-y-2">
-                  <input
-                    value={entry.question}
-                    onChange={e => updateFaq(i, "question", e.target.value)}
-                    placeholder="Question du client (ex: Quels sont vos horaires ?)"
-                    className="w-full rounded border border-border bg-bg-input px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand"
-                  />
-                  <textarea
-                    value={entry.answer}
-                    onChange={e => updateFaq(i, "answer", e.target.value)}
-                    placeholder="Réponse de votre assistante..."
-                    rows={2}
-                    className="w-full rounded border border-border bg-bg-input px-2.5 py-1.5 text-sm text-text-primary outline-none focus:border-brand resize-none"
-                  />
-                  {faqEntries.length > 1 && (
-                    <button onClick={() => removeFaq(i)} className="text-[11px] text-brand-red hover:underline">Supprimer</button>
-                  )}
-                </div>
-              ))}
-            </div>
-            <Button variant="outline" size="sm" onClick={addFaqEntry}>
-              + Ajouter une question
-            </Button>
-            <p className="text-[11px] text-text-tertiary">Vous pourrez en ajouter d'autres depuis la Base de connaissances.</p>
-          </div>
-        );
-
-      case 4:
-        return (
-          <div className="space-y-4">
-            <div className="rounded-xl border border-brand/20 bg-brand/5 p-4">
-              <div className="flex items-start gap-3">
-                <Phone size={20} className="text-brand mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-text-primary">Activation automatique</p>
-                  <p className="text-sm text-text-secondary mt-1 leading-relaxed">
-                    On va automatiquement acheter un numéro de téléphone québécois et configurer votre assistante.
-                    Ça prend environ 20-30 secondes.
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div>
-              <label className="text-xs text-text-tertiary block mb-1.5">Préférence de code régional</label>
-              <div className="flex gap-2">
-                {["581", "418", "514"].map(code => (
-                  <button key={code} onClick={() => setAreaCode(code)}
-                    className={`rounded-lg border px-4 py-2 text-sm font-mono transition-colors ${
-                      areaCode === code ? "border-brand bg-brand/10 text-brand" : "border-border text-text-secondary"
-                    }`}>
-                    +1 ({code})
-                  </button>
-                ))}
-              </div>
-              <p className="text-[11px] text-text-tertiary mt-1.5">Si le code régional choisi n'est pas disponible, on prendra le suivant automatiquement.</p>
-            </div>
-            {provisioning && (
-              <div className="flex items-center gap-3 rounded-lg border border-border bg-bg-card p-4">
-                <Loader2 size={18} className="animate-spin text-brand" />
-                <div>
-                  <p className="text-sm font-medium text-text-primary">Provisioning en cours...</p>
-                  <p className="text-xs text-text-tertiary mt-0.5">Achat du numéro + configuration de l'agent IA</p>
-                </div>
-              </div>
-            )}
-          </div>
-        );
-
-      case 5:
-        return (
-          <div className="text-center space-y-4 py-4">
-            <div className="flex justify-center">
-              <div className="w-16 h-16 rounded-full bg-brand-green/15 flex items-center justify-center">
-                <CheckCircle2 size={32} className="text-brand-green" />
-              </div>
-            </div>
-            <div>
-              <h3 className="text-lg font-semibold text-text-primary">Votre assistante est prête !</h3>
-              {provisionResult?.phone_number && (
-                <p className="text-2xl font-mono font-bold text-brand mt-2">{provisionResult.phone_number}</p>
-              )}
-              <p className="text-sm text-text-secondary mt-2">
-                C'est votre nouveau numéro professionnel. Partagez-le avec vos clients — {assistantName} répondra 24/7.
-              </p>
-            </div>
-            <div className="flex items-center gap-2 rounded-lg border border-brand-green/20 bg-brand-green/5 px-4 py-3">
-              <Sparkles size={14} className="text-brand-green" />
-              <p className="text-sm text-brand-green font-medium">
-                Appelez votre nouveau numéro pour tester {assistantName} maintenant !
-              </p>
-            </div>
-            <Button onClick={() => navigate("/dashboard")} className="gap-2">
-              Aller au tableau de bord <ArrowRight size={14} />
-            </Button>
-          </div>
-        );
-
-      default:
-        return null;
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-bg-tertiary flex items-center justify-center p-4">
-      <div className="w-full max-w-lg">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <p className="text-xs text-text-tertiary uppercase tracking-wider mb-1">VoiceDesk AI</p>
-          <h1 className="text-2xl font-bold text-text-primary">Configuration de votre assistante</h1>
-        </div>
-
-        {/* Stepper */}
-        <div className="flex items-center justify-center gap-0 mb-8 overflow-x-auto pb-2">
-          {STEPS.map((step, i) => {
-            const Icon = step.icon;
-            const done = currentStep > step.id;
-            const active = currentStep === step.id;
-            return (
-              <React.Fragment key={step.id}>
-                <div className="flex flex-col items-center gap-1 min-w-[60px]">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
-                    done   ? "bg-brand-green text-white" :
-                    active ? "bg-brand text-white" :
-                             "bg-white/5 border border-border text-text-tertiary"
-                  }`}>
-                    {done ? <CheckCircle2 size={14} /> : <Icon size={14} />}
-                  </div>
-                  <span className={`text-[10px] text-center leading-tight ${active ? "text-text-primary font-medium" : "text-text-tertiary"}`}>
-                    {step.label}
-                  </span>
-                </div>
-                {i < STEPS.length - 1 && (
-                  <div className={`h-0.5 flex-1 min-w-[20px] mx-1 mb-4 transition-colors ${currentStep > step.id ? "bg-brand-green" : "bg-border"}`} />
-                )}
-              </React.Fragment>
-            );
-          })}
-        </div>
-
-        {/* Card */}
-        <div className="rounded-xl border border-border bg-bg-card p-6 shadow-sm">
-          {currentStep < 5 && (
-            <div className="mb-5">
-              <h2 className="text-base font-semibold text-text-primary">{STEPS[currentStep - 1]?.label}</h2>
-              <p className="text-xs text-text-tertiary mt-0.5">{STEPS[currentStep - 1]?.desc}</p>
-            </div>
-          )}
-
-          {renderStep()}
-
-          {error && (
-            <div className="mt-4 rounded-lg border border-brand-red/20 bg-brand-red/5 px-3 py-2.5">
-              <p className="text-sm text-brand-red">{error}</p>
-            </div>
-          )}
-
-          {currentStep < 5 && (
-            <div className="flex items-center justify-between mt-6 pt-4 border-t border-border">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setCurrentStep(s => Math.max(s - 1, 1))}
-                disabled={currentStep === 1 || loading}
-                className="gap-1"
-              >
-                <ArrowLeft size={13} /> Retour
-              </Button>
-              <Button
-                onClick={nextStep}
-                disabled={loading || provisioning}
-                className="gap-2"
-              >
-                {loading || provisioning
-                  ? <><Loader2 size={14} className="animate-spin" /> {currentStep === 4 ? "Activation..." : "Sauvegarde..."}</>
-                  : <>{currentStep === 4 ? "Activer mon assistante" : "Continuer"} <ArrowRight size={13} /></>
-                }
-              </Button>
-            </div>
-          )}
-        </div>
+    return submit('/step/5',{area_code:area},'activation');
+  }
+  if(!state)return <div className="p-6 space-y-3"><h1 className="text-xl">Configuration de votre assistante</h1>
+    {error?<><p role="alert">{error}</p><Button onClick={()=>refresh()}>Réessayer</Button></>:<p role="status">Chargement de la progression…</p>}</div>;
+  const completed=Boolean(state.test.verified_at);
+  return <div className="max-w-2xl mx-auto p-4 space-y-5">
+    <header><h1 className="text-2xl font-semibold text-text-primary">Configuration de votre assistante</h1>
+      <p className="text-sm text-text-secondary mt-2">Chaque étape est enregistrée lorsque vous cliquez sur Continuer. Vous pourrez reprendre ici et ajuster ensuite les réglages dans Paramètres.</p></header>
+    <ol className="grid grid-cols-5 gap-2" aria-label="Progression">
+      {LABELS.map((label,i)=><li key={label} aria-current={step===i+1?'step':undefined}
+        className={'border rounded-lg p-2 text-xs text-center '+(step===i+1?'border-brand text-brand':'border-border text-text-secondary')}>
+        {i+1}. {label}{(completed||step>i+1)&&<CheckCircle2 className="mx-auto mt-1" size={14}/>}</li>)}
+    </ol>
+    {!canEdit&&<p role="alert">Un administrateur de l’entreprise doit terminer ces étapes. Vous pouvez consulter la progression.</p>}
+    <section className="border border-border rounded-xl bg-bg-card p-5 space-y-4" aria-labelledby="step-title">
+      <h2 id="step-title" className="text-lg font-semibold">{completed?'Appel test confirmé':LABELS[step-1]}</h2>
+      {step===1&&<fieldset disabled={busy||!canEdit} className="space-y-4">
+        <label className="block">Nom de l’assistante<input className={input} value={name} maxLength={80} onChange={e=>setName(e.target.value)}/></label>
+        <label className="block">Ton<select className={input} value={tone} onChange={e=>setTone(e.target.value)}>
+          <option value="professional">Professionnel</option><option value="warm">Chaleureux</option>
+          <option value="formal">Formel</option><option value="casual">Décontracté</option>
+        </select></label></fieldset>}
+      {step===2&&<fieldset disabled={busy||!canEdit} className="space-y-3">
+        {voiceError?<p role="alert">{voiceError}</p>:!voices.length?<p role="status">Chargement des voix…</p>:voices.map(v=><label key={v.id}
+          className="flex items-center gap-3 border border-border rounded-lg p-3 cursor-pointer">
+          <input type="radio" name="voice" value={v.id} checked={voice===v.id} onChange={()=>setVoice(v.id)}/>
+          <span>{v.display_name||v.name} <span className="text-xs text-text-secondary">{v.accent||''}</span></span>
+        </label>)}</fieldset>}
+      {step===3&&<>
+        <p className="text-sm text-text-secondary">Ajoutez jusqu’à 20 réponses utiles. Cette étape peut rester vide ; les ajouts ultérieurs se font dans la Base de connaissances.</p>
+        {state.knowledge_saved&&<p role="status" className="text-sm">Vos questions sont enregistrées. Continuer reprend leur indexation sans les dupliquer.</p>}
+        <fieldset disabled={busy||!canEdit||state.knowledge_saved} className="space-y-3">
+          {faq.map((entry,i)=><div key={i} className="border border-border rounded-lg p-3 space-y-2">
+            <label className="block text-sm">Question {i+1}<input className={input} value={entry.question} maxLength={500}
+              onChange={e=>setFaq(items=>items.map((item,j)=>i===j?{...item,question:e.target.value}:item))}/></label>
+            <label className="block text-sm">Réponse<textarea className={input} rows={3} value={entry.answer} maxLength={4000}
+              onChange={e=>setFaq(items=>items.map((item,j)=>i===j?{...item,answer:e.target.value}:item))}/></label>
+            <button type="button" onClick={()=>setFaq(items=>items.filter((_,j)=>i!==j))} className="text-sm underline">Retirer</button>
+          </div>)}
+          <Button variant="outline" disabled={faq.length>=20} onClick={()=>setFaq(items=>[...items,{question:'',answer:''}])}>Ajouter une question</Button>
+        </fieldset></>}
+      {step===4&&<>
+        <p className="text-sm text-text-secondary">L’activation attribue un numéro professionnel et configure l’agent IA, sous réserve d’un abonnement actif. Une tentative déjà en cours est reprise, sans achat supplémentaire.</p>
+        <label className="block">Code régional souhaité<select className={input} value={area} onChange={e=>setArea(e.target.value)} disabled={busy||Boolean(watch)||!canEdit}>
+          {['581','418','514'].map(code=><option key={code}>{code}</option>)}</select></label>
+        <p role="status">Statut : {({idle:'à lancer',in_progress:'activation en cours',failed:'échec à vérifier',done:'vérification requise'})[state.status]||'à vérifier'}</p>
+        {state.retry_after_seconds>0&&<p className="text-sm">Une opération possède le verrou. Actualisez son statut ; la nouvelle tentative reste bloquée jusqu’à son expiration.</p>}
+        {state.error&&<p role="alert">{onboardingError(state.error)}</p>}
+      </>}
+      {step===5&&!completed&&<>
+        <p className="flex items-center gap-2 text-xl font-mono text-brand"><Phone size={20}/>{state.phone_number}</p>
+        <p>Préparez le test ci-dessous, puis appelez ce numéro depuis votre téléphone, sans masquer votre numéro. Échangez quelques phrases avec l’assistante et raccrochez.</p>
+        <p className="text-sm text-text-secondary">L’annonce de confidentialité reste obligatoire. Un refus de traitement n’est jamais contourné pour valider le test. La confirmation n’arrive qu’après le webhook signé de fin d’appel.</p>
+        <label className="block">Votre téléphone d’appel<input type="tel" className={input} value={phone} placeholder="+15145550123"
+          disabled={busy||Boolean(watch)||!canEdit} onChange={e=>setPhone(e.target.value)}/></label>
+        <Button disabled={busy||Boolean(watch)||!canEdit} onClick={()=>submit('/test-call',{test_phone_number:phone},'test')}>Préparer le test (20 minutes)</Button>
+        {state.test.status==='waiting'&&<p role="status">En attente de votre appel depuis {state.test.phone}. Vous pouvez maintenant appeler le numéro professionnel.</p>}
+        {state.test.status==='expired'&&<p role="alert">{onboardingError('test_expired')}</p>}
+      </>}
+      {completed&&<>
+        <p role="status" className="text-brand-green">Un véritable appel entrant a été confirmé. Votre configuration initiale est terminée.</p>
+        <p>Vérifiez le résumé dans Appels et vos horaires/transferts dans Paramètres avant de diffuser le numéro.</p>
+        <Button onClick={()=>navigate('/dashboard')}>Aller au tableau de bord</Button>
+      </>}
+      {error&&<p role="alert" className="text-brand-red">{error}</p>}
+      {watch&&<p role="status" className="flex items-center gap-2 text-sm"><Loader2 size={15} className="animate-spin"/>Vérification toutes les 3 secondes (3 minutes maximum)…</p>}
+      <div className="flex flex-wrap gap-3 border-t border-border pt-4">
+        {step<5&&<Button onClick={next} disabled={busy||Boolean(watch)||!canEdit||step===2&&!voice||step===4&&!state.can_retry}>
+          {busy?'Enregistrement…':step===4?'Activer / réessayer':'Enregistrer et continuer'}
+        </Button>}
+        <Button variant="outline" disabled={busy||Boolean(watch)} onClick={()=>refresh()}>Actualiser la progression</Button>
+        <Link to="/support" className="text-sm text-brand underline self-center">Contacter le support</Link>
       </div>
-    </div>
-  );
+    </section>
+  </div>;
 }
