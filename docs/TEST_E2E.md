@@ -73,6 +73,23 @@ Endpoints à configurer/tester :
 
 ## 2. Résultats locaux acquis et limites
 
+### Précontrôle de l'environnement existant — 13 septembre 2026
+
+Karim a confirmé de réutiliser les accès existants. Contrôles réalisés **en lecture seule**, via le connecteur Supabase et des GET HTTP publics, sans secrets affichés ni compte QA créé.
+
+- Projet **Exevori Voice IA**, référence `yptsvqhcnksjxufziech`, région `ca-central-1`, état **ACTIVE_HEALTHY**.
+- `ticket_messages.company_id` existe. Toutes les tables publiques présentes ont RLS activée. Sur contacts/calls/tickets/ticket_messages/phone_numbers/notifications : politiques `tenant_isolation` et `service_role_bypass` présentes, aucun GRANT direct à anon/authenticated remonté par la vue interrogée. Les deux helpers du schéma `private` existent. Ces observations sont compatibles avec la migration 009 ; elles ne remplacent pas les six tests cross-tenant sous de vrais comptes.
+- Le registre renvoyé par `list_migrations` est vide, **ce qui ne prouve pas qu'aucun SQL n'a été exécuté manuellement**. L'état du schéma fait foi pour l'inventaire.
+- Éléments requis absents : `audit_log` (010), `contacts.call_consent` (011), `outbound_call_queue` (012), `calendly_connections` (013), `knowledge_processing_jobs` (014), `ticket_email_outbox` (015), `provider_monitor_state` (016), `admin_impersonation_sessions` (017), `company_settings` et la fonction `account_session_active` (018), `onboarding_progress.setup_data` (019), `notifications.event_key` (020). Ces évolutions ne sont donc pas complètement appliquées ; ceci n'est pas une certification d'absence de toute application partielle.
+- Les deux anciennes previews retrouvées (`720876eb-de73-4840-91bd-19cf23fab78e.preview.emergentagent.com` et `emergent-preview-113.preview.emergentagent.com`) renvoient du HTML avec HTTP 200 sur `/` et `/health`, mais **404 sur `/api/v1/billing/verify-session`**. La première page porte le titre **Not Found**. Un HTTP 200 de cette page d'hébergement n'est pas un backend sain. Aucune de ces URL ne permet de valider le parcours API attendu à ce stade.
+- Advisors sécurité : 6 fonctions historiques à [search_path mutable](https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable), l'extension vector dans [public](https://supabase.com/docs/guides/database/database-linter?lint=0014_extension_in_public), et [protection contre les mots de passe compromis désactivée](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection). Aucun réglage modifié ; pas de déplacement automatique de vector ni de réécriture de fonctions existantes.
+
+**Conclusion : prérequis de recette bloqués, pas tests métier échoués.** Ne pas déployer le nouveau backend sur ce schéma incomplet. Les comptes, données Auth, profils, entreprises, abonnements, fournisseurs et secrets n'ont pas été modifiés. Aucun merge, déploiement ou changement de configuration de l'hébergeur effectué.
+
+Avant de poursuivre : valider sauvegarde/restauration et SQL complet, contrôler les éventuels états partiels, appliquer uniquement les évolutions autorisées dans l'ordre, puis remettre à disposition l'application/API selon le processus de déploiement approuvé. La confirmation des accès n'est pas assimilée à une autorisation de migration ou de mise en production.
+
+### Vérifications du code
+
 Vérifications effectuées sur le code des Tâches 19–20, sans base ni fournisseur réel :
 
 | Vérification | Résultat local au 13 septembre 2026 |
