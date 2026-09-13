@@ -51,7 +51,6 @@ BEGIN
       ('appointments', 'notes'),
       ('appointments', 'post_call_job_id'),
       ('appointments', 'source'),
-      ('appointments', 'source_direction'),
       ('appointments', 'status'),
       ('appointments', 'time'),
       ('appointments', 'type'),
@@ -350,7 +349,10 @@ CREATE TABLE IF NOT EXISTS public.calendar_email_outbox (
 -- 4. Canonical Calendly fields on appointments
 -- ============================================================
 
+-- This field is absent from the legacy schema. Keep old directions unknown:
+-- no default and no backfill; provider ingestion supplies new values.
 ALTER TABLE public.appointments
+  ADD COLUMN IF NOT EXISTS source_direction text,
   ADD COLUMN IF NOT EXISTS calendly_connection_id uuid,
   ADD COLUMN IF NOT EXISTS calendly_event_id text,
   ADD COLUMN IF NOT EXISTS calendly_event_uri text,

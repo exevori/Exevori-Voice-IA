@@ -23,6 +23,15 @@ test("migration 013 is transactional and guarded by migrations 009 through 012",
   }
 });
 
+test("migration 013 adds source direction without requiring or rewriting legacy values", () => {
+  const initialGuard = migration.slice(0, migration.indexOf("-- Composite keys"));
+  assert.doesNotMatch(initialGuard, /\('appointments',\s*'source_direction'\)/);
+  const column = migration.match(/ADD COLUMN IF NOT EXISTS source_direction\s+([^,;]+)/);
+  assert.ok(column, "Calendly writes source_direction, so the migration must create it");
+  assert.equal(column[1].trim(), "text", "legacy direction must stay nullable and unknown");
+  assert.doesNotMatch(migration, /UPDATE public\.appointments\s+SET source_direction\b/);
+});
+
 test("all calendar operational tables are backend-only with RLS and explicit grants", () => {
   for (const table of [
     "calendly_connections",

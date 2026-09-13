@@ -88,6 +88,8 @@ Karim a confirmé de réutiliser les accès existants. Contrôles réalisés **e
 
 Avant de poursuivre : valider sauvegarde/restauration et SQL complet, contrôler les éventuels états partiels, appliquer uniquement les évolutions autorisées dans l'ordre, puis remettre à disposition l'application/API selon le processus de déploiement approuvé. La confirmation des accès n'est pas assimilée à une autorisation de migration ou de mise en production.
 
+Après accord de Karim pour engager cette préparation, le [dossier de validation des migrations](MIGRATION_V1_VALIDATION.md) détaille les SQL complets, les empreintes et les effets sur l'historique. Il relève 51 appels de plus de 90 jours à préserver ou traiter selon décision explicite, et une colonne Calendly manquante corrigée dans le dépôt seulement. La sauvegarde restaurable reste non vérifiée ; aucune migration n'a été exécutée.
+
 ### Vérifications du code
 
 Vérifications effectuées sur le code des Tâches 19–20, sans base ni fournisseur réel :
