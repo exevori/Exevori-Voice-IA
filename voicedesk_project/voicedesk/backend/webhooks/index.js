@@ -11,6 +11,7 @@ import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import { logger } from "../lib/logger.js";
 import dotenv from "dotenv";
+import { MISSED_STATUSES, recordMissedInbound } from "../modules/notifications/missedCall.js";
 
 dotenv.config();
 
@@ -118,6 +119,16 @@ router.post("/gmail-push", async (req, res) => {
 // Statut des appels Twilio (initiated, ringing, answered, completed, busy, failed)
 // ─────────────────────────────────────────────────────────────
 router.post("/twilio/status", express.urlencoded({ extended: true }), async (req, res) => {
+  // The parent mount has already verified the Twilio HMAC. Failure can precede
+  // any ElevenLabs conversation; persist its tenant-bound alert atomically.
+  if (req.body?.Direction === "inbound" && MISSED_STATUSES.has(req.body.CallStatus)) {
+    try {
+      const notified = await recordMissedInbound({supabase,body:req.body});
+      return res.status(200).json({received:true,notified});
+    } catch (error) {
+      return res.status(error.status || 503).json({error:error.code || "missed_call_persistence_unavailable"});
+    }
+  }
   const {
     CallSid, CallStatus, From, To, Duration,
     Direction, AnsweredBy, Timestamp,

@@ -58,6 +58,7 @@ import voiceLibraryRouter from "./modules/voice-library/index.js";
 import onboardingRouter from "./modules/onboarding/index.js";
 import importRouter from "./modules/import/index.js";
 import notificationsRouter from "./modules/notifications/index.js";
+import { startNotificationMaintenance } from "./modules/notifications/maintenance.js";
 import outboundRouter from "./modules/outbound/index.js";
 import {
   getOutboundWorkerStatus,
@@ -346,6 +347,7 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 if (process.env.DISABLE_BACKGROUND_JOBS !== "true") {
+  startNotificationMaintenance({logger});
   startEmailPoller();
   startWeeklyReportJob();
   if (process.env.DISABLE_PROVIDER_MONITOR !== "true") providerMonitor.start();

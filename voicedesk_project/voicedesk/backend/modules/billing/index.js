@@ -680,18 +680,22 @@ async function handleInvoicePaid(invoice) {
 }
 
 async function handleInvoiceFailed(invoice) {
-  const { data: sub } = await supabase
+  const { data: sub, error: lookupError } = await supabase
     .from("subscriptions")
     .select("company_id")
     .eq("stripe_customer_id", invoice.customer)
     .single();
 
+  if (lookupError) throw new Error("payment_failure_lookup_unavailable");
   if (!sub) return;
 
-  await supabase
+  const { error: updateError } = await supabase
     .from("subscriptions")
     .update({ payment_status: "overdue" })
     .eq("company_id", sub.company_id);
+  // The notification trigger participates in this transaction. Do not
+  // acknowledge Stripe when that durable write was not confirmed.
+  if (updateError) throw new Error("payment_failure_persistence_unavailable");
 }
 
 async function handlePaymentMethodAttached(paymentMethod) {
