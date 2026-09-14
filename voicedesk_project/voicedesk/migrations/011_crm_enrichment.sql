@@ -154,7 +154,8 @@ BEGIN
       ('dnc_list', 'reason'),
       ('dnc_list', 'source'),
       ('email_drafts', 'company_id'),
-      ('email_drafts', 'contact_id'),
+      ('email_drafts', 'email_id'),
+      ('emails', 'id'),
       ('emails', 'company_id'),
       ('emails', 'contact_id'),
       ('outbound_calls', 'company_id'),
@@ -706,9 +707,13 @@ BEGIN
     WHERE e.contact_id = p_duplicate_contact_id
       AND e.company_id IS DISTINCT FROM p_company_id
   ) OR EXISTS (
-    SELECT 1 FROM public.email_drafts AS e
+    SELECT 1 FROM public.email_drafts AS d
+    JOIN public.emails AS e ON e.id = d.email_id
     WHERE e.contact_id = p_duplicate_contact_id
-      AND e.company_id IS DISTINCT FROM p_company_id
+      AND (
+        d.company_id IS DISTINCT FROM p_company_id
+        OR e.company_id IS DISTINCT FROM p_company_id
+      )
   ) OR EXISTS (
     SELECT 1 FROM public.appointments AS a
     WHERE a.contact_id = p_duplicate_contact_id
@@ -736,17 +741,23 @@ BEGIN
     AND contact_id = p_duplicate_contact_id;
   GET DIAGNOSTICS moved_outbound_calls = ROW_COUNT;
 
+  -- Drafts inherit their contact through the parent email. Count them before
+  -- reassigning that email; no direct contact_id exists on email_drafts.
+  SELECT count(*)::integer
+  INTO moved_email_drafts
+  FROM public.email_drafts AS d
+  JOIN public.emails AS e ON e.id = d.email_id
+  JOIN public.contacts AS c ON c.id = e.contact_id
+  WHERE c.id = p_duplicate_contact_id
+    AND c.company_id = p_company_id
+    AND e.company_id = p_company_id
+    AND d.company_id = p_company_id;
+
   UPDATE public.emails
   SET contact_id = p_primary_contact_id
   WHERE company_id = p_company_id
     AND contact_id = p_duplicate_contact_id;
   GET DIAGNOSTICS moved_emails = ROW_COUNT;
-
-  UPDATE public.email_drafts
-  SET contact_id = p_primary_contact_id
-  WHERE company_id = p_company_id
-    AND contact_id = p_duplicate_contact_id;
-  GET DIAGNOSTICS moved_email_drafts = ROW_COUNT;
 
   UPDATE public.appointments
   SET contact_id = p_primary_contact_id

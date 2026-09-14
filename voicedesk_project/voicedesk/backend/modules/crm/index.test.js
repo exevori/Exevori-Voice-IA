@@ -761,7 +761,8 @@ test("migration guards every column required by rewrites and atomic merge", () =
     ["dnc_list", "company_id"],
     ["dnc_list", "phone"],
     ["email_drafts", "company_id"],
-    ["email_drafts", "contact_id"],
+    ["email_drafts", "email_id"],
+    ["emails", "id"],
     ["emails", "company_id"],
     ["emails", "contact_id"],
     ["outbound_calls", "company_id"],
@@ -847,7 +848,6 @@ test("migration merge RPC is invoker-only, tenant-filtered, atomic and audited",
     "calls",
     "outbound_calls",
     "emails",
-    "email_drafts",
     "appointments",
   ]) {
     assert.match(
@@ -861,4 +861,21 @@ test("migration merge RPC is invoker-only, tenant-filtered, atomic and audited",
     /REVOKE ALL[\s\S]*?FROM PUBLIC, anon, authenticated/
   );
   assert.match(mergeFunction, /GRANT EXECUTE[\s\S]*?TO service_role/);
+});
+
+test("migration merge follows draft parent emails without a nonexistent contact column", () => {
+  const migration = fs.readFileSync(
+    new URL("../../../migrations/011_crm_enrichment.sql", import.meta.url),
+    "utf8"
+  );
+  const merge = migration.slice(migration.indexOf(
+    "CREATE OR REPLACE FUNCTION public.merge_crm_contacts"
+  ));
+  assert.doesNotMatch(migration, /\('email_drafts', 'contact_id'\)/);
+  assert.doesNotMatch(merge, /UPDATE public\.email_drafts\b/);
+  assert.match(merge, /FROM public\.email_drafts AS d\s+JOIN public\.emails AS e ON e\.id = d\.email_id\s+WHERE e\.contact_id = p_duplicate_contact_id\s+AND \(\s*d\.company_id IS DISTINCT FROM p_company_id\s+OR e\.company_id IS DISTINCT FROM p_company_id\s*\)/);
+  assert.match(merge, /SELECT count\(\*\)::integer\s+INTO moved_email_drafts\s+FROM public\.email_drafts AS d\s+JOIN public\.emails AS e ON e\.id = d\.email_id\s+JOIN public\.contacts AS c ON c\.id = e\.contact_id\s+WHERE c\.id = p_duplicate_contact_id\s+AND c\.company_id = p_company_id\s+AND e\.company_id = p_company_id\s+AND d\.company_id = p_company_id/);
+  assert.ok(merge.indexOf("INTO moved_email_drafts") < merge.indexOf("UPDATE public.emails"));
+  assert.match(merge, /'moved_email_drafts', moved_email_drafts/);
+  assert.match(merge, /'email_drafts', moved_email_drafts/);
 });
