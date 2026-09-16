@@ -73,6 +73,11 @@ test("vector search is tenant-scoped and callable only by service_role", () => {
 });
 
 test("approved suggestions can trace their RAG source and automatic test", () => {
+  assert.match(
+    sql,
+    /ON public\.learning_suggestions\(company_id, rag_status, detected_at DESC\)/
+  );
+  assert.doesNotMatch(sql, /learning_suggestions\([^;]*created_at/);
   for (const column of [
     "knowledge_source_id",
     "rag_status",

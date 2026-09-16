@@ -336,7 +336,7 @@ ALTER TABLE public.learning_suggestions
   ADD COLUMN IF NOT EXISTS rag_error text;
 
 CREATE INDEX IF NOT EXISTS idx_learning_suggestions_rag
-  ON public.learning_suggestions(company_id, rag_status, created_at DESC);
+  ON public.learning_suggestions(company_id, rag_status, detected_at DESC);
 
 -- --------------------------------------------------------------------------
 -- 5. Reprise idempotente de la base historique vers le RAG.
