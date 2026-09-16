@@ -1,5 +1,7 @@
 # Exécution migrations V1 — arrêt sur 011
 
+> État historique. **Mise à jour du 16 septembre : 011 corrigée et 012–017 appliquées/contrôlées ; arrêt avant 018 sur autorisation sensible.** Voir le [rapport courant](MIGRATION_V1_EXECUTION_20260916.md). Ne pas rejouer les migrations déjà réussies.
+
 Contrôle du **14 septembre 2026 à 00:30 UTC** (13 septembre, heure locale de Karim).
 Projet : `yptsvqhcnksjxufziech` — Exevori Voice IA — `ACTIVE_HEALTHY`.
 Branche source : `feature/v1-professionnel`, commit SQL `e189e48874b94b38c1deaf16a80b49440342b633`.
