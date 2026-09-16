@@ -62,6 +62,12 @@ test("vector search is tenant-scoped and callable only by service_role", () => {
   assert.match(fn, /source\.status = 'ready'/);
   assert.match(fn, /SECURITY DEFINER/);
   assert.match(fn, /SET search_path = ''/);
+  assert.equal(
+    fn.match(/chunk\.embedding OPERATOR\(public\.<=>\) p_query_embed/g)?.length,
+    3,
+    "all cosine-distance expressions must resolve pgvector with the empty search_path"
+  );
+  assert.doesNotMatch(fn, /chunk\.embedding\s+<=>/);
   assert.match(fn, /FROM PUBLIC, anon, authenticated/);
   assert.match(fn, /TO service_role/);
 });

@@ -300,7 +300,7 @@ AS $function$
     source.category,
     chunk.chunk_index,
     chunk.content,
-    1 - (chunk.embedding <=> p_query_embed) AS similarity
+    1 - (chunk.embedding OPERATOR(public.<=>) p_query_embed) AS similarity
   FROM public.knowledge_chunks AS chunk
   JOIN public.knowledge_sources AS source
     ON source.id = chunk.source_id
@@ -308,8 +308,8 @@ AS $function$
   WHERE chunk.company_id = p_company_id
     AND chunk.embedding IS NOT NULL
     AND source.status = 'ready'
-    AND (1 - (chunk.embedding <=> p_query_embed)) >= p_min_similarity
-  ORDER BY chunk.embedding <=> p_query_embed
+    AND (1 - (chunk.embedding OPERATOR(public.<=>) p_query_embed)) >= p_min_similarity
+  ORDER BY chunk.embedding OPERATOR(public.<=>) p_query_embed
   LIMIT greatest(1, least(coalesce(p_match_count, 3), 20));
 $function$;
 
