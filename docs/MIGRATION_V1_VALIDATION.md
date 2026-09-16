@@ -5,7 +5,7 @@ Préparé le **13 septembre 2026**, après accord de Karim pour engager la mise 
 Projet ciblé : **Exevori Voice IA**, `yptsvqhcnksjxufziech`, région `ca-central-1`.
 Branche uniquement : `feature/v1-professionnel`.
 
-**Mise à jour — 16 septembre 2026 :** Karim a explicitement levé le prérequis de sauvegarde et autorisé l'exécution après comptage. **010–017 appliquées et contrôlées**, avec corrections approuvées de 011 et corrections de schéma/résolution SQL de 014. **018 bloquée avant exécution par le contrôle de sécurité ; 019–020 non exécutées pour préserver l'ordre.** Aucun worker ni purge démarré par Codex. Voir le [rapport courant, commits et contrôles](MIGRATION_V1_EXECUTION_20260916.md) ; le [rapport du 14 septembre](MIGRATION_V1_EXECUTION_20260914.md) est historique.
+**Mise à jour finale — 16 septembre 2026, 22:52 UTC :** **010–020 appliquées et contrôlées**, avec corrections de 011/014 et autorisation explicite de Karim pour les fonctions sensibles de 018. Les empreintes des deux comptes, profils, entreprises et abonnements sont identiques avant/après 018, 019 et 020. Aucun worker ni purge démarré par Codex. Le prérequis de sauvegarde avait été explicitement levé par Karim. Voir le [rapport final, commits et contrôles](MIGRATION_V1_EXECUTION_20260916.md) ; le [rapport du 14 septembre](MIGRATION_V1_EXECUTION_20260914.md) est historique.
 
 Les sections préparatoires ci-dessous conservent les constats et recommandations antérieurs à cette décision. Aucune sauvegarde de base n'a été créée ou vérifiée ; le comptage ne remplace pas un backup. Aucun déploiement, changement de secret, appel ou paiement.
 
@@ -124,5 +124,5 @@ Si retour arrière nécessaire : arrêter les écritures selon le plan approuvé
 - Sauvegarde restaurable : **AUCUNE** ; Karim a explicitement accepté l'exécution sans backup après comptage.
 - 51 appels anciens : **PURGE NORMALE À 90 JOURS APPROUVÉE**, sans exemption ; aucun job à démarrer avant validation de toute la séquence.
 - Conversions CRM et correction nullable `source_direction` de 013 : **APPROUVÉES**.
-- SQL : **010–017 OK**. Corrections 011 et 014 committées/poussées avant application. **018 NON EXÉCUTÉE sur refus de sécurité ; 019–020 NON EXÉCUTÉES**.
-- Reprise : **GO explicite attendu pour les capacités sensibles créées par 018** (profils/invitations et lecture de sessions Auth), sans mutation de comptes existants lors des tests. Voir le rapport du 16 septembre. Reprendre à 018 ; ne pas rejouer 009–017. Les empreintes du tableau préparatoire pour 011/014 sont historiques ; les empreintes corrigées sont dans le rapport courant.
+- SQL : **010–020 OK**. Corrections 011 et 014 committées/poussées avant application. 018–020 appliquées sans correction après GO explicite de Karim, sans appel des fonctions sur les comptes existants.
+- Suite : séquence SQL terminée ; recette réelle et déploiement restent distincts, aucun worker ni purge lancé. Ne pas rejouer 009–020. Les empreintes du tableau préparatoire pour 011/014 sont historiques ; les empreintes corrigées et les comparaisons de comptes sont dans le rapport final du 16 septembre.

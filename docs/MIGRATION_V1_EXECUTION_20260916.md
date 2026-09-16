@@ -1,6 +1,6 @@
-# Exécution migrations V1 — 011 à 017 validées, arrêt avant 018
+# Exécution migrations V1 — séquence 010 à 020 terminée
 
-Contrôle du **16 septembre 2026, vers 22:36 UTC**.
+Contrôle final du **16 septembre 2026, vers 22:52 UTC**.
 Projet : `yptsvqhcnksjxufziech` — Exevori Voice IA — `ACTIVE_HEALTHY`.
 Branche exclusive : `feature/v1-professionnel`.
 
@@ -15,15 +15,15 @@ Migration 014 (corrigée): OK — deux erreurs résolues, chaque correction comm
 Migration 015: OK
 Migration 016: OK
 Migration 017: OK
-Migration 018: NON EXÉCUTÉE — refus du contrôle de sécurité avant envoi SQL
-Migration 019: NON EXÉCUTÉE — ordre conservé
-Migration 020: NON EXÉCUTÉE — ordre conservé
+Migration 018: OK — après autorisation explicite des fonctions sensibles
+Migration 019: OK
+Migration 020: OK
 Sauvegarde: aucune — prérequis explicitement levé par Karim
 Workers, pollers, cron, purge: aucun démarré par Codex
 Merge main / déploiement: aucun
 ```
 
-Le rapport du [14 septembre](MIGRATION_V1_EXECUTION_20260914.md) reste la trace de l'échec initial de 011 et du comptage préalable. Le présent rapport le remplace pour l'état courant. Ne pas rejouer 009 ni les migrations 010–017 déjà appliquées.
+Le rapport du [14 septembre](MIGRATION_V1_EXECUTION_20260914.md) reste la trace de l'échec initial de 011 et du comptage préalable. Le présent rapport le remplace pour l'état courant. Ne pas rejouer 009 ni les migrations 010–020 déjà appliquées.
 
 ## Registre Supabase vérifié
 
@@ -37,8 +37,11 @@ Le rapport du [14 septembre](MIGRATION_V1_EXECUTION_20260914.md) reste la trace 
 | 015 | 20260916223143 | v1_015_ticket_support_hardening |
 | 016 | 20260916223214 | v1_016_provider_monitoring |
 | 017 | 20260916223258 | v1_017_admin_audit_impersonation |
+| 018 | 20260916224900 | v1_018_account_settings |
+| 019 | 20260916224938 | v1_019_onboarding_resume |
+| 020 | 20260916225016 | v1_020_notification_center |
 
-018 est absente du registre. `company_settings`, `account_preferences` et `account_session_active(uuid,uuid)` sont absents : aucun début d'application constaté. L'ancien 009, appliqué manuellement, n'est pas déduit du registre.
+Les 11 migrations 010–020 sont présentes dans le registre. L'ancien 009, appliqué manuellement, n'est pas déduit du registre. Le premier refus de 018 n'avait rien exécuté ; seule la tentative postérieure à l'autorisation explicite a été appliquée.
 
 ## Corrections SQL committées et poussées avant application
 
@@ -81,13 +84,44 @@ SHA-256 du SQL finalement appliqué : `2585eb0e259829d6aac04ec6635e9d6d7ee5d056d
 | 015 | 1 | 8 | 6 | 0 | 0 |
 | 016 | 3 | 6 | 2 | 0 | 0 |
 | 017 | 1 | 3 | 7 | 0 | 0 |
+| 018 | 2 | 6 | 0 | 0 | 0 |
+| 019 | 0 | 6 | 0 | 0 | sans nouvelle table |
+| 020 | 0 | 9 | 3 | 0 | sans nouvelle table |
 
 Pour toutes les RPC publiques de ces migrations : EXECUTE refusé à `anon`/`authenticated`, accordé à `service_role`. Les fonctions privées de triggers sont comptées dans la présence, pas assimilées aux RPC publiques. Ces contrôles ne sont pas des tests fonctionnels exhaustifs de chaque fonction.
 
 - 013 : `appointments.source_direction` est `text`, nullable, sans défaut.
 - 014 : 4 anciennes fiches conservées dans `knowledge_base`, 4 sources et 4 chunks RAG ajoutés. 4 jobs pending, attempts=0 ; aucun embedding lancé. Recherche vectorielle en lecture seule sur un tenant inexistant : 0 résultat, sans erreur SQL.
 - 017 : `audit_log` reste append-only pour `service_role` : SELECT/INSERT oui, UPDATE/DELETE non. Aucune session d'impersonation créée.
+- 018–020 : 18 colonnes attendues présentes, 21 fonctions avec search_path vide et EXECUTE refusé à anon/authenticated, 11 triggers présents et activés pour les futures écritures. Aucun GRANT API direct sur company_settings, account_preferences, notifications, notification_preferences ou onboarding_progress.
 - Global : aucune table publique sans RLS.
+
+## Comptes existants préservés — comparaison avant/après 018, 019 et 020
+
+Karim a explicitement autorisé la création des fonctions, sans les appeler sur les deux comptes existants. Avant 018, une empreinte agrégée du contenu des lignes a été calculée dans PostgreSQL ; la même requête a été répétée après chacune des trois migrations. Aucun contenu de compte ni secret n'a été affiché ou stocké dans le dépôt ; seules les empreintes temporaires en mémoire et les compteurs ont été comparés.
+
+| Ensemble comparé | Lignes | Après 018 | Après 019 | Après 020 |
+| --- | ---: | --- | --- | --- |
+| auth.users | 2 | identique | identique | identique |
+| profiles | 2 | identique | identique | identique |
+| companies | 2 | identique | identique | identique |
+| subscriptions | 2 | identique | identique | identique |
+| invitations | 6 | identique | identique | identique |
+| assistant_configs, champs préexistants | 2 | identique | identique | identique |
+
+La comparaison des configurations exclut uniquement les cinq nouvelles colonnes explicitement ajoutées par 018 : rag_min_similarity, settings_sync_status, settings_sync_token, settings_sync_started_at, settings_sync_error. Les champs existants restent identiques. Les empreintes servent à détecter un changement des données, pas à fournir une sauvegarde restaurable.
+
+Aucune fonction de gestion de profil/invitation/session, d'onboarding ou de notification n'a été appelée sur les comptes réels pour ces vérifications. Les nouvelles tables company_settings et account_preferences sont vides ; onboarding_progress et notifications comptent toujours zéro ligne. Aucun backfill de propriétaire ni notification rétroactive.
+
+Les fichiers SQL 018, 019 et 020 ont été appliqués sans modification par rapport au commit source `463ee9cbf2319d9dd93ddf6966ace5132e64c980` :
+
+| SQL | SHA-256 |
+| --- | --- |
+| 018 | 8d51a99656c8068bbd4c25a7287641f43c3961aee4ae1f0fa900fd53ef13d85d |
+| 019 | c591328bf3593475bf0f0b76593db02b90037dd65fd2cc2d3d7030571c7e32f5 |
+| 020 | 4c6e4a9cea52a2d91c310ddc9b180605dfb62fb4ab18d87668071c0058f24b1b |
+
+Tests locaux ciblés après application : **63/63**, zéro échec, avec base/fournisseurs simulés (`modules/account/settings.test.js`, `modules/onboarding/resume.test.js`, `modules/onboarding/rag-faq.test.js`, `modules/notifications/center.test.js`). La suite backend complète était également verte après les dernières corrections SQL, avant 018. Aucun code applicatif n'a changé ensuite. Ces tests ne constituent pas une recette réelle avec des comptes et fournisseurs en production.
 
 ## Données et absence d'exécution de jobs
 
@@ -112,7 +146,7 @@ Ces agrégats ne prouvent pas l'immutabilité de chaque champ ni l'arrêt de tou
 
 Les nouvelles tables/RPC vérifiées n'ont pas de GRANT API direct. Les trois catalogues historiques `voice_library`, `plan_limits`, `plan_pricing` conservent en revanche des GRANT larges à anon/authenticated, dont TRUNCATE. Ils sont hors de la liste de durcissement 009 et n'ont pas été modifiés par 010–017. Leurs politiques SELECT/super-admin ne constituent pas une justification suffisante pour conserver tous ces privilèges : audit ciblé recommandé avant commercialisation, sans correction opportuniste dans cette séquence.
 
-Advisor sécurité : aucune erreur retournée, mais 7 avertissements persistants :
+Advisor sécurité relancé après 020 : aucune erreur retournée et aucun nouvel avertissement ; les 7 avertissements historiques suivants persistent :
 
 - 5 anciennes fonctions à [search_path mutable](https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable) : current_company_id, is_super_admin, currency_for_country, installation_fee_for_country, trg_set_updated_at. L'avertissement de match_kb_chunks a disparu après 014.
 - Extension vector dans [public](https://supabase.com/docs/guides/database/database-linter?lint=0014_extension_in_public), non déplacée.
@@ -120,9 +154,9 @@ Advisor sécurité : aucune erreur retournée, mais 7 avertissements persistants
 
 Le push GitHub continue de signaler 119 alertes sur la branche par défaut, dont 1 critique ; ce n'est pas un nouvel audit de la branche feature et aucun merge n'a été effectué pour les masquer.
 
-## Blocage 018 — autorisation explicite à renouveler
+## Autorisation 018 — blocage levé explicitement par Karim
 
-Le contrôle automatique de sécurité a refusé **avant exécution** l'appel de migration 018, en raison de la règle de Karim exigeant une alerte préalable avant de toucher aux profils/comptes. Il s'agit d'un refus d'autorisation, pas d'une erreur SQL. Aucun contournement ni nouvelle tentative n'a été effectué.
+Le contrôle automatique de sécurité avait refusé **avant exécution** le premier appel de migration 018, en raison de la règle de Karim exigeant une alerte préalable avant de toucher aux profils/comptes. Il s'agissait d'un refus d'autorisation, pas d'une erreur SQL. Aucun contournement n'a été tenté. Karim a ensuite explicitement autorisé la création des fonctions sans leur invocation sur les comptes existants, puis la poursuite 018 → 019 → 020. La séquence a alors réussi dans cet ordre, avec contrôle après chaque migration.
 
 La lecture du SQL complet précise les capacités créées :
 
@@ -131,9 +165,9 @@ La lecture du SQL complet précise les capacités créées :
 - `account_session_active` / `account_sessions` liront `auth.sessions` via des fonctions SECURITY DEFINER réservées au backend.
 - Ajout de paramètres de compte/assistant et de triggers de rétention sur les futures insertions d'appels/enregistrements.
 
-La migration définit ces fonctions sans les appeler ; elle ne contient pas de backfill des propriétaires ni de mutation immédiate des profils, entreprises, abonnements ou auth.users. Il faut néanmoins confirmer explicitement l'autorisation de **créer ces fonctions sensibles**, sans les tester par mutation de comptes existants.
+La migration définit ces fonctions sans les appeler ; elle ne contient pas de backfill des propriétaires ni de mutation immédiate des profils, entreprises, abonnements ou auth.users. Cette propriété a été vérifiée dans les scripts et par comparaison des empreintes de données après chacune des migrations.
 
-Après ce GO : reprendre à **018**, vérifier, puis 019 et 020 une par une. Les workers restent arrêtés. Le nouveau backend ne doit pas être lancé avant 018 et la validation complète : ses contrôles de session en dépendent. La recette réelle, les fournisseurs et le déploiement restent des étapes distinctes.
+**La séquence SQL est terminée.** Aucun worker, poller, cron ni job de purge n'a été démarré par Codex. La présence des RPC de session requises par le backend est maintenant vérifiée, mais cela ne vaut ni démarrage du backend ni validation de l'ensemble du produit. La recette réelle, les fournisseurs, les alertes de sécurité restantes et le déploiement restent des étapes distinctes. Aucun merge/push sur main ni nouveau service.
 
 ## Requêtes de contrôle reproductibles (lecture seule)
 
@@ -162,7 +196,7 @@ SELECT (SELECT count(*) FROM public.calls) AS calls,
 SELECT status, attempts, count(*)
 FROM public.knowledge_processing_jobs GROUP BY status, attempts;
 
--- Résultat observé : tous NULL (018 n'a pas été exécutée).
+-- Résultat observé : les 2 tables et la signature de fonction sont présentes.
 SELECT to_regclass('public.company_settings') AS company_settings,
        to_regclass('public.account_preferences') AS account_preferences,
        to_regprocedure('public.account_session_active(uuid,uuid)') AS session_rpc;
