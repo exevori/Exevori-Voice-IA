@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "demo": "vite --config vite.demo.config.js --mode demo",
+    "test:demo": "node --test demo/api.test.js",
     "build": "vite build",
     "preview": "vite preview"
   },

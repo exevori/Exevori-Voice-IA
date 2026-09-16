@@ -1,0 +1,8 @@
+body { padding-top: 70px; }
+.local-demo-banner { position: fixed; inset: 0 0 auto; z-index: 9999; min-height: 70px; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #163d35; color: #e6fff5; font: 12px/1.6 system-ui, sans-serif; border-bottom: 1px solid #4c947c; }
+.local-demo-banner strong { letter-spacing: .1em; color: #a7f3d0; }
+.local-demo-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.local-demo-actions a, .local-demo-actions button { color: #fff; padding: 5px 9px; border: 1px solid #609e88; border-radius: 6px; background: #214e42; cursor: pointer; }
+[data-testid="sidebar"] { top: 70px; height: calc(100vh - 70px); }
+[data-testid="main-header"] { top: 70px; }
+@media(max-width: 800px) { .local-demo-banner { font-size: 10px; padding: 8px; } .local-demo-actions { gap: 4px; } }
