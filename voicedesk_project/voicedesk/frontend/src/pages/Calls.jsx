@@ -21,6 +21,7 @@ import FilterBar from "../components/common/FilterBar.jsx";
 import TranscriptView from "../components/calls/TranscriptView.jsx";
 import CallRecordingPlayer from "../components/calls/CallRecordingPlayer.jsx";
 import { cn } from "../lib/utils.js";
+import InitialAvatar from "../components/common/InitialAvatar.jsx";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -133,13 +134,16 @@ export default function Calls() {
       key: "caller",
       header: t("calls.col.caller", "Contact"),
       render: (r) => (
-        <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-3">
+          <InitialAvatar name={r.caller_name || r.contact?.full_name || "?"} />
+          <div className="min-w-0">
           <div className="truncate text-sm font-medium text-text-primary">
             {r.caller_name || <span className="text-text-tertiary italic">Inconnu</span>}
           </div>
           {r.contact?.full_name && r.contact.full_name !== r.caller_name && (
             <div className="truncate text-[10px] text-text-tertiary">CRM: {r.contact.full_name}</div>
           )}
+          </div>
         </div>
       ),
     },
@@ -182,7 +186,7 @@ export default function Calls() {
   ], [t, i18n.language]);
 
   return (
-    <div className="space-y-5 animate-fade-in" data-testid="calls-page">
+    <div className="premium-page space-y-6 animate-fade-in" data-testid="calls-page">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-text-tertiary mb-1">
@@ -200,6 +204,11 @@ export default function Calls() {
         )}
       </div>
 
+      <div className="flex flex-wrap gap-2" aria-label="Filtrer les appels par statut">
+        {[{ value: null, label: "Tous", count: calls.length }, ...statusOptions].map(option => <button key={option.value || "all"} type="button" onClick={() => setStatusFilter(option.value)} aria-pressed={statusFilter === option.value} className={cn("flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-medium", statusFilter === option.value ? "border-brand/30 bg-brand/10 text-brand" : "border-border bg-bg-card text-text-secondary hover:border-border-strong")}>
+          {option.color && <span className={cn("h-1.5 w-1.5 rounded-full", option.color)} />}{option.label}<span className="tabular-nums opacity-70">{option.count}</span>
+        </button>)}
+      </div>
       <FilterBar
         testId="calls-filterbar"
         searchValue={search}
@@ -269,7 +278,7 @@ function CallDetailSheet({ callId, open, onClose, token, t, lang, assistantName,
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent data-testid="call-detail-sheet" className="overflow-y-auto sm:max-w-2xl">
+      <SheetContent data-testid="call-detail-sheet" className="premium-sheet overflow-y-auto sm:max-w-2xl">
         {loading || !c ? (
           <>
             <SheetHeader>
@@ -327,7 +336,7 @@ function CallDetailSheet({ callId, open, onClose, token, t, lang, assistantName,
               </div>
             </SheetHeader>
 
-            <div className="px-6 py-4 space-y-5">
+            <div className="p-6 space-y-6">
               {/* Résumé IA */}
               <section data-testid="call-section-summary">
                 <h4 className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-2 flex items-center gap-1.5">
@@ -351,8 +360,8 @@ function CallDetailSheet({ callId, open, onClose, token, t, lang, assistantName,
                 )}
               </section>
 
-              <section>
-                <h4>Enregistrement</h4>
+              <section className="rounded-xl border border-border bg-bg-secondary p-5">
+                <h4 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-secondary"><Phone size={14} className="text-brand" />Enregistrement</h4>
                 <CallRecordingPlayer callId={c.id} token={token} hasExternalId={!!(c.elevenlabs_conversation_id || c.external_id)} />
               </section>
 
@@ -361,11 +370,11 @@ function CallDetailSheet({ callId, open, onClose, token, t, lang, assistantName,
                 <h4 className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary mb-2">
                   {t("calls.detail.transcript", "Transcript")}
                 </h4>
-                <TranscriptView
+                <div className="rounded-xl border border-border bg-bg-secondary p-5 font-mono text-sm"><TranscriptView
                   transcript={transcript}
                   assistantName={assistantName}
                   callerName={c.caller_name || c.contact?.full_name || "Appelant"}
-                />
+                /></div>
               </section>
 
               {/* Métadonnées */}

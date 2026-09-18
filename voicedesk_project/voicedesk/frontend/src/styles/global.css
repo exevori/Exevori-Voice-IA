@@ -7,6 +7,52 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Opt-in page polish. Base components and theme tokens stay unchanged. */
+@layer components {
+  .premium-page { @apply space-y-6; }
+  .premium-surface { @apply transition-all duration-200 ease-out hover:border-border-strong hover:shadow-lg hover:shadow-brand/5; }
+  .premium-page > header, .premium-page > div:first-child:not(.grid) { @apply border-b border-border pb-6; }
+  .premium-page h1 { @apply text-xl font-semibold tracking-tight; }
+  .premium-page :where(button, a) { @apply transition-all duration-200 ease-out; }
+  .premium-page :where(button:enabled):active { transform: scale(0.98); }
+  .premium-page :where(button, a):focus-visible { @apply outline-none ring-2 ring-brand ring-offset-2 ring-offset-bg-primary; }
+  .premium-page :where(.rounded-xl.border) { @apply transition-all duration-200 ease-out hover:border-border-strong; }
+  .premium-page table thead { @apply bg-bg-secondary/50; }
+  .premium-page table th { @apply px-5 py-3 text-[11px] font-medium uppercase tracking-wider text-text-tertiary; }
+  .premium-page table td { @apply px-5 py-4; }
+  .premium-page table tbody tr { @apply transition-colors duration-200 hover:bg-white/[0.02]; }
+  .premium-page table tbody tr:focus-within td:last-child { opacity: 1; }
+  .premium-sheet { @apply bg-bg-card; }
+  .premium-sheet section + section { @apply border-t border-border pt-5; }
+  .premium-page .premium-timeline > li { @apply relative border-l border-border pl-6 pb-2; }
+  .premium-page .premium-timeline > li::before { content: ''; @apply absolute -left-1 top-6 h-2 w-2 rounded-full bg-brand ring-4 ring-bg-card; }
+  .premium-shimmer { background-size: 200% auto; animation: premium-shimmer 7s ease-in-out infinite; }
+  .premium-step { animation: premium-slide 240ms ease-out; }
+}
+@keyframes premium-shimmer { 0%, 100% { background-position: 0% center; } 50% { background-position: 100% center; } }
+@keyframes premium-slide { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: translateX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .premium-page *, .premium-sheet *, .premium-shimmer, .premium-step { animation: none !important; transition: none !important; }
+  .premium-page button:active { transform: none !important; }
+}
+
+/* Keep the existing navigation and links reachable on small screens. */
+[data-testid="main-content"] { min-width: 0; }
+@media (max-width: 767px) {
+  [data-testid="sidebar"] { width: 64px; }
+  [data-testid="main-content"] { margin-left: 64px; }
+  [data-testid="main-header"], [data-testid="page-container"] { padding-left: 16px; padding-right: 16px; }
+  [data-testid="sidebar"] > div:first-child { padding: 16px 12px; }
+  [data-testid="sidebar"] > div:first-child > div,
+  [data-testid="sidebar-nav"] a > span,
+  [data-testid="sidebar-footer"] .min-w-0 {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap;
+  }
+  [data-testid="sidebar-nav"] a { justify-content: center; padding: 12px 8px; }
+  [data-testid="sidebar-nav"] svg { flex-shrink: 0; }
+  [data-testid="sidebar-footer"] > div { flex-direction: column; }
+}
+
 @layer base {
   :root {
     /* === EXEVORI CSS VARIABLES (legacy, used by some CSS-only screens) === */

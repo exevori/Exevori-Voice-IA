@@ -24,6 +24,7 @@ import ContactForm from "../components/contacts/ContactForm.jsx";
 import ImportWizard from "../components/contacts/ImportWizard.jsx";
 import { cn } from "../lib/utils.js";
 import { hasPermission } from "../utils/auth-helpers.js";
+import InitialAvatar from "../components/common/InitialAvatar.jsx";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -253,7 +254,7 @@ export default function Contacts() {
   ], [t, i18n.language]);
 
   return (
-    <div className="space-y-5 animate-fade-in" data-testid="contacts-page">
+    <div className="premium-page space-y-6 animate-fade-in" data-testid="contacts-page">
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
@@ -288,6 +289,11 @@ export default function Contacts() {
       </div>
 
       {/* FilterBar */}
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5" aria-label="Pipeline des contacts">
+        {statusOptions.map(option => <button key={option.value} type="button" onClick={() => setStatusFilter(statusFilter === option.value ? null : option.value)} aria-pressed={statusFilter === option.value} className={cn("premium-surface rounded-xl border bg-bg-card p-5 text-left", statusFilter === option.value ? "border-brand/50 ring-1 ring-brand/20" : "border-border")}>
+          <span className="flex items-center gap-2 text-xs text-text-secondary"><span className={cn("h-2 w-2 rounded-full", option.color)} />{option.label}</span><span className="mt-2 block text-2xl font-semibold tabular-nums text-text-primary">{loading ? "—" : option.count}</span>
+        </button>)}
+      </section>
       <FilterBar
         testId="contacts-filterbar"
         searchValue={search}
@@ -552,7 +558,7 @@ function ContactDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent data-testid="contact-detail-sheet" className="overflow-y-auto">
+      <SheetContent data-testid="contact-detail-sheet" className="premium-sheet overflow-y-auto sm:max-w-3xl">
         {loading ? (
           <>
             <SheetHeader>
@@ -660,7 +666,9 @@ function ContactDetailSheet({
               )}
             </SheetHeader>
 
-            <div className="px-6 py-4">
+            <div className="grid gap-6 p-6 lg:grid-cols-[220px_minmax(0,1fr)]">
+              <aside className="hidden space-y-5 rounded-xl border border-border bg-bg-secondary p-5 lg:block"><h3 className="text-xs font-semibold uppercase tracking-wider text-text-secondary">Fiche contact</h3><InfoTab contact={c} t={t} lang={lang} /></aside>
+              <div className="min-w-0">
               <DuplicateCandidates
                 contact={c}
                 duplicates={duplicates}
@@ -731,6 +739,7 @@ function ContactDetailSheet({
                   <NotesTab notes={detail.history?.notes || []} t={t} lang={lang} />
                 </TabsContent>
               </Tabs>
+              </div>
             </div>
           </>
         )}
@@ -1457,9 +1466,7 @@ function Avatar({ name, status, size = "md" }) {
   const sizeCls = size === "lg" ? "h-14 w-14 text-base" : "h-9 w-9 text-xs";
   return (
     <div className="relative shrink-0">
-      <div className={cn("flex items-center justify-center rounded-full gradient-brand text-white font-semibold", sizeCls)}>
-        {initials}
-      </div>
+      <InitialAvatar name={name} className={sizeCls} />
       {meta && (
         <span
           className={cn(

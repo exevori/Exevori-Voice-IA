@@ -35,6 +35,7 @@ import { Button } from "../components/ui/button.jsx";
 import { Input } from "../components/ui/input.jsx";
 import DataTable from "../components/common/DataTable.jsx";
 import FilterBar from "../components/common/FilterBar.jsx";
+import SkeletonLoader from "../components/common/SkeletonLoader.jsx";
 import {
   Sheet,
   SheetContent,
@@ -238,14 +239,25 @@ function Notice({ type = "info", children, action }) {
   );
 }
 
+function ProximityBadge({ date }) {
+  const target = new Date(date);
+  if (Number.isNaN(target.getTime())) return null;
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const day = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+  const delta = Math.round((day - start) / 86400000);
+  const label = delta === 0 ? "Aujourd’hui" : delta === 1 ? "Demain" : null;
+  return label ? <Badge variant={delta === 0 ? "default" : "ghost"} className="mt-1 text-[10px]">{label}</Badge> : null;
+}
+
 function KpiCard({ label, value, icon: Icon, color }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border bg-bg-card p-4">
-      <div className={`rounded-lg p-2 ${color}`} aria-hidden="true">
+    <div className="premium-surface flex items-center gap-4 rounded-xl border border-border bg-bg-card p-5">
+      <div className={`rounded-xl p-3 ${color}`} aria-hidden="true">
         <Icon size={20} className="text-white" />
       </div>
       <div>
-        <p className="text-2xl font-bold text-text-primary">{value}</p>
+        <p className="text-3xl font-bold text-text-primary tabular-nums">{value}</p>
         <p className="text-xs text-text-tertiary">{label}</p>
       </div>
     </div>
@@ -714,8 +726,9 @@ export default function CalendarPage() {
       render: (row) => {
         const start = appointmentStart(row);
         return (
-          <div>
+          <div className={`border-l-2 pl-3 ${row.status === "cancelled" ? "border-brand-red" : row.status === "confirmed" ? "border-brand-green" : "border-brand-orange"}`}>
             <p className="text-sm font-medium text-text-primary">{start ? formatDateTime(start) : "—"}</p>
+            {start && <ProximityBadge date={start} />}
             {row.timezone && <p className="text-xs text-text-tertiary">{row.timezone}</p>}
           </div>
         );
@@ -794,7 +807,7 @@ export default function CalendarPage() {
   }
 
   return (
-    <div className="space-y-5" data-testid="calendar-page">
+    <div className="premium-page space-y-6 animate-fade-in" data-testid="calendar-page">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="mb-1 flex items-center gap-2 text-[11px] uppercase tracking-wider text-text-tertiary">
@@ -974,6 +987,13 @@ export default function CalendarPage() {
           onFilterChange={(_key, value) => setStatusFilter(value)}
         />
         {appointmentsError && <Notice type="error">{appointmentsError}</Notice>}
+        <div className="rounded-xl border border-border bg-bg-card p-5" aria-label="Agenda chronologique">
+          <h3 className="mb-4 text-sm font-semibold text-text-primary">Prochains créneaux enregistrés</h3>
+          {loading ? <SkeletonLoader lines={3} /> : <ol className="premium-timeline ml-1">
+            {filteredAppointments.filter(row => appointmentStart(row) && new Date(appointmentStart(row)) >= new Date() && row.status !== "cancelled").sort((a, b) => new Date(appointmentStart(a)) - new Date(appointmentStart(b))).slice(0, 4).map(row => <li key={row.id} className="py-3"><p className="text-xs text-text-tertiary">{formatDateTime(appointmentStart(row))}</p><p className="mt-1 text-sm font-medium text-text-primary">{row.contacts?.full_name || row.invitee_name || "Rendez-vous"}</p><div className="mt-2 flex flex-wrap gap-2"><StatusBadge status={row.status} /><ProximityBadge date={appointmentStart(row)} /></div></li>)}
+          </ol>}
+          {!loading && !filteredAppointments.some(row => appointmentStart(row) && new Date(appointmentStart(row)) >= new Date() && row.status !== "cancelled") && <p className="text-sm text-text-tertiary">Aucun rendez-vous à venir dans cette sélection.</p>}
+        </div>
         <DataTable
           testId="calendar-table"
           columns={columns}

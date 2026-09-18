@@ -28,6 +28,8 @@ import { useAuth } from "../contexts/AuthContext.jsx";
 import { Badge } from "../components/ui/badge.jsx";
 import { Card, CardContent } from "../components/ui/card.jsx";
 import { cn } from "../lib/utils.js";
+import PremiumKpiCard from "../components/common/KpiCard.jsx";
+import PremiumEmptyState from "../components/common/EmptyState.jsx";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -289,7 +291,7 @@ export default function Dashboard() {
   const isEmpty = !loading && !error && !activityError && stats?.hasActivity === false && activity.length === 0;
 
   return (
-    <div className="space-y-6 animate-fade-in" data-testid="dashboard-pme">
+    <div className="premium-page space-y-6 animate-fade-in" data-testid="dashboard-pme">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           {(companyName || companyCity) && (
@@ -359,6 +361,19 @@ export default function Dashboard() {
       </div>
 
       <RecentInteractions activities={activity} loading={loading} error={activityError} />
+      <section aria-labelledby="quick-actions-title">
+        <h2 id="quick-actions-title" className="mb-4 text-sm font-semibold text-text-primary">Actions rapides</h2>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {[
+            { to: "/calls", icon: Phone, label: "Consulter les appels", detail: "Résumés et conversations" },
+            { to: "/crm", icon: Users, label: "Retrouver un contact", detail: "Votre suivi client centralisé" },
+            { to: "/calendar", icon: CalendarDays, label: "Voir les rendez-vous", detail: "Préparer les prochains échanges" },
+            { to: "/support", icon: LifeBuoy, label: "Contacter le support", detail: "Suivre vos demandes" },
+          ].map(({ to, icon: Icon, label, detail }) => <Link key={to} to={to} className="premium-surface group flex items-center gap-3 rounded-xl border border-border bg-bg-card p-5">
+            <span className="rounded-xl bg-brand/10 p-3 text-brand"><Icon size={20} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-medium text-text-primary">{label}</span><span className="mt-1 block text-xs text-text-tertiary">{detail}</span></span><ArrowRight size={16} className="text-text-tertiary transition-transform group-hover:translate-x-1" />
+          </Link>)}
+        </div>
+      </section>
     </div>
   );
 }
@@ -376,7 +391,7 @@ function KpiGrid({ stats, loading }) {
       label: "Appels sur 7 jours",
       value: stats?.calls?.total,
       detail:
-        stats?.calls?.inbound !== null && stats?.calls?.outbound !== null
+        stats?.calls?.inbound != null && stats?.calls?.outbound != null
           ? `${formatCount(stats.calls.inbound)} entrant(s) · ${formatCount(stats.calls.outbound)} sortant(s)`
           : "Entrants et sortants",
       color: "blue",
@@ -440,29 +455,7 @@ function KpiGrid({ stats, loading }) {
 }
 
 function MetricCard({ testId, icon: Icon, label, value, suffix = "", detail, color, link }) {
-  const colors = {
-    blue: "bg-brand/15 text-brand",
-    pink: "bg-brand-pink/15 text-brand-pink",
-    purple: "bg-brand-purple/15 text-brand-purple",
-    cyan: "bg-brand-cyan/15 text-brand-cyan",
-    orange: "bg-brand-orange/15 text-brand-orange",
-  };
-
-  const content = (
-    <Card className={cn("h-full", link && "transition-colors hover:border-border-strong")} data-testid={testId}>
-      <CardContent className="p-5">
-        <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg", colors[color] || colors.blue)}>
-          <Icon size={16} />
-        </div>
-        <div className="mt-3 text-3xl font-bold tracking-tight text-text-primary tabular-nums">
-          {formatCount(value)}
-          {value !== null && value !== undefined && suffix}
-        </div>
-        <div className="mt-0.5 text-xs font-medium text-text-secondary">{label}</div>
-        <div className="mt-2 min-h-8 text-[11px] leading-4 text-text-tertiary">{detail}</div>
-      </CardContent>
-    </Card>
-  );
+  const content = <PremiumKpiCard testId={testId} icon={Icon} label={label} value={`${formatCount(value)}${value !== null && value !== undefined ? suffix : ""}`} detail={detail} tone={color} />;
 
   return link ? <Link to={link}>{content}</Link> : content;
 }
@@ -476,7 +469,7 @@ function DashCard({ title, icon: Icon, accent = "purple", children, action, test
     cyan: "text-brand-cyan", orange: "text-brand-orange", pink: "text-brand-pink",
   };
   return (
-    <Card className={cn("flex flex-col", className)} data-testid={testId}>
+    <Card className={cn("premium-surface flex flex-col", className)} data-testid={testId}>
       <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
         <div className="flex items-center gap-2">
           {Icon && <Icon size={15} className={accentMap[accent]} />}
@@ -490,7 +483,7 @@ function DashCard({ title, icon: Icon, accent = "purple", children, action, test
 }
 
 function EmptyState({ label }) {
-  return <div className="flex h-full min-h-[80px] items-center justify-center text-xs text-text-tertiary">{label}</div>;
+  return <PremiumEmptyState title={label} description="Les échanges de votre assistante apparaîtront ici automatiquement." />;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -556,7 +549,7 @@ function RecentInteractions({ activities, loading, error }) {
       ) : activities.length === 0 ? (
         <EmptyState label="Aucune interaction récente" />
       ) : (
-        <ul className="divide-y divide-border" data-testid="recent-interactions-list">
+        <ul className="premium-timeline ml-1" data-testid="recent-interactions-list">
           {activities.map((activity, index) => (
             <RecentInteraction
               key={`${activity.type || "activity"}-${activity.id || activity.timestamp || index}`}
