@@ -142,7 +142,7 @@ export default function Signup() {
   const strength = passwordStrength();
 
   return (
-    <div className="relative min-h-screen flex items-center justify-center bg-bg-primary p-6 overflow-hidden">
+    <div className="premium-auth relative min-h-screen flex items-center justify-center bg-bg-primary p-5 sm:p-8 overflow-hidden">
       {/* Background glow */}
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute left-1/2 top-0 h-[60vh] w-[80vw] -translate-x-1/2 rounded-full bg-brand-purple/20 blur-[120px]" />
@@ -151,11 +151,11 @@ export default function Signup() {
 
       <div className="relative z-10 w-full max-w-[480px]">
         {/* Stepper */}
-        <div className="flex items-center justify-center gap-2 mb-6">
+        <div className="flex items-center justify-center gap-2 mb-6" role="list" aria-label="Étapes de l’inscription">
           {["Votre compte", "Votre forfait", "Paiement"].map((label, i) => (
             <React.Fragment key={label}>
-              <div className="flex items-center gap-1.5">
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold transition-colors ${
+              <div className="flex flex-col items-center gap-2 sm:flex-row" role="listitem" aria-current={step === i + 1 ? "step" : undefined}>
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${
                   step > i + 1 ? "bg-brand-green text-white" :
                   step === i + 1 ? "bg-brand text-white" :
                   "bg-white/10 text-text-tertiary"
@@ -171,7 +171,7 @@ export default function Signup() {
           ))}
         </div>
 
-        <div className="rounded-2xl border border-border bg-bg-card/60 backdrop-blur-2xl p-8 shadow-2xl">
+        <div className="rounded-2xl border border-border-strong bg-bg-card p-6 sm:p-8 shadow-xl shadow-brand/5 motion-safe:animate-fade-in">
           {/* Logo */}
           <div className="mb-6 flex items-center gap-3">
             <img src="/branding/exevori-logo.png" alt="Exevori" className="h-10 w-10 object-contain" />
@@ -189,7 +189,7 @@ export default function Signup() {
                 <p className="text-sm text-text-secondary mt-1">Votre assistante IA sera prête en moins de 5 minutes.</p>
               </div>
 
-              <form onSubmit={handleRegister} className="space-y-3">
+              <form onSubmit={handleRegister} className="space-y-5">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary block mb-1">Votre nom</label>
@@ -241,6 +241,7 @@ export default function Signup() {
                       className="w-full rounded-lg border border-border bg-bg-primary/60 pl-9 pr-3 py-2.5 text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-brand/60 focus:ring-2 focus:ring-brand/15"
                     />
                   </div>
+                  {form.contact_email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.contact_email) && <p className="mt-2 flex items-center gap-1 text-xs text-brand-green"><CheckCircle2 size={13} />Format de courriel valide</p>}
                 </div>
 
                 <div>

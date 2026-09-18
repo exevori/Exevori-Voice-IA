@@ -28,6 +28,9 @@
   .premium-page .premium-timeline > li::before { content: ''; @apply absolute -left-1 top-6 h-2 w-2 rounded-full bg-brand ring-4 ring-bg-card; }
   .premium-shimmer { background-size: 200% auto; animation: premium-shimmer 7s ease-in-out infinite; }
   .premium-step { animation: premium-slide 240ms ease-out; }
+  .premium-auth :where(button, a), .premium-public :where(button, a) { @apply transition-all duration-200 ease-out; }
+  .premium-auth :where(button, a, input):focus-visible, .premium-public :where(button, a):focus-visible { @apply outline-none ring-2 ring-brand ring-offset-2 ring-offset-bg-primary; }
+  .premium-auth h1 { @apply text-xl font-semibold; }
 }
 @keyframes premium-shimmer { 0%, 100% { background-position: 0% center; } 50% { background-position: 100% center; } }
 @keyframes premium-slide { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: translateX(0); } }

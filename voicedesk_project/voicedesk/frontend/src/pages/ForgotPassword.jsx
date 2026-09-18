@@ -45,7 +45,7 @@ export default function ForgotPassword() {
 
   return (
     <div
-      className="relative min-h-screen flex items-center justify-center bg-bg-primary p-6 overflow-hidden"
+      className="premium-auth relative min-h-screen flex items-center justify-center bg-bg-primary p-5 sm:p-8 overflow-hidden"
       data-testid="forgot-password-page"
     >
       <div className="pointer-events-none absolute inset-0">
@@ -53,7 +53,7 @@ export default function ForgotPassword() {
         <div className="absolute bottom-0 left-1/2 h-[40vh] w-[60vw] -translate-x-1/2 rounded-full bg-brand/10 blur-[120px]" />
       </div>
 
-      <main className="relative z-10 w-full max-w-[440px] rounded-2xl border border-border bg-bg-card/60 p-8 shadow-2xl backdrop-blur-2xl">
+      <main className="relative z-10 w-full max-w-[440px] rounded-2xl border border-border-strong bg-bg-card p-6 sm:p-8 shadow-xl shadow-brand/5 motion-safe:animate-fade-in">
         <div className="mb-7 flex items-center gap-3.5">
           <img
             src="/branding/exevori-logo.png"

@@ -29,7 +29,7 @@ function Hero() {
         </div>
         <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-text-primary leading-tight mb-6">
           Votre réceptionniste IA<br />
-          <span className="gradient-text">disponible 24/7</span>
+          <span className="premium-shimmer bg-gradient-to-r from-brand via-brand-purple to-brand-cyan bg-clip-text text-transparent">disponible 24/7</span>
         </h1>
         <p className="text-lg text-text-secondary max-w-xl mx-auto mb-8 leading-relaxed">
           VoiceDesk AI répond à vos appels, prend vos rendez-vous, qualifie vos prospects
@@ -37,7 +37,7 @@ function Hero() {
         </p>
         <div className="flex flex-col sm:flex-row gap-3 justify-center">
           <Link to="/signup"
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-6 py-3.5 text-sm font-semibold text-white hover:bg-brand/90 transition-colors">
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-8 py-4 text-sm font-semibold text-white shadow-glow-blue transition-all duration-200 hover:scale-[1.02] hover:bg-brand/90 active:scale-[0.98]">
             Commencer gratuitement <ArrowRight size={15}/>
           </Link>
           <a href="#demo"
@@ -57,9 +57,9 @@ function Hero() {
             <div className="w-2.5 h-2.5 rounded-full bg-brand-red/60"/>
             <div className="w-2.5 h-2.5 rounded-full bg-brand-orange/60"/>
             <div className="w-2.5 h-2.5 rounded-full bg-brand-green/60"/>
-            <span className="text-[10px] text-text-tertiary ml-2">VoiceDesk AI — Tableau de bord</span>
+            <span className="text-[10px] text-text-tertiary ml-2">VoiceDesk AI — Aperçu illustratif, données fictives</span>
           </div>
-          <div className="grid grid-cols-4 gap-2 mb-3">
+          <div className="grid grid-cols-2 gap-3 mb-3 sm:grid-cols-4">
             {[
               { label: "Appels aujourd'hui", value: "128", trend: "+18%" },
               { label: "RDV pris",           value: "24",  trend: "+26%" },
@@ -114,7 +114,7 @@ function TrustBar() {
     <section className="py-8 px-6 border-y border-border bg-bg-secondary/50">
       <div className="max-w-4xl mx-auto text-center">
         <p className="text-xs text-text-tertiary uppercase tracking-wider mb-4">
-          Fait confiance par des PME québécoises
+          Exemples d’entreprises — illustration des métiers concernés, pas des références clients
         </p>
         <div className="flex flex-wrap justify-center gap-6 items-center text-text-tertiary text-sm font-medium">
           {["Garage Tremblay", "Clinique Santé Laval", "Avocat Côté & Associés",
@@ -177,7 +177,7 @@ function Features() {
           {FEATURES.map(f => {
             const Icon = f.icon;
             return (
-              <div key={f.title} className="rounded-xl border border-border bg-bg-card p-5 hover:border-brand/30 transition-colors">
+              <div key={f.title} className="premium-surface rounded-xl border border-border bg-bg-card p-6 motion-safe:hover:-translate-y-1">
                 <div className={`inline-flex rounded-lg p-2.5 ${f.bg} mb-3`}>
                   <Icon size={18} className={f.color}/>
                 </div>
@@ -263,9 +263,9 @@ function Pricing() {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {PLANS.map(plan => (
-            <div key={plan.name} className={`rounded-2xl border p-6 relative ${
+            <div key={plan.name} className={`premium-surface rounded-2xl border p-6 relative ${
               plan.popular
-                ? "border-brand bg-brand/5 shadow-lg shadow-brand/10"
+                ? "border-brand bg-gradient-to-b from-brand/10 to-bg-card shadow-lg shadow-brand/10 md:-translate-y-2"
                 : "border-border bg-bg-card"
             }`}>
               {plan.popular && (
@@ -403,7 +403,7 @@ function Header() {
 
 function Footer() {
   return (
-    <footer className="border-t border-border py-8 px-6">
+    <footer className="border-t border-border bg-bg-secondary/50 py-10 px-6">
       <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-text-tertiary">
         <div className="flex items-center gap-2">
           <Bot size={13} className="text-brand"/>
@@ -424,7 +424,7 @@ function Footer() {
 // ── EXPORT ────────────────────────────────────────────────────
 export default function Landing() {
   return (
-    <div className="min-h-screen bg-bg-primary font-sans">
+    <div className="premium-public min-h-screen bg-bg-primary font-sans">
       <Header />
       <main>
         <Hero />
