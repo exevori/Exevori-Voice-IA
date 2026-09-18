@@ -5,6 +5,7 @@ import { Badge } from "../components/ui/badge.jsx";
 import { Button } from "../components/ui/button.jsx";
 import { requestAdminJson } from "../utils/admin-company.js";
 import { STATUS, historyBuckets, overallStatus, probeDetail, providerRows } from "../utils/provider-monitoring.js";
+import StatusDot from "../components/common/StatusDot.jsx";
 
 const API = import.meta.env.VITE_API_URL || "";
 const NAMES = { twilio: "Twilio · Téléphonie", elevenlabs: "ElevenLabs · Assistante vocale",
@@ -14,7 +15,7 @@ const date = value => value && Number.isFinite(Date.parse(value)) ? new Date(val
 
 function History({ rows, name }) {
   return <svg viewBox="0 0 388 24" className="mt-3 h-8 w-full" role="img" aria-label={`Historique sur 24 heures : ${name}. Les zones grisées ou pâles sont non vérifiées ou partielles.`}>
-    {rows.map((row, index) => <rect key={row.time} x={index * 4} y="1" width="3" height="22" rx="1" fill={STATUS[row.status].color} opacity={row.partial ? 0.4 : 1}>
+    {rows.map((row, index) => <rect key={row.time} x={index * 4} y="1" width="3" height="22" rx="1" className={row.status === "ok" ? "fill-brand-green" : row.status === "down" ? "fill-brand-red" : row.status === "unauthorized" ? "fill-brand-orange" : "fill-text-tertiary"} opacity={row.partial ? 0.4 : 1}>
       <title>{`${date(new Date(row.time).toISOString())} : ${STATUS[row.status].label} · ${row.count} mesure(s)${row.partial ? " · couverture partielle" : ""}${row.latency !== null ? ` · ${row.latency} ms en moyenne` : ""}`}</title>
     </rect>)}
   </svg>;
@@ -65,7 +66,7 @@ export default function Monitoring() {
 
   if (!isAdmin) return <p className="p-6 text-text-secondary">Accès réservé à l’administration Exevori.</p>;
   const rows = providerRows(snapshot, now, Boolean(error));
-  return <div className="space-y-5">
+  return <div className="premium-page space-y-6 animate-fade-in">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div><p className="flex items-center gap-2 text-xs uppercase tracking-wide text-text-tertiary"><Activity size={13} /> Administration Exevori</p><h1 className="mt-1 text-2xl font-bold text-text-primary">Monitoring des fournisseurs</h1></div>
       <Button size="sm" variant="outline" onClick={() => void refresh()} disabled={checking}><RefreshCcw size={14} className={checking ? "animate-spin" : ""} />{checking ? "Vérification…" : "Actualiser"}</Button>
@@ -74,9 +75,9 @@ export default function Monitoring() {
     <div className="rounded-xl border border-border bg-bg-card p-4"><p className="font-semibold text-text-primary">{overallStatus(rows)}</p><p className="mt-1 text-xs text-text-tertiary">Sondage toutes les 60 secondes · mesures serveur en millisecondes · données reçues : {date(snapshot?.generated_at)}</p></div>
     {snapshot && (snapshot.storage !== "available" || snapshot.history_state !== "available") && <p role="alert" className="rounded-lg border border-brand-orange/30 p-3 text-sm text-brand-orange">Historique durable indisponible. Vérifiez Supabase et l’application de la migration 016. Les sondes disponibles restent affichées, sans inventer l’historique manquant.</p>}
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {rows.map(row => <section key={row.provider} className="rounded-xl border border-border bg-bg-card p-4">
-        <h2 className="text-sm font-semibold text-text-primary">{NAMES[row.provider]}</h2>
-        <div className="mt-3 flex items-center justify-between gap-2"><Badge variant={STATUS[row.status].variant}>{STATUS[row.status].label}</Badge><span className="font-mono text-xs text-text-secondary">{row.latency_ms === null ? "—" : `${row.latency_ms} ms`}</span></div>
+      {rows.map(row => <section key={row.provider} className="premium-surface rounded-xl border border-border bg-bg-card p-5">
+        <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-semibold text-text-primary">{NAMES[row.provider]}</h2><StatusDot status={row.status === "ok" ? "healthy" : row.status === "down" ? "error" : "unknown"} pulse={row.status === "ok"} label={STATUS[row.status].label} /></div>
+        <div className="mt-5 flex items-center justify-between gap-2"><Badge variant={STATUS[row.status].variant}>{STATUS[row.status].label}</Badge><span className={`font-mono text-xl font-semibold tabular-nums ${row.latency_ms === null ? "text-text-tertiary" : row.latency_ms < 200 ? "text-brand-green" : row.latency_ms < 500 ? "text-brand-orange" : "text-brand-red"}`}>{row.latency_ms === null ? "—" : `${row.latency_ms} ms`}</span></div>
         <p className="mt-2 min-h-10 text-xs text-text-tertiary">{probeDetail(row)}</p>
         <p className="text-xs text-text-tertiary">Mesure : {date(row.checked_at)}</p>
         {row.down_since && <p className="mt-1 text-xs text-brand-orange">Échec continu depuis {date(row.down_since)}</p>}

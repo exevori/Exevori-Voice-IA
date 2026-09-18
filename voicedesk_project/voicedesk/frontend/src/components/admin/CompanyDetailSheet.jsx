@@ -26,7 +26,7 @@ function Field({ label, value }) {
 }
 
 function Panel({ title, children }) {
-  return <section className="space-y-3 rounded-xl border border-border bg-bg-card p-4"><h3 className="font-semibold text-text-primary">{title}</h3>{children}</section>;
+  return <details open className="premium-surface space-y-4 rounded-xl border border-border bg-bg-card p-5"><summary className="cursor-pointer text-sm font-semibold text-text-primary">{title}</summary>{children}</details>;
 }
 
 export default function CompanyDetailSheet({ company, token, onClose, onChanged, onImpersonate }) {

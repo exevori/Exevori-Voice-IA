@@ -19,6 +19,9 @@ import { Badge } from "../components/ui/badge.jsx";
 import { cn } from "../lib/utils.js";
 import CompanyDetailSheet from "../components/admin/CompanyDetailSheet.jsx";
 import { requestAdminJson } from "../utils/admin-company.js";
+import { KpiSkeletons } from "../components/common/SkeletonLoader.jsx";
+import InitialAvatar from "../components/common/InitialAvatar.jsx";
+import EmptyState from "../components/common/EmptyState.jsx";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -34,13 +37,13 @@ const STATUS_META = {
 // ── KPI Card ─────────────────────────────────────────────────
 function KpiCard({ label, value, sub, icon: Icon, color, bg, trend }) {
   return (
-    <div className={`rounded-xl border border-border p-4 ${bg} flex items-start gap-3`}>
-      <div className={`rounded-lg p-2 bg-white/10 shrink-0`}>
-        <Icon size={18} className={color} />
+    <div className={`premium-surface rounded-xl border border-border p-5 ${bg} flex items-start gap-4`}>
+      <div className={`rounded-xl p-3 bg-white/5 shrink-0`}>
+        <Icon size={22} className={color} />
       </div>
       <div className="min-w-0">
         <p className="text-xs text-text-tertiary">{label}</p>
-        <p className={`text-xl font-bold ${color} mt-0.5`}>{value}</p>
+        <p className="mt-2 text-3xl font-bold tabular-nums text-text-primary">{value}</p>
         {sub && <p className="text-[11px] text-text-tertiary mt-0.5">{sub}</p>}
         {trend && (
           <p className={`text-[11px] mt-0.5 flex items-center gap-0.5 ${trend > 0 ? "text-brand-green" : "text-brand-red"}`}>
@@ -78,7 +81,8 @@ function AlertBanner({ alerts }) {
 function CompanyRow({ company, isActive, onOpen }) {
   const meta = STATUS_META[company.status] || { label: "État inconnu", variant: "orange" };
   return (
-    <div className={cn("flex flex-wrap items-center gap-3 border-b border-border px-4 py-3.5", isActive && "bg-brand/5")}>
+    <div className={cn("flex flex-wrap items-center gap-4 border-b border-border p-5 transition-colors hover:bg-white/[0.02]", isActive && "bg-brand/5")}>
+      <InitialAvatar name={company.name} />
       <div className="flex-1 min-w-0">
         <button type="button" onClick={onOpen} className="text-left text-sm font-semibold text-text-primary hover:text-brand">{company.name}</button>
         <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -150,7 +154,7 @@ export default function Admin() {
   const tkt = dashboard?.tickets;
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="premium-page space-y-6 animate-fade-in">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -169,9 +173,7 @@ export default function Admin() {
 
       {/* KPIs revenus */}
       {loading ? (
-        <div className="flex items-center gap-2 text-text-tertiary text-sm py-6">
-          <Loader2 size={15} className="animate-spin"/> Chargement...
-        </div>
+        <KpiSkeletons />
       ) : dashboard ? (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -202,13 +204,13 @@ export default function Admin() {
           </div>
 
           {/* MRR breakdown */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             {[
               { label: "MRR actif payé",  value: `${rev?.mrr_active_paid?.toFixed(0) || 0}$`,   color: "text-brand-green" },
               { label: "MRR essai",        value: `${rev?.mrr_trial?.toFixed(0) || 0}$`,          color: "text-brand" },
               { label: "MRR en retard",    value: `${rev?.mrr_overdue?.toFixed(0) || 0}$`,        color: "text-brand-red" },
             ].map(k => (
-              <div key={k.label} className="rounded-lg border border-border bg-bg-card p-3">
+              <div key={k.label} className="premium-surface rounded-xl border border-border bg-bg-card p-5">
                 <p className="text-[10px] text-text-tertiary">{k.label}</p>
                 <p className={`text-base font-bold ${k.color}`}>{k.value}</p>
               </div>
@@ -246,10 +248,7 @@ export default function Admin() {
             <AlertCircle size={16}/> {error}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-text-tertiary gap-2">
-            <Building2 size={24}/>
-            <p className="text-sm">{search ? "Aucun client correspondant" : "Aucun client"}</p>
-          </div>
+          <EmptyState icon={Building2} title={search ? "Aucun client correspondant" : "Aucun client"} description="Les entreprises apparaîtront ici après leur inscription. Ajustez vos filtres si nécessaire." />
         ) : (
           filtered.map(company => (
             <CompanyRow

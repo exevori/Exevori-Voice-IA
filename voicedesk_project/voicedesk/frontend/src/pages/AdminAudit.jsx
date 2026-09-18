@@ -4,6 +4,8 @@ import DataTable from "../components/common/DataTable.jsx";
 import {Button} from "../components/ui/button.jsx";
 import {requestAdminJson} from "../utils/admin-company.js";
 import {auditQuery,auditDuration,AUDIT_ACTIONS} from "../utils/admin-audit.js";
+import PageHeader from "../components/common/PageHeader.jsx";
+import { ScrollText } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "";
 const EMPTY = {company_id:"",from:"",to:"",action:"",session_id:""};
@@ -11,6 +13,7 @@ const date = value => value ? new Date(value).toLocaleString("fr-CA") : "—";
 export default function AdminAudit() {
   const {token,profile,impersonatedCompany} = useAuth();
   const [mode,setMode] = useState("audit");
+  const [actorFilter,setActorFilter] = useState("");
   const [draft,setDraft] = useState(EMPTY);
   const [filters,setFilters] = useState(EMPTY);
   const [companies,setCompanies] = useState([]);
@@ -64,8 +67,10 @@ export default function AdminAudit() {
     {key:"state",header:"État",render:r=>({active:"Active",expired:"Expirée",ended:"Terminée"}[r.state]||r.state)},
     {key:"reason",header:"Motif / actions",render:r=><div className="max-w-sm break-words">{r.reason}<p><Button size="sm" variant="link" onClick={()=>showSession(r.id)}>Actions de cette session</Button></p></div>},
   ];
-  return <section className="space-y-5 p-6" data-testid="admin-audit-page">
-    <header><h1 className="text-2xl font-semibold text-text-primary">Journal d’audit</h1><p className="mt-2 text-sm text-text-secondary">Accès sensibles et vues client. Une réponse HTTP ne prouve pas qu’une opération asynchrone est terminée ; consultez aussi l’événement métier associé.</p></header>
+  const visibleItems = page.items.filter(item => !actorFilter.trim() || String(item.actor_user_id || "Système").toLowerCase().includes(actorFilter.trim().toLowerCase()));
+  const actionColor = action => /impersonat/i.test(action || "") ? "text-brand-purple border-brand-purple/30" : /suspend/i.test(action || "") ? "text-brand-red border-brand-red/30" : /billing|subscription/i.test(action || "") ? "text-brand-cyan border-brand-cyan/30" : "text-text-secondary border-border";
+  return <section className="premium-page space-y-6" data-testid="admin-audit-page">
+    <PageHeader title="Journal d’audit" eyebrow="Administration · Traçabilité" icon={ScrollText} description="Accès sensibles et vues client. Une réponse HTTP ne prouve pas qu’une opération asynchrone est terminée ; consultez aussi l’événement métier associé." />
     <div className="flex gap-2"><Button variant={mode==="audit"?"default":"outline"} onClick={()=>{setMode("audit");setCursors([null]);}}>Journal</Button><Button variant={mode==="impersonations"?"default":"outline"} onClick={()=>{setMode("impersonations");setCursors([null]);}}>Historique des vues client</Button></div>
     <form className="flex flex-wrap items-end gap-3 rounded-xl border border-border p-4 text-sm text-text-primary" onSubmit={e=>{e.preventDefault();setFilters({...draft});setCursors([null]);}}>
       <label>Entreprise<select aria-label="Entreprise" className="mt-1 block rounded border border-border bg-bg-input p-2" value={draft.company_id} onChange={e=>setDraft({...draft,company_id:e.target.value})}><option value="">Toutes</option>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
@@ -76,7 +81,9 @@ export default function AdminAudit() {
     </form>
     {filters.session_id && <p className="text-sm text-text-secondary">Session filtrée : <code>{filters.session_id}</code></p>}
     {(error||companyError) && <p role="alert" className="rounded border border-brand-red/30 p-3 text-sm text-brand-red">{error||companyError}</p>}
-    <DataTable key={mode} columns={columns.map(c=>({...c,sortable:false}))} data={page.items} loading={loading} pageSize={50} testId="admin-audit-table" emptyState={{title:"Aucun événement",description:"Aucune donnée ne correspond à ces filtres."}}/>
+    <label className="block text-sm text-text-secondary">Acteur dans la page courante (ID utilisateur)<input value={actorFilter} onChange={e=>setActorFilter(e.target.value)} placeholder="Rechercher parmi les événements chargés" className="mt-2 block w-full max-w-md rounded-lg border border-border bg-bg-card p-3 text-sm text-text-primary" /></label>
+    {mode === "audit" && !loading && visibleItems.length > 0 && <details className="rounded-xl border border-border bg-bg-card p-5"><summary className="cursor-pointer text-sm font-medium text-text-primary">Vue chronologique · {visibleItems.length} événements de cette page</summary><ol className="premium-timeline ml-1 mt-5">{visibleItems.map((item,index)=><li key={item.id || index} className="py-3"><time className="text-xs text-text-tertiary">{date(item.created_at)}</time><p className={`mt-2 w-fit rounded-full border px-3 py-1 text-xs ${actionColor(item.action)}`}>{item.action}</p><p className="mt-2 break-all text-xs text-text-secondary">{companyName(item.company_id)} · {item.actor_user_id || "Système"}</p></li>)}</ol></details>}
+    <DataTable key={mode} columns={columns.map(c=>({...c,sortable:false}))} data={visibleItems} loading={loading} pageSize={50} testId="admin-audit-table" emptyState={{title:"Aucun événement",description:"Aucune donnée ne correspond à ces filtres."}}/>
     <footer className="flex flex-wrap items-center gap-3 text-xs text-text-secondary"><Button variant="outline" size="sm" disabled={loading||cursors.length===1} onClick={()=>setCursors(c=>c.slice(0,-1))}>Précédent</Button><span>Page {cursors.length} · 50 événements maximum</span><Button variant="outline" size="sm" disabled={loading||!page.next_cursor} onClick={()=>setCursors(c=>[...c,page.next_cursor])}>Suivant</Button><Button variant="ghost" size="sm" disabled={loading} onClick={()=>setRefresh(x=>x+1)}>Actualiser</Button></footer>
     <p className="text-xs text-text-tertiary">Une fermeture d’onglet n’est pas une fin confirmée : sans sortie explicite, la durée est plafonnée à l’expiration de 30 minutes. Horodatages affichés dans le fuseau de votre navigateur.</p>
   </section>;
