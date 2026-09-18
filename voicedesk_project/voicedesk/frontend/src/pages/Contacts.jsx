@@ -25,6 +25,8 @@ import ImportWizard from "../components/contacts/ImportWizard.jsx";
 import { cn } from "../lib/utils.js";
 import { hasPermission } from "../utils/auth-helpers.js";
 import InitialAvatar from "../components/common/InitialAvatar.jsx";
+import { useConfirmDialog } from "../components/common/ConfirmDialog.jsx";
+import FeedbackToast from "../components/common/Toast.jsx";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -54,6 +56,7 @@ export default function Contacts() {
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [toast, setToast] = useState(null);
+  const { ask: confirmAction, dialog: confirmationDialog } = useConfirmDialog();
   const [mergeSelection, setMergeSelection] = useState(null);
   const loadSequenceRef = useRef(0);
   const loadControllerRef = useRef(null);
@@ -341,7 +344,7 @@ export default function Contacts() {
         }}
         onEdit={(c) => { setSelected(null); setFormContact(c); setShowForm(true); }}
         onArchive={async (c) => {
-          if (!window.confirm(t("contacts.confirmArchive", "Archiver {{name}} ? Son historique sera conservé.", { name: c.full_name }))) return;
+          if (!await confirmAction({ title: "Archiver ce contact ?", description: t("contacts.confirmArchive", "Archiver {{name}} ? Son historique sera conservé.", { name: c.full_name }), confirmLabel: "Archiver le contact" })) return;
           try {
             const res = await fetch(`${API}/api/v1/contacts/${c.id}`, {
               method: "DELETE",
@@ -396,6 +399,7 @@ export default function Contacts() {
         }}
       />
 
+      {confirmationDialog}
       {/* Contact Form Sheet (create + edit) */}
       <Sheet open={showForm} onOpenChange={(o) => !o && setShowForm(false)}>
         <SheetContent data-testid="contact-form-sheet" className="overflow-y-auto sm:max-w-lg">
@@ -1543,22 +1547,5 @@ function formatDateTime(iso, lang) {
 //  TOAST (lightweight, auto-dismiss)
 // ────────────────────────────────────────────────────────────────
 function Toast({ toast, onClose }) {
-  useEffect(() => {
-    const t = setTimeout(onClose, 4000);
-    return () => clearTimeout(t);
-  }, [toast, onClose]);
-  return (
-    <div
-      role={toast.type === "error" ? "alert" : "status"}
-      data-testid="toast"
-      className={cn(
-        "fixed bottom-6 right-6 z-50 max-w-sm rounded-lg border px-4 py-3 text-sm shadow-xl animate-fade-in",
-        toast.type === "success"
-          ? "border-brand-green/30 bg-brand-green/10 text-emerald-100"
-          : "border-brand-red/30 bg-brand-red/10 text-red-200"
-      )}
-    >
-      {toast.msg}
-    </div>
-  );
+  return <FeedbackToast message={toast.msg} type={toast.type} onClose={onClose} duration={4000} />;
 }

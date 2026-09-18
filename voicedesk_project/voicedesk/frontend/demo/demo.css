@@ -3,14 +3,14 @@ body { padding-top: 70px; }
 .local-demo-banner strong { letter-spacing: .1em; color: #a7f3d0; }
 .local-demo-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .local-demo-actions a, .local-demo-actions button { color: #fff; padding: 5px 9px; border: 1px solid #609e88; border-radius: 6px; background: #214e42; cursor: pointer; }
-[data-testid="sidebar"] { top: 70px; height: calc(100vh - 70px); }
-[data-testid="main-header"] { top: 70px; }
+body [data-testid="sidebar"] { top: 70px; height: calc(100vh - 70px); }
+body [data-testid="main-header"] { top: 70px; }
 @media(max-width: 800px) { .local-demo-banner { font-size: 10px; padding: 8px; } .local-demo-actions { gap: 4px; } }
 @media(max-width: 600px) {
   body { padding-top: 120px; }
   .local-demo-banner { height: 120px; box-sizing: border-box; }
   .local-demo-banner > div { min-width: 0; overflow-wrap: anywhere; }
   .local-demo-actions { flex-basis: 45%; flex-shrink: 0; }
-  [data-testid="sidebar"] { top: 120px; height: calc(100vh - 120px); }
-  [data-testid="main-header"] { top: 120px; }
+  body [data-testid="sidebar"] { top: 120px; height: calc(100vh - 120px); }
+  body [data-testid="main-header"] { top: 120px; }
 }

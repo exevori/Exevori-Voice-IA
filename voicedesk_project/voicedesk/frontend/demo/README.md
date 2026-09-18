@@ -15,3 +15,11 @@ Les données fictives et modifications sont enregistrées uniquement dans le sto
 Appels, paiements, emails, provisioning, invitations réelles, Calendly OAuth, upload et calculs d'embeddings sont désactivés. La politique navigateur bloque aussi les connexions vers les services externes. Ce mode permet de découvrir l'interface : il ne remplace pas la recette de l'API, de Supabase, des appels ou des fournisseurs.
 
 Tests : `npm run test:demo`.
+
+## Vérifications de l’interface
+
+- `node --test demo/ui-contract.test.js demo/api.test.js` : vérifie l’isolation et l’absence de changement des appels réseau lors du polish UI.
+- Avec Playwright déjà installé et accessible dans `NODE_PATH` : `node demo/ui-smoke.cjs` puis `node demo/ui-flows.cjs`.
+- `node demo/ui-flows.cjs --admin` utilise des fixtures éphémères dans le navigateur de test. Il ne crée aucun compte admin et ne donne pas accès à l’administration réelle.
+- Captures locales dans `.demo-vite-cache/screenshots/`, exclues de Git.
+- La première étape d’onboarding est consultable ; les mutations d’activation restent bloquées.
