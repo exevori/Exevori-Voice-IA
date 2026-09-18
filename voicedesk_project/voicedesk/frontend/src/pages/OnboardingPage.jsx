@@ -4,6 +4,7 @@ import {useAuth} from '../contexts/AuthContext.jsx';
 import {Button} from '../components/ui/button.jsx';
 import {Loader2,CheckCircle2,Phone} from 'lucide-react';
 import {onboardingRequest,onboardingError,pollOnboarding,TIMEOUT_MS} from '../utils/onboarding.js';
+import SkeletonLoader from '../components/common/SkeletonLoader.jsx';
 
 const LABELS=['Assistante','Voix','Connaissances','Activation','Appel test'];
 const input='w-full rounded-lg border border-border bg-bg-input px-3 py-2 text-sm text-text-primary';
@@ -88,18 +89,20 @@ function OnboardingFlow({token,companyId,canEdit}){
     return submit('/step/5',{area_code:area},'activation');
   }
   if(!state)return <div className="p-6 space-y-3"><h1 className="text-xl">Configuration de votre assistante</h1>
-    {error?<><p role="alert">{error}</p><Button onClick={()=>refresh()}>Réessayer</Button></>:<p role="status">Chargement de la progression…</p>}</div>;
+    {error?<><p role="alert">{error}</p><Button onClick={()=>refresh()}>Réessayer</Button></>:<SkeletonLoader lines={5} label="Chargement de la progression" />}</div>;
   const completed=Boolean(state.test.verified_at);
-  return <div className="max-w-2xl mx-auto p-4 space-y-5">
+  return <div className="premium-page max-w-3xl mx-auto p-5 space-y-6">
     <header><h1 className="text-2xl font-semibold text-text-primary">Configuration de votre assistante</h1>
       <p className="text-sm text-text-secondary mt-2">Chaque étape est enregistrée lorsque vous cliquez sur Continuer. Vous pourrez reprendre ici et ajuster ensuite les réglages dans Paramètres.</p></header>
-    <ol className="grid grid-cols-5 gap-2" aria-label="Progression">
+    <ol className="grid grid-cols-5 gap-2 rounded-xl border border-border bg-bg-card p-5" aria-label="Progression">
       {LABELS.map((label,i)=><li key={label} aria-current={step===i+1?'step':undefined}
-        className={'border rounded-lg p-2 text-xs text-center '+(step===i+1?'border-brand text-brand':'border-border text-text-secondary')}>
-        {i+1}. {label}{(completed||step>i+1)&&<CheckCircle2 className="mx-auto mt-1" size={14}/>}</li>)}
+        className="relative flex min-w-0 flex-col items-center gap-2 text-center">
+        <span className={'flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold '+((completed||step>i+1)?'bg-brand-green/15 text-brand-green':step===i+1?'bg-brand text-white ring-4 ring-brand/10':'bg-bg-elevated text-text-tertiary')}>
+          {(completed||step>i+1)?<CheckCircle2 size={20}/>:i+1}
+        </span><span className={'text-[10px] sm:text-xs '+(step===i+1?'font-semibold text-text-primary':'text-text-tertiary')}>{label}</span></li>)}
     </ol>
     {!canEdit&&<p role="alert">Un administrateur de l’entreprise doit terminer ces étapes. Vous pouvez consulter la progression.</p>}
-    <section className="border border-border rounded-xl bg-bg-card p-5 space-y-4" aria-labelledby="step-title">
+    <section key={step} className="premium-step border border-border rounded-xl bg-bg-card p-6 space-y-5" aria-labelledby="step-title">
       <h2 id="step-title" className="text-lg font-semibold">{completed?'Appel test confirmé':LABELS[step-1]}</h2>
       {step===1&&<fieldset disabled={busy||!canEdit} className="space-y-4">
         <label className="block">Nom de l’assistante<input className={input} value={name} maxLength={80} onChange={e=>setName(e.target.value)}/></label>
@@ -108,7 +111,7 @@ function OnboardingFlow({token,companyId,canEdit}){
           <option value="formal">Formel</option><option value="casual">Décontracté</option>
         </select></label></fieldset>}
       {step===2&&<fieldset disabled={busy||!canEdit} className="space-y-3">
-        {voiceError?<p role="alert">{voiceError}</p>:!voices.length?<p role="status">Chargement des voix…</p>:voices.map(v=><label key={v.id}
+        {voiceError?<p role="alert">{voiceError}</p>:!voices.length?<SkeletonLoader lines={4} label="Chargement des voix" />:voices.map(v=><label key={v.id}
           className="flex items-center gap-3 border border-border rounded-lg p-3 cursor-pointer">
           <input type="radio" name="voice" value={v.id} checked={voice===v.id} onChange={()=>setVoice(v.id)}/>
           <span>{v.display_name||v.name} <span className="text-xs text-text-secondary">{v.accent||''}</span></span>
@@ -145,6 +148,7 @@ function OnboardingFlow({token,companyId,canEdit}){
         {state.test.status==='expired'&&<p role="alert">{onboardingError('test_expired')}</p>}
       </>}
       {completed&&<>
+        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-brand-green/10 text-brand-green motion-safe:animate-fade-in"><CheckCircle2 size={44} /></div>
         <p role="status" className="text-brand-green">Un véritable appel entrant a été confirmé. Votre configuration initiale est terminée.</p>
         <p>Vérifiez le résumé dans Appels et vos horaires/transferts dans Paramètres avant de diffuser le numéro.</p>
         <Button onClick={()=>navigate('/dashboard')}>Aller au tableau de bord</Button>

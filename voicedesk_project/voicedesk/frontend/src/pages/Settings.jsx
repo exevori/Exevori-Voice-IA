@@ -28,6 +28,7 @@ import {settingsTab,assistantPatch} from "../utils/account-settings.js";
 import TelephonyTab from "../components/settings/TelephonyTab.jsx";
 import NotificationsTab from "../components/settings/NotificationsTab.jsx";
 import { cn } from "../lib/utils.js";
+import SkeletonLoader from "../components/common/SkeletonLoader.jsx";
 
 const API = import.meta.env.VITE_API_URL || "";
 
@@ -57,7 +58,7 @@ export default function Settings() {
   };
 
   return (
-    <div className="space-y-5 animate-fade-in" data-testid="settings-page">
+    <div className="premium-page space-y-6 animate-fade-in" data-testid="settings-page">
       {/* Header */}
       <div>
         <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-text-tertiary mb-1">
@@ -74,7 +75,8 @@ export default function Settings() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_1fr]">
         {/* Sidebar tabs */}
         <nav
-          className="rounded-xl border border-border bg-bg-card/60 backdrop-blur-sm p-1.5 self-start"
+          className="rounded-xl border border-border bg-bg-card p-3 self-start lg:sticky lg:top-24"
+          aria-label="Rubriques des paramètres"
           data-testid="settings-tabs"
         >
           {TABS.map((tab) => {
@@ -86,10 +88,11 @@ export default function Settings() {
                 key={tab.key}
                 onClick={() => goTab(tab.key)}
                 data-testid={`tab-${tab.key}`}
+                aria-current={isActive ? "page" : undefined}
                 className={cn(
-                  "w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-xs font-medium transition-colors mb-0.5 last:mb-0",
+                  "w-full flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition-colors mb-1 last:mb-0",
                   isActive
-                    ? "bg-white/8 text-text-primary"
+                    ? "bg-brand/10 text-brand ring-1 ring-inset ring-brand/20"
                     : "text-text-secondary hover:text-text-primary hover:bg-white/3"
                 )}
               >
@@ -104,7 +107,7 @@ export default function Settings() {
         </nav>
 
         {/* Tab content */}
-        <div className="space-y-4" key={active+":"+effectiveCompanyId+":"+token}>
+        <div className="min-w-0 space-y-6 premium-step" key={active+":"+effectiveCompanyId+":"+token}>
           {active === "profile" && <ProfileSettings/>}
           {active === "security" && <SecuritySettings/>}
           {active === "privacy" && <CompanyPreferences/>}
@@ -188,6 +191,10 @@ function AssistantTab() {
   return (
     <>
       <Card testId="assistant-tab">
+        <div className="mb-6 flex flex-col gap-3 rounded-xl border border-brand/20 bg-brand/5 p-5 sm:flex-row sm:items-center" aria-label="Aperçu de l’assistante">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand"><Bot size={24} /></div>
+          <div className="min-w-0"><p className="text-[11px] uppercase tracking-wider text-text-tertiary">Aperçu avant enregistrement</p><p className="mt-1 text-lg font-semibold text-text-primary">{form.assistant_name || "Votre assistante"}</p><p className="text-sm text-text-secondary">{data.available_tones?.[form.tone]?.label_fr || form.tone || "Ton non défini"} · {(data.available_voices || []).find(v => v.id === form.voice_id)?.name || "Voix à sélectionner"}</p></div>
+        </div>
         {["failed","in_progress"].includes(data.config.settings_sync_status) && <p role="alert" className="text-sm text-amber-300">Synchronisation de la voix : {data.config.settings_sync_status === "in_progress" ? "en cours ; réessayez après deux minutes si elle reste bloquée." : "à relancer en enregistrant à nouveau."}</p>}
         <SectionTitle icon={Bot} title={t("settings.assistant.identity", "Identité")} />
         <Grid cols={2}>
@@ -350,7 +357,7 @@ function CompanyTab() {
 //  TAB 3 — ÉQUIPE
 // ════════════════════════════════════════════════════════════
 function Card({ children, testId }) {
-  return <div className="rounded-xl border border-border bg-bg-card/60 backdrop-blur-sm p-5" data-testid={testId}>{children}</div>;
+  return <div className="premium-surface rounded-xl border border-border bg-bg-card p-5" data-testid={testId}>{children}</div>;
 }
 
 function SectionTitle({ icon: Icon, title }) {
@@ -424,7 +431,7 @@ function Feedback({ feedback, compact }) {
 }
 
 function LoadingCard({ testId }) {
-  return <Card testId={testId}><div className="flex items-center gap-2 py-6 text-xs text-text-tertiary"><Loader2 size={14} className="animate-spin" /> Chargement…</div></Card>;
+  return <Card testId={testId}><SkeletonLoader className="py-6" lines={5} /></Card>;
 }
 
 function EmptyState({ icon: Icon, title, desc }) {

@@ -6,6 +6,8 @@ import React, {
   useState,
 } from "react";
 import { useSearchParams } from "react-router-dom";
+import SkeletonLoader from "../components/common/SkeletonLoader.jsx";
+import EmptyState from "../components/common/EmptyState.jsx";
 import {
   AlertCircle,
   AlertTriangle,
@@ -424,7 +426,7 @@ function TicketThread({ ticket: initialTicket, token, isAdmin, agents, onUpdated
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="shrink-0 space-y-3 border-b border-border p-4">
+      <header className="shrink-0 space-y-4 border-b border-border bg-bg-secondary/50 p-5">
         <div className="flex items-start justify-between gap-3 pr-8">
           <div className="min-w-0">
             <p className="font-mono text-[10px] text-text-tertiary">{ticket?.ticket_number || "Chargement…"}</p>
@@ -444,7 +446,7 @@ function TicketThread({ ticket: initialTicket, token, isAdmin, agents, onUpdated
           <span className="text-text-tertiary">
             {CATEGORIES.find(category => category.key === ticket?.category)?.label || ticket?.category}
           </span>
-          <span className={`flex items-center gap-1 font-medium ${sla.className}`}>
+          <span className={`flex items-center gap-2 rounded-lg border border-current/20 px-3 py-2 font-medium tabular-nums ${sla.className}`}>
             <Clock3 size={11} /> {sla.label}
             {sla.timer && ` · ${sla.milestone} ${sla.timer}`}
           </span>
@@ -459,21 +461,19 @@ function TicketThread({ ticket: initialTicket, token, isAdmin, agents, onUpdated
         )}
       </header>
 
-      <div className="flex-1 space-y-3 overflow-y-auto p-4">
+      <div className="flex-1 space-y-5 overflow-y-auto p-5">
         {loading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-sm text-text-tertiary">
-            <Loader2 size={16} className="animate-spin" /> Chargement du fil…
-          </div>
+          <SkeletonLoader className="py-8" lines={5} label="Chargement du fil" />
         ) : messages.length ? messages.map(message => {
           const clientMessage = message.author_role === "client";
           return (
-            <article key={message.id} className={`flex flex-col ${clientMessage ? "items-end" : "items-start"}`}>
+            <article key={message.id} className={`flex flex-col ${clientMessage ? "items-start" : "items-end"}`}>
               {message.is_internal && (
                 <span className="mb-1 flex items-center gap-1 text-[10px] font-medium text-brand-orange">
                   <Shield size={10} /> Note interne — invisible au client
                 </span>
               )}
-              <div className={`max-w-[88%] rounded-xl border px-3.5 py-2.5 ${
+              <div className={`max-w-[88%] rounded-2xl border p-5 ${
                 message.is_internal
                   ? "border-brand-orange/25 bg-brand-orange/10"
                   : clientMessage
@@ -490,7 +490,7 @@ function TicketThread({ ticket: initialTicket, token, isAdmin, agents, onUpdated
             </article>
           );
         }) : (
-          <p className="py-12 text-center text-sm text-text-tertiary">Aucun message dans ce fil.</p>
+          <EmptyState icon={MessageSquare} title="La conversation commence ici" description="Rédigez votre message ci-dessous pour échanger avec le support." />
         )}
         <div ref={bottomRef} />
       </div>
@@ -663,7 +663,7 @@ export default function Tickets() {
   }), [tickets, nowMs]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
+    <div className="premium-page flex h-full min-h-0 flex-col gap-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-xl font-semibold text-text-primary">
@@ -687,10 +687,10 @@ export default function Tickets() {
           { label: "SLA dépassés", value: kpis.sla, icon: AlertTriangle, color: "text-brand-red", bg: "bg-brand-red/10" },
           { label: "Résolus", value: kpis.resolved, icon: CheckCircle2, color: "text-brand-green", bg: "bg-brand-green/10" },
         ].map(item => (
-          <div key={item.label} className={`rounded-xl border border-border p-3 ${item.bg}`}>
+          <div key={item.label} className={`premium-surface rounded-xl border border-border p-5 ${item.bg}`}>
             <div className={`flex items-center gap-2 ${item.color}`}>
               <item.icon size={15} />
-              <strong className="text-xl">{item.value}</strong>
+              <strong className="text-3xl tabular-nums">{loading ? "—" : item.value}</strong>
             </div>
             <p className="mt-0.5 text-xs text-text-tertiary">{item.label}</p>
           </div>
@@ -730,9 +730,7 @@ export default function Tickets() {
       <div className="grid min-h-[520px] flex-1 overflow-hidden rounded-xl border border-border bg-bg-card lg:grid-cols-[minmax(300px,0.85fr)_minmax(420px,1.35fr)]">
         <section aria-label="Liste des tickets" className={`${selectedTicket ? "hidden lg:block" : "block"} min-h-0 overflow-y-auto border-r border-border`}>
           {loading ? (
-            <div className="flex items-center justify-center gap-2 py-16 text-sm text-text-tertiary">
-              <Loader2 size={16} className="animate-spin" /> Chargement…
-            </div>
+            <SkeletonLoader className="p-5" lines={5} label="Chargement des tickets" />
           ) : filteredTickets.length ? filteredTickets.map(ticket => (
             <TicketCard
               key={ticket.id}

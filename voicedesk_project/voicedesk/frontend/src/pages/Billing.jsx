@@ -340,7 +340,7 @@ export default function Billing() {
     : Math.min(100, Math.max(0, usagePercentage));
 
   return (
-    <div className="space-y-5 animate-fade-in" data-testid="billing-page">
+    <div className="premium-page space-y-6 animate-fade-in" data-testid="billing-page">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="mb-1 flex items-center gap-2 text-[11px] uppercase tracking-wider text-text-tertiary">
@@ -463,11 +463,11 @@ function PlanCard({
   const isOpening = portalAction === "subscription_update";
 
   return (
-    <Card data-testid="billing-plan-card">
+    <Card className="premium-surface relative overflow-hidden border-brand/40 bg-gradient-to-br from-brand/10 via-bg-card to-bg-card" data-testid="billing-plan-card">
       <CardHeader className="flex-row items-start justify-between space-y-0">
         <div>
           <CardDescription>Forfait actuel</CardDescription>
-          <CardTitle className="mt-1 text-xl">{plan.label || plan.key || "—"}</CardTitle>
+          <CardTitle className="mt-2 text-3xl font-bold tracking-tight">{plan.label || plan.key || "—"}</CardTitle>
         </div>
         <Badge variant={status.variant}>{status.label}</Badge>
       </CardHeader>
@@ -550,7 +550,7 @@ function UsageCard({
   const remaining = finiteNumber(usage?.minutes_remaining);
 
   return (
-    <Card data-testid="billing-usage-card">
+    <Card className="premium-surface" data-testid="billing-usage-card">
       <CardHeader>
         <div className="flex items-center gap-2">
           <Gauge size={17} className="text-brand-purple" aria-hidden="true" />
@@ -593,14 +593,14 @@ function UsageCard({
                   ? "bg-brand-red"
                   : usagePercentage >= 80
                     ? "bg-brand-orange"
-                    : "bg-gradient-to-r from-brand to-brand-purple"
+                    : "bg-brand-green"
               }`}
               style={{ width: `${progressValue}%` }}
             />
           </div>
         </div>
 
-        <dl className="grid grid-cols-2 gap-3 text-sm">
+        <dl className="grid grid-cols-2 gap-4 text-sm">
           <div className="rounded-lg border border-border bg-white/[0.02] p-3">
             <dt className="text-xs text-text-tertiary">Minutes restantes</dt>
             <dd className="mt-1 font-semibold text-text-primary">{formatNumber(remaining)} min</dd>
