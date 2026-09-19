@@ -75,11 +75,11 @@ function App() {
             <Route path="crm" element={<Contacts />} />
             <Route path="contacts" element={<Contacts />} />
             <Route path="calls" element={<Calls />} />
-            <Route path="emails" element={<Emails />} />
+            <Route path="emails" element={<Navigate to="/dashboard" replace />} />
             <Route path="knowledge" element={<Knowledge />} />
             <Route path="kb" element={<Knowledge />} />
-            <Route path="analytics" element={<Reports />} />
-            <Route path="reports" element={<Reports />} />
+            <Route path="analytics" element={<Navigate to="/dashboard" replace />} />
+            <Route path="reports" element={<Navigate to="/dashboard" replace />} />
             <Route path="settings" element={<Settings />} />
             <Route path="config" element={<Settings />} />
             <Route path="outbound" element={<Outbound />} />
